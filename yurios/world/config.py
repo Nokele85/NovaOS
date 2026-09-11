@@ -39,6 +39,24 @@ class Config(VoiceConfig):
     tool_rate_selfedit: int = 1                 # `propose_edit` (§23) — the one
                                                 #   hand that reaches at who she
                                                 #   is. Deliberation, not a loop
+    tool_rate_story: int = 1
+    # Her storytelling voice is Qwen3-TTS on the LAN card: one service speaks
+    # (:8091), a second owns whether the model is resident at all (:8092), so
+    # minutes of narration do not leave 7 GB parked on a card the camera shares.
+    story_tts_url: str = "http://192.168.0.104:8091"          # speaks
+    story_tts_supervisor_url: str = "http://192.168.0.104:8092"  # loads/unloads
+    # The clone reference and its exact transcript — a path on the TTS *server*.
+    # They belong together: the model conditions on both, so a transcript that
+    # does not match the clip is a worse voice, not an error.
+    story_tts_ref_audio: str = ""
+    story_tts_ref_text: str = ""
+    story_tts_language: str = "German"
+    story_tts_token: str = ""                   # supervisor token, if it sets one
+    story_min_words: int = 1500
+    story_scenes: int = 8
+    # Off unless a deployment names a story TTS it actually runs: like the web
+    # and camera hands, a disabled `tell_story` is absent, not a dead hand.
+    story_enabled: bool = False
 
     # --- the web: search, read, research (SPEC §7.7) ---
     # searxng = your own metasearch instance — keyless AND third-party-less,
@@ -106,7 +124,7 @@ class Config(VoiceConfig):
     # degrades openrouter → mock with one loud WARNING (the voice-fakes
     # philosophy). Default model: seedream — cheap enough for casual selfies;
     # sourceful/riverflow-v2.5-pro is the brand-art register (pricier, one knob).
-    selfie_backend: str = "off"                 # openrouter | diffusers | mock | off
+    selfie_backend: str = "off"                 # openrouter | diffusers | krea2 | comfyui | mock | off
     selfie_model: str = "bytedance-seed/seedream-4.5"
     selfie_dir: Path = Path("./selfies")        # saved shots, served at /selfies/
     # Optional overlay yaml merged over the shipped template library
@@ -178,6 +196,18 @@ class Config(VoiceConfig):
     # every render; negative = keep it loaded. Default one hour, matching
     # the voice stack's "empty room" convention (`VOICE_UNLOAD_AFTER_S`).
     selfie_unload_after_s: float = 3600.0
+    # Remote Krea2 through the ComfyUI instance on the gaming PC. YuriOS never
+    # loads these weights locally; the adapter releases them after every job.
+    selfie_comfy_host: str = "192.168.0.104"
+    selfie_comfy_port: int = 8188
+    selfie_comfy_timeout: int = 300
+    selfie_comfy_release_after_render: bool = True
+    selfie_comfy_unet: str = "fineporn_v4_fp8.safetensors"
+    selfie_comfy_clip: str = "qwen3vl_4b_fp8_scaled.safetensors"
+    selfie_comfy_vae: str = "qwen_image_vae.safetensors"
+    selfie_comfy_lora: str = ""
+    selfie_comfy_lora_strength: float = 0.6
+    selfie_comfy_trigger: str = ""
 
     # --- her voice, on demand (SPEC §9.9 — world/voicestack.py) ---
     # Kokoro + faster-whisper + silero are the heaviest thing a runtime holds,

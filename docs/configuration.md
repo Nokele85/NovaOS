@@ -254,6 +254,11 @@ Backend-specific keys (`QWEN_*`, `SOVITS_*`) are in [Voice](voice.md).
 | `TOOL_MAX_CALLS_PER_TURN` | `2` | |
 | `TOOL_TIMEOUT_S` | `10` | |
 | `TOOL_RATE_TIMER` / `_MUSIC` / `_SELFIE` / `_PICTURE` / `_DESK` | `6` / `6` / `2` / `2` / `20` | calls per minute |
+| `STORY_ENABLED` / `TOOL_RATE_STORY` | `true` / `1` | advertises `tell_story`; calls per minute |
+| `STORY_TTS_URL` / `STORY_TTS_SUPERVISOR_URL` | `…:8091` / `…:8092` | Qwen3-TTS: the service that speaks, and the one that loads and unloads it |
+| `STORY_TTS_REF_AUDIO` / `STORY_TTS_REF_TEXT` | — | clone reference and its exact transcript; the path is on the TTS server |
+| `STORY_TTS_LANGUAGE` / `STORY_TTS_TOKEN` | `German` / — | synthesis language; the supervisor's token, if it sets one |
+| `STORY_MIN_WORDS` / `STORY_SCENES` | `1500` / `8` | minimum text target and sequential scene count |
 | `TIMER_MAX_MINUTES` | `180` | |
 | `WORKSPACE_ENABLED` | `true` | enables `list_notes`, `read_note`, `count_note_lines`, `write_note`, `append_note`, `edit_note`, and `delete_note` |
 | `WORKSPACE_DIGEST_FILES` | `20` | newest workspace files named in Yuri's prompt |

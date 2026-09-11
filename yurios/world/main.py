@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import logging
 import threading
 import uuid
@@ -54,6 +55,8 @@ from ..kernel.hub import EventHub
 from .inbox import Inbox
 from .turns import TextTurns
 from .selfies import SelfieLab
+from .qwenvoice import QwenVoice
+from .stories import StoryLab
 from .uploads import Uploads
 from .situation import render_visual_situation
 from .tools.client import MultiToolRunner, load_servers
@@ -169,6 +172,22 @@ class Runtime:
         self.brain = brain if brain is not None else runtime.build_brain(
             self, chat_model=chat_model, utility_model=utility_model,
             embedder=embedder)
+        self.stories = StoryLab(
+            utility=lambda: self.brain.state.utility,
+            post=self.post_message,
+            root=cfg.vault_dir / "stories",
+            remember=self.remember_story,
+            character_context=lambda: self.brain.state.soul_loader.load(),
+            user_name=cfg.user_name,
+            voice=QwenVoice(speech_url=cfg.story_tts_url,
+                            supervisor_url=cfg.story_tts_supervisor_url,
+                            ref_audio=cfg.story_tts_ref_audio,
+                            ref_text=cfg.story_tts_ref_text,
+                            language=cfg.story_tts_language,
+                            token=cfg.story_tts_token),
+            min_words=cfg.story_min_words, scenes=cfg.story_scenes)
+        if hasattr(self.brain, "stories"):
+            self.brain.stories = self.stories
         #: Whether this brain can carry a mind, asked once instead of one
         #: attribute at a time (world/brain_protocol.py). A `ToolBrain` can; the
         #: conversational fake a route test injects cannot, and everything the
@@ -312,7 +331,52 @@ class Runtime:
 
     # ---- the transcript (SPEC §2.6) ----
 
+    async def remember_story(self, story_id: str, title: str, theme: str,
+                             summary: str, source_path: str) -> None:
+        """Make a completed story retrievable in later conversations."""
+        store = getattr(getattr(self.brain, "state", None), "store", None)
+        remember = getattr(store, "remember_story", None)
+        if remember is None:
+            raise RuntimeError("YuriOS memory store has no story memory contract")
+        await remember(story_id, title, theme, summary, source_path)
+
+    async def backfill_story_memories(self) -> int:
+        """Index finished story artifacts created before story memory existed."""
+        store = getattr(getattr(self.brain, "state", None), "store", None)
+        if store is None or not hasattr(store, "inspect"):
+            return 0
+        root = self.cfg.vault_dir / "stories"
+        added = 0
+        if not root.exists():
+            return 0
+        for folder in sorted(p for p in root.iterdir() if p.is_dir()):
+            story_path = folder / "story.md"
+            if not story_path.is_file() or any(
+                    memory.kind == "story" for memory in store.inspect(folder.name)):
+                continue
+            outline = {}
+            outline_path = folder / "outline.json"
+            try:
+                outline = json.loads(outline_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+            story = story_path.read_text(encoding="utf-8")
+            title = str(outline.get("title") or story.splitlines()[0].lstrip("# ")
+                        or folder.name)
+            theme = str(outline.get("theme") or "bereits erzählte Geschichte")
+            characters = ", ".join(str(x) for x in outline.get("characters", []))
+            summary = (f"Nova und {self.cfg.user_name} sind die Hauptfiguren. "
+                       f"Figuren: {characters or 'Nova und ' + self.cfg.user_name}. "
+                       f"Anfang: {story[:900]}\nEnde: {story[-900:]}")
+            await store.remember_story(folder.name, title, theme, summary,
+                                       str(story_path))
+            added += 1
+        if added:
+            log.info("story memory: backfilled %d completed stories", added)
+        return added
+
     def post_message(self, role: str, text: str, *, image_url: str | None = None,
+                     audio_path: str | None = None,
                      proactive: bool = False, channel: str | None = None,
                      client_id: str | None = None,
                      selfie_id: str | None = None,
@@ -320,7 +384,8 @@ class Runtime:
                      report_title: str | None = None,
                      report_job: str | None = None,
                      unheard: bool = False,
-                     session_id: str | None = None) -> dict:
+                     session_id: str | None = None,
+                     corr_id: str | None = None) -> dict:
         """Commit one chat entry: append the ring, publish the `message` event.
         `proactive` marks lines she spoke unprompted (greeting, ambient, a
         finished selfie) — the YuriOS flag, same meaning. `channel` names the
@@ -357,6 +422,8 @@ class Runtime:
                            self.clock.now()).isoformat(timespec="seconds")}
         if image_url:
             entry["image_url"] = image_url
+        if audio_path:
+            entry["audio_path"] = audio_path
         if proactive:
             entry["proactive"] = True
         if channel:
@@ -376,6 +443,8 @@ class Runtime:
             entry["unheard"] = True
         if session_id:
             entry["session_id"] = session_id
+        if corr_id:
+            entry["corr_id"] = corr_id
         self.transcript.append(entry)
         del self.transcript[:-RING_SIZE]
         # …and the same entry to disk, so the column survives the next restart
@@ -601,6 +670,7 @@ class Runtime:
         # a probe that cannot reach the server answers "text only", which is a
         # room without a paperclip, not a room without her.
         await self._probe_image_input()
+        await self.backfill_story_memories()
         # the hands (SPEC §7.2): spawn/connect, discover, wire — or degrade.
         # tools_backend=off, a missing `mcp` install, or a dead server all leave
         # her hand-less but talking; /api/health says which happened.

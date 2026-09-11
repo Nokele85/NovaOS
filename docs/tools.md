@@ -40,6 +40,7 @@ reports the truth (`"mcp"` / `"fake"` / `"off"` / `"failed: …"`).
 | `read_skill` | `name` | reads a skill's full instructions | `SKILLS_ENABLED=true` |
 | `write_skill` | `name`, `description`, `instructions` | saves or replaces a skill | `SKILLS_ENABLED=true` |
 | `delete_skill` | `name` | removes a skill | `SKILLS_ENABLED=true` |
+| `tell_story` | `theme`, `mood?`, `length_minutes?` | starts an asynchronous complete story, voices it through the Rook TTS bridge and delivers the finished audio to Telegram | story tool enabled |
 
 Third-party calls configured through `MCP_SERVERS` are discovered and admitted through the same
 guard, with `TOOL_RATE_EXTERNAL` as their default rate. The surface doesn't grow a shell. Heavy
@@ -244,6 +245,72 @@ Her camera has its own page: [Selfies](selfies.md). Two hands share it — `take
 picture of her, `show_picture` for a picture of anything else — and with `SELFIE_BACKEND=off`
 neither is advertised at all.
 
+### tell_story
+
+`tell_story` is a long-running host-side job, not a text-generation shortcut. The MCP server
+validates the request and returns immediately with `{"status":"started","story_id":"…"}`.
+The host then performs the work off-turn, following the same **start-don't-await** contract as
+`research` and the camera:
+
+1. create an outline with a title, characters, scene purposes and a planned ending;
+2. write the scenes sequentially, carrying forward the current story state;
+3. require a beginning, escalation, turning point and resolved ending;
+4. persist `outline.json` and `story.md` below the character's Vault story directory;
+5. add a compact episodic memory containing title, participants, plot arc,
+   opening and ending to `vault/memory/episodic/` and the embedding index;
+6. synthesize the finished text through the Rook Qwen TTS bridge;
+7. add a short PCM silence between paragraphs and write the final audio artifact;
+8. publish one assistant message with the audio path on the EventHub.
+
+The Telegram channel handles that event with `sendAudio`. A WAV may be kept as the lossless
+local artifact, but Telegram delivery uses a compressed MP3 when necessary to stay below the
+Bot API upload limit. If TTS or delivery fails, the job keeps the written artifacts and posts a
+failure message; it must not pretend that an audio delivery succeeded.
+
+The host enforces `STORY_MIN_WORDS` before writing `story.md`, creating the audio artifact or
+publishing the success event. It may request a bounded continuation from the utility model; if
+the minimum still cannot be reached, the job fails visibly and does not claim a completed story.
+
+On boot, existing `vault/stories/<story_id>/` artifacts are backfilled once into
+the story-memory index. This lets Nova recognize a previous story when the user
+asks about its title, plot, characters, beginning or ending. The full text and
+audio remain in the story directory; story prose is not fed into `USER.md` as a
+personal fact.
+
+The default target is at least ten minutes of spoken German (normally at least 1,500 words).
+`length_minutes` is accepted from 10 through 60. “Kurz” in a user request does not lower that
+contract; it means a concise style within the minimum duration. The writing prompt emphasizes
+concrete action, dialogue and scene changes, limits repetitive lamenting, and keeps a short
+pause between paragraphs in the audio.
+
+```ini
+STORY_ENABLED=true
+TOOL_RATE_STORY=1
+STORY_TTS_URL=http://192.168.0.104:8091
+STORY_TTS_SUPERVISOR_URL=http://192.168.0.104:8092
+STORY_TTS_REF_AUDIO=file:///srv/voices/her/reference.wav
+STORY_TTS_REF_TEXT=Die exakte Abschrift dieser Aufnahme.
+STORY_MIN_WORDS=1500
+STORY_SCENES=8
+```
+
+The voice is Qwen3-TTS, cloned from one reference clip, and it is asked for whole
+passages rather than slices: the model plans prosody across a request, so a
+paragraph read in one call sounds like one breath while ninety-word slices sound
+like a list. Passages are split between sentences only, never inside one.
+
+The second service is the point of the pair. Narration takes minutes on a card
+the camera shares, so the voice is loaded before the first passage (`POST /an`,
+about 110 s) and unloaded in a `finally` when the last one is done (`POST /aus`,
+which gave back 7340 MiB when measured). Both live inside the LAN GPU lock, so a
+selfie waits for the voice instead of starving beside it.
+
+The tool is still a conversational hand: the always-on mind does not initiate it by itself.
+The normal path is a user turn, a discovered `tell_story` schema in `## TOOLS`, a
+`[[tell_story {...}]]` marker, Guard validation, immediate `started` response, and later
+EventHub delivery. Its actual invocation is recorded in the character's
+`tool-logs/calls.jsonl`, and its durable output lives under `vault/stories/<story_id>/`.
+
 ## How a tool call actually happens
 
 A `## TOOLS` block is appended to her system prompt, built from the *discovered* schemas. It tells
@@ -356,6 +423,12 @@ It is the same `{"mcpServers": {...}}` shape everything else uses, so a config y
 pastes straight in. `rate` is the one addition — calls per minute for every tool that server
 offers; without it they get `TOOL_RATE_EXTERNAL`.
 
+The repository includes a local Elecrow firmware hand at
+`tools/mcp-servers.json`. It is configured for the Windows PC that owns the
+board's USB connection. Nova discovers its calls at boot; the server
+instructions tell her to inspect first, build before flashing, and require
+explicit confirmation for the firmware overwrite.
+
 Unset (the default) means her own server alone, byte for byte as before. With servers configured:
 
 - her server is mounted **first**, so a third-party server advertising a name she already has is
@@ -374,8 +447,42 @@ can't see, like `SELFIE_BACKEND=off` leaving the camera out of the buckets.
 **Mounting a server gives her its hands, rate-limited but not reviewed.** That is the trade the
 knob exists to make; make it deliberately.
 
-## The mind does not use tools
+## Autonomous Elecrow hands
 
-Her always-on [mind](mind.md) never *initiates* tool calls — her hands stay conversational. A
-tool-bearing autonomous act needs the broker that comes with the sandboxed workshop, which is a
-named next rung rather than a thing quietly half-built.
+The YuriOS deployment enables a narrow autonomous Elecrow allowlist for Nova:
+status, debug, serial log/commands and firmware build. These are recorded in
+the mind tool audit and can be used as steps of an open goal. Firmware flashing
+is deliberately excluded from autonomous hands; `elecrow_flash` still requires
+an explicit `confirm=true` call from the owner.
+
+## Her playground on the Elecrow board
+
+Once the board runs the MicroPython runtime (`elecrow-firmware/nova-runtime/`,
+installed by the owner with `tools/elecrow_device_admin.py`), Nova writes and
+runs her own Python apps on it — no compile, no flash:
+
+| Tool | Effect | Gate |
+|---|---|---|
+| `device_info` | runtime, safe mode, SD card, Wi-Fi online (never which network), memory, apps | none |
+| `device_list_apps`, `device_read_app` | what she has written | none |
+| `device_write_app` | create/replace files of one app, or of `_lib` (shared modules) | names and sizes checked on both sides |
+| `device_run_app` | run an app ≤ 8 s, return output and traceback; a looping app is stopped with Ctrl-C | none |
+| `device_exec` | one MicroPython snippet ≤ 8 s | none |
+| `device_screenshot` | the display's framebuffer: texts drawn, colours, coverage — and, on Benniclaw, a description by `ELECROW_VISION_MODEL` | none |
+| `device_delete_app`, `device_log` | tidy up, read the runtime's log | none |
+| `device_set_autostart` | the app that starts at power-up | `confirm=true` after the user's yes |
+
+Every limit sits below YuriOS' `TOOL_TIMEOUT_S` (10 s). Everything the board
+prints passes a redactor on the PC that removes the Wi-Fi credentials stored on
+the board. Firmware, runtime and secrets are never tools: the owner's CLI does
+them, and `flash-micropython` refuses without a full flash backup from the last
+24 hours.
+
+The serial port is opened with DTR and RTS released. pyserial's default
+asserts both, and the board's auto-reset circuit turns that into a reboot:
+before 2026-09-11 every `elecrow_serial_log` restarted the board it read.
+
+On Benniclaw, `tools/elecrow_mcp_stdio_proxy.py` forwards the Windows server's
+tool list rather than a copy of it, opens a fresh connection per call (a
+restarted Windows server no longer leaves Nova with dead hands until YuriOS
+restarts), and never hands a screenshot's base64 to the model.
