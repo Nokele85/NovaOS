@@ -301,10 +301,12 @@ class ScriptedTelegram(httpx.AsyncBaseTransport):
     def __init__(self, updates: list[dict] | None = None):
         self.updates = list(updates or [])
         self.calls: list[tuple[str, dict]] = []
+        self.raw_bodies: list[tuple[str, bytes]] = []
 
     async def handle_async_request(self, request):
         method = request.url.path.rsplit("/", 1)[-1]
         raw = await request.aread()              # multipart bodies stream
+        self.raw_bodies.append((method, raw))
         try:
             body = json.loads(raw) if raw else {}
         except ValueError:                       # multipart (sendPhoto)
@@ -512,6 +514,36 @@ async def test_telegram_sends_the_selfie_file_itself(tmp_path):
                              "text": "took one!", "image_url": "/selfies/shot.png"})
     assert tr.sent("sendMessage") == []          # the photo carried the caption
     assert len(tr.sent("sendPhoto")) == 1
+    await ch._client.aclose()
+
+
+async def test_telegram_sends_story_mp3_with_audio_mpeg_mime(tmp_path):
+    (tmp_path / "story.mp3").write_bytes(b"fake mp3")
+    tr = ScriptedTelegram()
+    ch = tg(tr, selfie_dir=tmp_path, sending_enabled=True)
+    await ch._deliver_event({"type": "message", "role": "assistant",
+                             "text": "story", "audio_path": str(tmp_path / "story.mp3"),
+                             "channel": "telegram"})
+    body = next(raw for method, raw in tr.raw_bodies if method == "sendAudio")
+    assert b'filename="story.mp3"' in body
+    assert b"Content-Type: audio/mpeg" in body
+    await ch._client.aclose()
+
+
+async def test_a_finished_recording_reaches_the_phone_whatever_asked_for_it(tmp_path):
+    """Delivery, not company: a story voiced over twenty minutes belongs on the
+    phone even when it was asked for in the room. Words still wait for opt-in."""
+    (tmp_path / "story.mp3").write_bytes(b"fake mp3")
+    tr = ScriptedTelegram()
+    ch = tg(tr, selfie_dir=tmp_path)
+    ch.sending_enabled = False
+    await ch._deliver_event({"type": "message", "role": "assistant",
+                             "text": "Deine Geschichte ist fertig.",
+                             "audio_path": str(tmp_path / "story.mp3")})
+    assert len(tr.sent("sendAudio")) == 1
+    await ch._deliver_event({"type": "message", "role": "assistant",
+                             "text": "just talking"})
+    assert tr.sent("sendMessage") == []
     await ch._client.aclose()
 
 

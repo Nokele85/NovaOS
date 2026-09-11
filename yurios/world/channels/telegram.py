@@ -35,7 +35,10 @@ its own chat-id variable so pairing mode asks for hers.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import os
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -75,6 +78,13 @@ class TelegramChannel(Channel):
         self._client: httpx.AsyncClient | None = None
         self._tasks: list[asyncio.Task] = []
         self._queue: asyncio.Queue | None = None
+        # ChannelManager protects duplicate claims inside one YuriOS process.
+        # This second, OS-level lease protects against a second YuriOS process
+        # on the same host. Telegram allows only one getUpdates consumer per
+        # bot token; flock is released automatically if a process dies.
+        digest = hashlib.sha256(self.token.encode("utf-8")).hexdigest()[:20]
+        self._poll_lock_path = Path(tempfile.gettempdir()) / f"yurios-telegram-{digest}.lock"
+        self._poll_lock_handle = None
         # per-chat session ids, this process's lifetime: her *memory* is the
         # Vault; this only keeps the short conversation window stitched.
         self._sessions: dict[str, str | None] = {}
@@ -90,6 +100,7 @@ class TelegramChannel(Channel):
 
     async def start(self, rt) -> str:
         self.rt = rt
+        self._acquire_poll_lock()
         self._client = httpx.AsyncClient(
             base_url=f"{self.api_base}/bot{self.token}",
             timeout=httpx.Timeout(POLL_TIMEOUT_S + 10, connect=10),
@@ -114,6 +125,44 @@ class TelegramChannel(Channel):
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        self._release_poll_lock()
+
+    def _acquire_poll_lock(self) -> None:
+        """Refuse a second same-host poller before it reaches Telegram."""
+        handle = self._poll_lock_path.open("a+")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                handle.write("0")
+                handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as exc:
+            handle.close()
+            raise RuntimeError(
+                "telegram poller already held on this host; refusing duplicate "
+                "getUpdates consumer") from exc
+        self._poll_lock_handle = handle
+
+    def _release_poll_lock(self) -> None:
+        handle = self._poll_lock_handle
+        self._poll_lock_handle = None
+        if handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
     # ---- the Bot API ----
 
@@ -138,8 +187,13 @@ class TelegramChannel(Channel):
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001 — the net flaps; polling resumes
-                log.warning("telegram poll error (retrying): %s", e)
-                await asyncio.sleep(RETRY_BACKOFF_S)
+                detail = repr(e)
+                conflict = "Conflict: terminated by other getUpdates request" in str(e)
+                delay = 30.0 if conflict else RETRY_BACKOFF_S
+                level = logging.ERROR if conflict else logging.WARNING
+                log.log(level, "telegram poll error (retrying in %.1fs): %s: %s",
+                        delay, type(e).__name__, detail)
+                await asyncio.sleep(delay)
                 continue
             for update in updates:
                 offset = update["update_id"] + 1
@@ -214,9 +268,18 @@ class TelegramChannel(Channel):
             return
         if event.get("type") != "message" or event.get("role") != "assistant":
             return
-        if event.get("channel") != self.name and not self.sending_enabled:
-            return
         text = event.get("text", "")
+        audio = Path(event["audio_path"]) if event.get("audio_path") else None
+        # A finished recording is delivery, which is what this channel is for:
+        # a story voiced over twenty minutes belongs on the phone whether it was
+        # asked for here, in the room, or on the desktop. Words still follow the
+        # opt-in — that is the part that would be company rather than delivery.
+        if audio is None and event.get("channel") != self.name \
+                and not self.sending_enabled:
+            return
+        if audio is not None and audio.is_file():
+            await self._send_audio(audio, caption=text)
+            return
         image = self._selfie_path(event.get("image_url"))
         if image is not None:
             await self._send_photo(image, caption=text)
@@ -295,3 +358,13 @@ class TelegramChannel(Channel):
         data = resp.json()
         if not data.get("ok"):
             raise RuntimeError(f"telegram sendPhoto: {data.get('description')}")
+
+    async def _send_audio(self, path: Path, caption: str) -> None:
+        mime = "audio/mpeg" if path.suffix.lower() == ".mp3" else "audio/wav"
+        resp = await self._client.post(
+            "/sendAudio", data={"chat_id": self.chat_id, "caption": caption[:1024],
+                                "title": path.stem},
+            files={"audio": (path.name, path.read_bytes(), mime)})
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"telegram sendAudio: {data.get('description')}")
