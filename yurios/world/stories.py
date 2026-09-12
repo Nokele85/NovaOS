@@ -325,6 +325,7 @@ class StoryLab:
         Why it earns its cost: these faults span the whole story. A clause
         repeated five times and a shirt taken off twice are invisible to a
         checker that only ever sees one passage, however carefully it looks."""
+        anteil = _dialogue_share("\n\n".join(parts)) * 100
         karte: list[tuple[int, int]] = []
         zeilen: list[str] = []
         for pi, teil in enumerate(parts):
@@ -335,12 +336,20 @@ class StoryLab:
             antwort = await self._complete(
                 "Du bekommst eine Geschichte, Satz für Satz nummeriert.\n\n"
                 f"Verbindliche Form:\n{rules}\n\n"
-                "Finde NUR diese drei Fehlerarten:\n"
+                "Finde NUR diese vier Fehlerarten:\n"
                 "1. Die Anrede weicht von der Form ab.\n"
                 "2. Etwas passiert zweimal, obwohl es nur einmal passieren kann "
                 "— Kleidung zweimal ausgezogen, ein Raum zweimal betreten, ein "
                 "Gürtel zweimal geöffnet.\n"
-                "3. Eine Formulierung wiederholt sich auffällig oft.\n\n"
+                "3. Eine Formulierung wiederholt sich auffällig oft.\n"
+                "4. Ein Satz BERICHTET über etwas Gesagtes, statt es zu zeigen "
+                "(\"Ich sagte ihm, dass ich müde war\", \"wir redeten über den "
+                "Weg\") — er könnte gesprochene Rede sein.\n\n"
+                f"Gesprochen wird derzeit {anteil:.0f} % der Geschichte; ein "
+                "Drittel wäre richtig. Nenne unter Fehlerart 4 so viele Sätze, "
+                "dass das erreichbar wird — aber nur solche, in denen wirklich "
+                "jemand etwas sagt oder sagen könnte. Beschreibung, Handlung "
+                "und innere Sätze bleiben, was sie sind.\n\n"
                 "Nenne nur die fehlerhaften Sätze, höchstens 40, je Zeile:\n"
                 "<Nummer>: <kurze Begründung>\n"
                 "Danach nichts weiter. Findest du nichts, antworte: OK\n\n"
@@ -394,10 +403,13 @@ class StoryLab:
                 answer = await self._complete(
                     "Prüfe eine Geschichte Satz für Satz gegen ihre Regeln.\n\n"
                     f"Regeln:\n{rules}\n\n"
-                    "Dein einziger Auftrag sind Erzählperson, Anrede und "
-                    "Zeitform. Ändere alles, was dafür nötig ist — auch die "
-                    "Verbformen, die daraus folgen. Aus \"sagtest du\" wird "
-                    "\"sagte er\", nicht \"sagtest er\".\n\n"
+                    "Dein Auftrag sind Erzählperson, Anrede und Zeitform — "
+                    "und, wo ein Satz über etwas Gesagtes nur berichtet, ihn in "
+                    "gesprochene Rede verwandeln: aus \"Ich sagte ihm, dass ich "
+                    "müde war\" wird \"Ich bin müde\", sagte ich.\n"
+                    "Ändere alles, was dafür nötig ist — auch die Verbformen, "
+                    "die daraus folgen. Aus \"sagtest du\" wird \"sagte er\", "
+                    "nicht \"sagtest er\".\n\n"
                     "Handlung, Bilder, Ton und Wortwahl sind NICHT dein "
                     "Auftrag. Dass dir ein Satz nicht gefällt, ist kein Grund.\n\n"
                     "Beurteile jeden Satz im Zusammenhang mit dem davor und "

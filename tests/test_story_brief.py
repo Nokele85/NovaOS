@@ -691,3 +691,27 @@ async def test_a_sentence_nobody_asked_about_is_not_replaced(tmp_path):
     geaendert, _ = await lab._straighten(teile, "ANREDE: er", {1: {1: "nur der"}})
     assert geaendert == 1
     assert teile[1] == "Erster Satz. Gefragt. Dritter Satz."
+
+
+async def test_the_review_is_told_how_little_is_spoken_and_asked_to_fix_it(tmp_path):
+    """"More dialogue" is not a fault you can point at — but "this sentence
+    reports what was said instead of showing it" is, and it is repairable one
+    sentence at a time. The share fell to 10% while the prompt was already
+    asking for a third."""
+    util = Recorder("OK")
+    lab = _lab(util, tmp_path)
+    await lab._review(["Er ging.", "Ich sagte ihm, dass ich müde war."], "ANREDE: du")
+    p = util.prompts[-1]
+    assert "BERICHTET über etwas Gesagtes" in p
+    assert "ein Drittel wäre richtig" in p
+    assert "% der Geschichte" in p          # der gemessene Ist-Wert steht drin
+    assert "Beschreibung, Handlung und innere Sätze bleiben" in p
+
+
+async def test_the_repair_may_turn_a_report_into_spoken_words(tmp_path):
+    util = Recorder("OK")
+    lab = _lab(util, tmp_path)
+    await lab._straighten(["Anfang.", "Zweiter."], "ANREDE: du", {1: {0: "Bericht"}})
+    p = util.prompts[-1]
+    assert "in gesprochene Rede verwandeln" in p
+    assert "Ich bin müde" in p              # das Beispiel, beim Namen genannt
