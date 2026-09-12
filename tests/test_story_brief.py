@@ -352,55 +352,66 @@ async def test_the_pass_is_told_it_corrects_and_does_not_rewrite(tmp_path):
     lab = _lab(util, tmp_path)
     await lab._straighten(["Anfang.", "Zweiter."], "ERZÄHLPERSON: Ich-Form")
     p = util.prompts[-1]
-    assert "Kein Satz kommt hinzu" in p
-    assert "keiner fällt weg" in p and "keiner wird umgestellt" in p
-    assert "schöner gemacht" in p
-    assert "nicht dein" in p and "Auftrag" in p
+    # Sentence by sentence, and only the numbers it names come back.
+    assert "Satz für Satz" in p
+    assert "<Nummer>: <der angeglichene Satz>" in p
+    assert "NICHT dein" in p and "Auftrag" in p
+    assert "nicht gefällt, ist kein Grund" in p
 
 
 async def test_a_passage_that_obeys_is_left_exactly_as_written(tmp_path):
-    """A pass that rewrites what is already fine is how good prose gets worn
-    down. An obedient passage costs one short "OK" and nothing changes."""
+    """Nothing the model does not name may change. Not by instruction — we
+    simply never replace a sentence it did not return."""
     lab = _lab(Recorder(), tmp_path)
-    teile = ["Erster Absatz.", "Zweiter Absatz, völlig in Ordnung."]
+    teile = ["Erster Absatz.", "Zweiter Absatz. Er ist völlig in Ordnung."]
     lab._complete = lambda *a, **kw: _antwort("OK")
-    n = await lab._straighten(teile, "ERZÄHLPERSON: Du-Form")
-    assert n == 0
-    assert teile == ["Erster Absatz.", "Zweiter Absatz, völlig in Ordnung."]
+    geaendert, gesamt = await lab._straighten(teile, "ANREDE: er")
+    assert (geaendert, gesamt) == (0, 2)
+    assert teile[1] == "Zweiter Absatz. Er ist völlig in Ordnung."
 
 
-async def test_a_correction_that_is_really_a_summary_is_refused(tmp_path):
-    """The dangerous failure: the model answers with a tidy précis instead of
-    a corrected passage, and a quarter of the story quietly disappears."""
+async def test_only_the_named_sentence_changes_and_the_rest_is_untouched(tmp_path):
+    """The whole point of going sentence by sentence: a passage used to come
+    back whole, which let the model rewrite everything it touched — 8 of 8
+    passages and the story 12% longer, twice."""
     lab = _lab(Recorder(), tmp_path)
-    lang = " ".join(["Ein Satz mit vielen Wörtern darin."] * 30)
-    teile = ["Anfang.", lang]
-    lab._complete = lambda *a, **kw: _antwort("Sie gingen weiter.")
-    with_log = await lab._straighten(teile, "ERZÄHLPERSON: Du-Form")
-    assert with_log == 0
-    assert teile[1] == lang          # unangetastet
+    teile = ["Anfang.",
+             "Du gingst voran. Der Wald war still. Du bliebst stehen."]
+    lab._complete = lambda *a, **kw: _antwort("1: Er ging voran.")
+    geaendert, gesamt = await lab._straighten(teile, "ANREDE: er")
+    assert (geaendert, gesamt) == (1, 3)
+    assert teile[1] == "Er ging voran. Der Wald war still. Du bliebst stehen."
 
 
-async def test_a_correction_that_grows_the_passage_is_refused(tmp_path):
-    """The other direction, and the one the live run hit: 8 of 8 passages
-    "corrected" and the story 12% longer. Fixing a pronoun does not add prose."""
+async def test_a_refused_sentence_costs_that_sentence_and_not_the_passage(tmp_path):
     lab = _lab(Recorder(), tmp_path)
-    original = " ".join(["Ein Satz mit Wörtern."] * 20)
-    aufgeblaeht = original + " " + " ".join(["Und noch ein ganz neuer Satz."] * 12)
-    teile = ["Anfang.", original]
-    lab._complete = lambda *a, **kw: _antwort(aufgeblaeht)
-    assert await lab._straighten(teile, "ERZÄHLPERSON: Du-Form") == 0
-    assert teile[1] == original
+    teile = ["Anfang.", "Du gingst voran. Der Wald war still."]
+    # erster Satz kaputt (Pronomen ohne Verb), zweiter sauber
+    lab._complete = lambda *a, **kw: _antwort(
+        "1: Gingst er voran.\n2: Der Wald ist still.")
+    geaendert, _ = await lab._straighten(teile, "ZEITFORM: Präsens")
+    assert geaendert == 1
+    assert teile[1] == "Du gingst voran. Der Wald ist still."
 
 
-async def test_a_real_correction_is_taken(tmp_path):
+async def test_a_sentence_answered_with_reasoning_is_kept_as_written(tmp_path):
     lab = _lab(Recorder(), tmp_path)
-    original = " ".join(["Ich ging durch den nassen Wald weiter."] * 20)
-    korrigiert = " ".join(["Du gingst durch den nassen Wald weiter."] * 20)
-    teile = ["Anfang.", original]
-    lab._complete = lambda *a, **kw: _antwort(korrigiert)
-    assert await lab._straighten(teile, "ERZÄHLPERSON: Du-Form") == 1
-    assert teile[1].startswith("Du gingst")
+    teile = ["Anfang.", "Du gingst voran. Der Wald war still."]
+    lab._complete = lambda *a, **kw: _antwort(
+        "1: Verstöße: Anrede falsch. Korrigierter Abschnitt: Er ging voran.")
+    geaendert, _ = await lab._straighten(teile, "ANREDE: er")
+    assert geaendert == 0
+    assert teile[1] == "Du gingst voran. Der Wald war still."
+
+
+async def test_an_answer_that_is_not_numbered_changes_nothing(tmp_path):
+    """A line we cannot read is a line we must not apply."""
+    lab = _lab(Recorder(), tmp_path)
+    teile = ["Anfang.", "Du gingst voran. Der Wald war still."]
+    lab._complete = lambda *a, **kw: _antwort(
+        "Gerne! Hier ist die überarbeitete Fassung: Er ging voran, still.")
+    assert await lab._straighten(teile, "ANREDE: er") == (0, 2)
+    assert teile[1] == "Du gingst voran. Der Wald war still."
 
 
 async def test_a_failing_rules_pass_never_costs_the_story(tmp_path):
@@ -412,7 +423,7 @@ async def test_a_failing_rules_pass_never_costs_the_story(tmp_path):
         raise RuntimeError("provider weg")
 
     lab._complete = kaputt
-    assert await lab._straighten(teile, "regeln") == 0
+    assert await lab._straighten(teile, "regeln") == (0, 1)
     assert teile == ["Anfang.", "Zweiter Absatz."]
 
 
@@ -426,19 +437,12 @@ async def test_the_rules_come_from_the_opening_not_from_a_template(tmp_path):
     assert any("ERZÄHLPERSON" in p for p in util.prompts)
 
 
-async def test_a_checker_thinking_out_loud_never_reaches_the_story(tmp_path):
-    """Live, 2026-09-12: two passages were published beginning "Ich prüfe den
-    Abschnitt gegen die Regeln. Verstöße: 1. Wetter…" — and would have been
-    read out loud. The length window waved them through; prose about the rules
-    is never a corrected passage."""
-    lab = _lab(Recorder(), tmp_path)
-    original = " ".join(["Sie ging weiter durch den Wald."] * 20)
-    meta = ("Ich prüfe den Abschnitt gegen die Regeln. Verstöße: 1. Wetter. "
-            "Korrigierter Abschnitt: " + original)
-    teile = ["Anfang.", original]
-    lab._complete = lambda *a, **kw: _antwort(meta)
-    assert await lab._straighten(teile, "ERZÄHLPERSON: Ich-Form") == 0
-    assert teile[1] == original
+async def test_the_house_rules_name_address_and_tense(tmp_path):
+    util = Recorder()
+    lab = _lab(util, tmp_path)
+    await lab._house_rules("Du gingst durch den Wald.")
+    p = util.prompts[-1]
+    assert "ANREDE:" in p and "ZEITFORM:" in p
 
 
 async def test_the_rules_never_turn_the_plot_into_law(tmp_path):
@@ -451,37 +455,12 @@ async def test_the_rules_never_turn_the_plot_into_law(tmp_path):
     assert "ERZÄHLPERSON" in p and "ANREDE" in p and "ZEITFORM" in p
     assert "Die Hauptfiguren stehen fest: Nova und" in p
     assert "keine weiteren Regeln ab" in p
-    assert "Wetter" in p and "gehören zur Handlung" in p
 
 
-async def test_a_pronoun_swapped_without_its_verb_is_refused(tmp_path):
-    """The pass produced "sagtest er" while it was forbidden to change more
-    than single words — my own constraint caused it. It may fix the verb now,
-    and a passage that still comes back broken is kept as it was."""
-    lab = _lab(Recorder(), tmp_path)
-    original = " ".join(['„Komm mit", sagtest du leise, und gingst voran.'] * 12)
-    kaputt = " ".join(['„Komm mit", sagtest er leise, und gingst er voran.'] * 12)
-    teile = ["Anfang.", original]
-    lab._complete = lambda *a, **kw: _antwort(kaputt)
-    assert await lab._straighten(teile, "ANREDE: er") == 0
-    assert teile[1] == original
-
-
-async def test_the_pass_may_change_the_verb_that_the_pronoun_requires(tmp_path):
-    """The instruction has to permit what the job needs, or it produces the
-    very fault it was added to remove."""
-    util = Recorder("OK")
-    lab = _lab(util, tmp_path)
-    await lab._straighten(["Anfang.", "Zweiter."], "ANREDE: er")
-    p = util.prompts[-1]
-    assert "auch die Verbformen" in p
-    assert "sagtest er" in p               # the counter-example, by name
-    assert "Erzählperson, Anrede und" in p
-
-
-async def test_the_house_rules_name_address_and_tense(tmp_path):
-    util = Recorder()
-    lab = _lab(util, tmp_path)
-    await lab._house_rules("Du gingst durch den Wald.")
-    p = util.prompts[-1]
-    assert "ANREDE:" in p and "ZEITFORM:" in p
+def test_sentences_never_lose_a_word():
+    """Splitting is the pass's foundation: a sentence lost here is prose that
+    disappears from the story."""
+    from yurios.world.stories import _sentences
+    text = 'Sie blieb stehen. „Hörst du das?“ Ganz leise … Er nickte und ging'
+    assert " ".join(_sentences(text)) == text
+    assert len(_sentences(text)) == 4

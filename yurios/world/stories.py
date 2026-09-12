@@ -63,7 +63,41 @@ _BROKEN_VERB = re.compile(
     # our business.
     r"\b(?:\w{2,}test|warst|hattest|wurdest|gingst|bliebst|sahst|"
     r"standst|hieltst|nahmst|kamst|zogst|liefst|riefst|fandst|gabst)"
-    r"\s+(?:er|sie|es)\b", re.I)
+    # "er" only. "sagtest sie" and "sahst es" are correct German — there
+    # the pronoun is the object ("you saw her", "you saw it"). "er" is
+    # nominative and nothing else, so it can only be a subject whose verb
+    # disagrees with it.
+    r"\s+er\b", re.I)
+
+
+def _sentences(text: str) -> list[str]:
+    """Split into sentences, keeping the closing quote with the sentence it
+    belongs to — „Ja.“ is one sentence, not one and a stray mark. A tail with
+    no final mark is still a sentence: dropping it would delete prose, and
+    deleting prose is the one thing this pass may never do."""
+    text = text.strip()
+    if not text:
+        return []
+    out, ende = [], 0
+    for m in re.finditer(r"""\S.*?[.!?…]["'»«“”’‹›]*(?=\s|$)""", text):
+        out.append(m.group(0))
+        ende = m.end()
+    rest = text[ende:].strip()
+    if rest:
+        out.append(rest)
+    return out or [text]
+
+
+def _numbered(answer: str) -> list[tuple[int, str]]:
+    """The lines of a `<number>: <sentence>` answer. Anything else is skipped —
+    a preamble, an apology, "OK" — because a line we cannot read is a line we
+    must not apply."""
+    out: list[tuple[int, str]] = []
+    for line in (answer or "").splitlines():
+        m = re.match(r"\s*(\d{1,3})\s*[:.)]\s*(.+)", line)
+        if m and m.group(2).strip():
+            out.append((int(m.group(1)), m.group(2).strip()))
+    return out
 
 
 def _purpose_text(node) -> str:
@@ -205,77 +239,66 @@ class StoryLab:
             max_tokens=300, persona=False)
         return self._clean(rules)
 
-    async def _straighten(self, parts: list[str], rules: str) -> int:
-        """Hold every later passage against the opening's rules, in place.
+    async def _straighten(self, parts: list[str], rules: str) -> tuple[int, int]:
+        """Hold the story against its own rules, sentence by sentence.
 
-        DOC dropped Re3's edit pass as cost without proportional gain, and it
-        was right about Re3's: "fix what is wrong" over a whole draft is vague
-        and expensive. This one is narrow — named, checkable rules that we have
-        watched break twice — and it is cheap because a passage that already
-        obeys costs one short "OK" instead of a rewrite.
+        The whole passage used to go in and a whole passage came back, which
+        left the model free to rewrite everything it touched: 8 of 8 passages
+        "corrected" and the story 12% longer, twice. Now it sees numbered
+        sentences and may answer only with the numbers that break a rule.
+        Every sentence it does not name stays byte-for-byte as it was written
+        — not by instruction, but because we never replace it.
 
-        Two guards, because a repair pass that damages is worse than none: a
-        correction that comes back much shorter than the original is a summary,
-        not a correction, and is refused; and any failure leaves the passage
-        exactly as it was."""
-        corrected = 0
+        Each returned sentence is checked on its own: no reasoning about the
+        rules instead of prose, no pronoun swapped without its verb, and a
+        length near the original. A refused sentence costs that sentence, not
+        the passage."""
+        geaendert = gesamt = 0
         for i in range(1, len(parts)):
+            saetze = _sentences(parts[i])
+            gesamt += len(saetze)
+            nummeriert = "\n".join(f"{n}: {s}" for n, s in enumerate(saetze, 1))
             try:
                 answer = await self._complete(
-                    "Bringe einen Abschnitt einer Geschichte mit ihren Regeln "
-                    "in Übereinstimmung.\n\n"
+                    "Prüfe eine Geschichte Satz für Satz gegen ihre Regeln.\n\n"
+                    f"Regeln:\n{rules}\n\n"
                     "Dein einziger Auftrag sind Erzählperson, Anrede und "
                     "Zeitform. Ändere alles, was dafür nötig ist — auch die "
                     "Verbformen, die daraus folgen. Aus \"sagtest du\" wird "
-                    "\"sagte er\", nicht \"sagtest er\": ein getauschtes "
-                    "Pronomen ohne angepasstes Verb ist ein Fehler, kein "
-                    "Ergebnis.\n\n"
-                    "Alles andere bleibt unangetastet. Kein Satz kommt hinzu, "
-                    "keiner fällt weg, keiner wird umgestellt, kein Wort wird "
-                    "schöner gemacht. Handlung, Bilder und Ton sind nicht dein "
-                    "Auftrag, und dass dir etwas nicht gefällt, ist kein Grund.\n\n"
-                    "Hält der Abschnitt die Regeln schon ein, antworte mit "
-                    "genau: OK\n"
-                    "Sonst gib den angeglichenen Abschnitt zurück, ohne Vorrede "
-                    "und ohne Überschrift.\n\n"
-                    f"Regeln:\n{rules}\n\n"
-                    f"Abschnitt:\n{parts[i]}",
+                    "\"sagte er\", nicht \"sagtest er\".\n\n"
+                    "Handlung, Bilder, Ton und Wortwahl sind NICHT dein "
+                    "Auftrag. Dass dir ein Satz nicht gefällt, ist kein Grund.\n\n"
+                    "Antworte NUR mit den Nummern der Sätze, die gegen eine "
+                    "Regel verstoßen, je Zeile eine:\n"
+                    "<Nummer>: <der angeglichene Satz>\n\n"
+                    "Verstößt kein Satz, antworte mit genau: OK\n\n"
+                    f"Sätze:\n{nummeriert}",
                     max_tokens=SCENE_MAX_TOKENS, persona=False)
             except Exception:
                 log.warning("straightening passage %d failed; left as written",
                             i + 1, exc_info=True)
                 continue
-            fixed = _trim_to_sentence(self._clean(answer))
-            # It was told "no preamble" and ignored it: two passages of the
-            # live story of 2026-09-12 were published with the checker's own
-            # reasoning in front of them ("Verstöße: 1. Wetter …"), and the
-            # length window waved them through. Prose about the rules is never
-            # a corrected passage.
-            if _BROKEN_VERB.search(fixed) and not _BROKEN_VERB.search(parts[i]):
-                log.warning("straightening passage %d swapped a pronoun without "
-                            "its verb (\"sagtest er\"); kept the original", i + 1)
-                continue
-            if _META.search(fixed):
-                log.warning("straightening passage %d answered with its own "
-                            "reasoning instead of prose; kept the original",
-                            i + 1)
-                continue
-            if not fixed or fixed.strip().upper().rstrip(".") == "OK":
-                continue
-            # Symmetric on purpose. The first guard caught a correction that
-            # was really a summary; the live run of 2026-09-12 showed the other
-            # direction — 8 of 8 passages "corrected" and the story 12% longer,
-            # which is not a correction either but a rewrite with new prose in
-            # it. A fix for a pronoun does not change the length.
-            vorher, nachher = _words(parts[i]), _words(fixed)
-            if not 0.75 * vorher <= nachher <= 1.2 * vorher:
-                log.warning("straightening passage %d went from %d words to %d "
-                            "— that is a rewrite, not a correction; kept the "
-                            "original", i + 1, vorher, nachher)
-                continue
-            parts[i] = fixed
-            corrected += 1
-        return corrected
+            for nummer, satz in _numbered(answer):
+                if not 1 <= nummer <= len(saetze):
+                    continue
+                alt = saetze[nummer - 1]
+                if _META.search(satz):
+                    log.warning("passage %d sentence %d answered with reasoning "
+                                "instead of prose; kept it", i + 1, nummer)
+                    continue
+                if _BROKEN_VERB.search(satz) and not _BROKEN_VERB.search(alt):
+                    log.warning("passage %d sentence %d swapped a pronoun "
+                                "without its verb; kept it", i + 1, nummer)
+                    continue
+                if not 0.5 * _words(alt) <= _words(satz) <= 1.6 * _words(alt):
+                    log.warning("passage %d sentence %d went from %d words to "
+                                "%d; kept it", i + 1, nummer, _words(alt),
+                                _words(satz))
+                    continue
+                saetze[nummer - 1] = satz
+                geaendert += 1
+            parts[i] = " ".join(saetze)
+        return geaendert, gesamt
 
     async def _state_update(self, state: str, scene: str) -> str:
         """Carry the story's *state* forward, not its last 1200 characters.
@@ -487,10 +510,10 @@ class StoryLab:
             try:
                 rules = await self._house_rules(parts[0])
                 if rules:
-                    fixed = await self._straighten(parts, rules)
+                    geaendert, gesamt = await self._straighten(parts, rules)
                     story = "\n\n".join(parts)
-                    log.info("story %s: straightened %d of %d passages",
-                             story_id, fixed, len(parts) - 1)
+                    log.info("story %s: straightened %d of %d sentences",
+                             story_id, geaendert, gesamt)
             except Exception:
                 log.warning("story %s: the rules pass failed; publishing as "
                             "written", story_id, exc_info=True)
