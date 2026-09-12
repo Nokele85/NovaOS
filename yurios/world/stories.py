@@ -45,6 +45,15 @@ _BARE_ARC = ("Der Anfang: die Lage und was die beiden gerade wollen.",
              "Das Ende, das alles Offene schließt.")
 
 
+# A corrected passage is prose. Anything that talks *about* the rules is the
+# checker thinking out loud, and it must never reach the file — let alone the
+# recording, which would read it out.
+_META = re.compile(
+    r"(korrigierter\s+abschnitt|verst(ö|oe)(ß|ss)e?|gegen\s+die\s+regeln|"
+    r"der\s+abschnitt\s+(spielt|verst|h(ä|ae)lt)|die\s+regel\s+verlangt|"
+    r"ich\s+pr(ü|ue)fe\s+den\s+abschnitt)", re.I)
+
+
 def _purpose_text(node) -> str:
     """The words of one outline node, whether she wrote a line or the planner
     wrote an object. Putting the dict in a prompt puts braces in her story."""
@@ -158,18 +167,26 @@ class StoryLab:
                     "scenes": [{"purpose": p} for p in _BARE_ARC]}
 
     async def _house_rules(self, opening: str) -> str:
-        """The story's own rules, read off its first scene.
+        """The two rules a story has to keep, read off its opening.
 
-        The opening is the law: whatever perspective and pronouns it set are
-        what the rest has to keep. Deriving them instead of declaring them
-        means the pass cannot impose a shape the story never had."""
+        Deliberately only two. An earlier version asked for whatever the first
+        scene established and got incidental circumstances back as law — "the
+        figures have no names", "the weather is dry" — and then corrected the
+        story against its own plot, which is how a dawn scene ended up saying
+        "it is getting dark" (live, 2026-09-12). Weather, time of day, tense
+        and names are story, not rule.
+
+        The cast is not derived either. It is always Nova and him."""
         rules = await self._complete(
-            "Lies den Anfang einer Geschichte und notiere in höchstens drei "
-            "kurzen Zeilen, woran sich der Rest halten muss:\n"
+            "Lies den Anfang einer Geschichte und notiere in höchstens zwei "
+            "kurzen Zeilen, woran sich der Rest halten muss — nur das, sonst "
+            "nichts:\n"
             "ERZÄHLPERSON: in welcher Person erzählt wird und wer mit \"du\" "
             "beziehungsweise \"ich\" gemeint ist\n"
-            "FIGUREN: jede Figur mit ihren Pronomen\n"
-            "ZEIT: Tageszeit und Wetter am Ende dieses Anfangs\n\n"
+            "PRONOMEN: welches Pronomen jede Figur bekommt\n\n"
+            f"Die Hauptfiguren stehen fest: Nova und {self.user_name}. Leite "
+            "keine weiteren Regeln ab. Wetter, Tageszeit, Zeitform, Orte und "
+            "Namen gehören zur Handlung und sind keine Regeln.\n\n"
             f"Anfang:\n{opening[:3000]}",
             max_tokens=300, persona=False)
         return self._clean(rules)
@@ -214,6 +231,16 @@ class StoryLab:
                             i + 1, exc_info=True)
                 continue
             fixed = _trim_to_sentence(self._clean(answer))
+            # It was told "no preamble" and ignored it: two passages of the
+            # live story of 2026-09-12 were published with the checker's own
+            # reasoning in front of them ("Verstöße: 1. Wetter …"), and the
+            # length window waved them through. Prose about the rules is never
+            # a corrected passage.
+            if _META.search(fixed):
+                log.warning("straightening passage %d answered with its own "
+                            "reasoning instead of prose; kept the original",
+                            i + 1)
+                continue
             if not fixed or fixed.strip().upper().rstrip(".") == "OK":
                 continue
             # Symmetric on purpose. The first guard caught a correction that

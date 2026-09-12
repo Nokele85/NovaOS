@@ -424,3 +424,31 @@ async def test_the_rules_come_from_the_opening_not_from_a_template(tmp_path):
     await lab._house_rules("Du gingst durch den Wald, und Benni ging vor.")
     assert any("Du gingst durch den Wald" in p for p in util.prompts)
     assert any("ERZÄHLPERSON" in p for p in util.prompts)
+
+
+async def test_a_checker_thinking_out_loud_never_reaches_the_story(tmp_path):
+    """Live, 2026-09-12: two passages were published beginning "Ich prüfe den
+    Abschnitt gegen die Regeln. Verstöße: 1. Wetter…" — and would have been
+    read out loud. The length window waved them through; prose about the rules
+    is never a corrected passage."""
+    lab = _lab(Recorder(), tmp_path)
+    original = " ".join(["Sie ging weiter durch den Wald."] * 20)
+    meta = ("Ich prüfe den Abschnitt gegen die Regeln. Verstöße: 1. Wetter. "
+            "Korrigierter Abschnitt: " + original)
+    teile = ["Anfang.", original]
+    lab._complete = lambda *a, **kw: _antwort(meta)
+    assert await lab._straighten(teile, "ERZÄHLPERSON: Ich-Form") == 0
+    assert teile[1] == original
+
+
+async def test_the_rules_never_turn_the_plot_into_law(tmp_path):
+    """Weather, time of day, tense and names are story. Derived as rules they
+    made the checker correct a dawn scene into saying "es wird dunkel"."""
+    util = Recorder()
+    lab = _lab(util, tmp_path)
+    await lab._house_rules("Es war Abend und trocken, und Benni ging vor.")
+    p = util.prompts[-1]
+    assert "ERZÄHLPERSON" in p and "PRONOMEN" in p
+    assert "Die Hauptfiguren stehen fest: Nova und" in p
+    assert "keine weiteren Regeln ab" in p
+    assert "Wetter" in p and "gehören zur Handlung" in p
