@@ -683,7 +683,11 @@ class StoryLab:
                 umfang = SCENE_LENGTHS.get(
                     her_lengths[i] if i < len(her_lengths) else "", SCENE_WORDS)
                 scene = await self._complete(
-                    "Schreibe die nächste Szene eines Hörspiels auf Deutsch. "
+                    (f"Art dieser Geschichte: {register} "
+                     "Das gilt vom ersten Satz an und für jede Szene, nicht erst "
+                     "dort, wo es zur Sache geht.\n\n"
+                     if register else "")
+                    + "Schreibe die nächste Szene eines Hörspiels auf Deutsch. "
                     "Ein Hörspiel lebt von gesprochener Rede: Was die beiden "
                     "erleben, erfährt man vor allem daran, was sie zueinander "
                     "sagen. Beschreibung nur so viel, wie das Ohr braucht, um zu "
