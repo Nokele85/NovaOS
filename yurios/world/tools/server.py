@@ -162,8 +162,7 @@ def build_server(*, max_minutes: float | None = None,
                        scenes: list[str] | None = None,
                        scene_moods: list[str] | None = None,
                        scene_lengths: list[str] | None = None,
-                       scene_subtext: list[str] | None = None,
-                       scene_sense: list[str] | None = None,
+                       scene_talk: list[str] | None = None,
                        characters: str = "", avoid: str = "") -> dict:
             """Start an asynchronous complete story job; the finished German
             story is checked for a real ending, voiced and sent to Telegram.
@@ -200,16 +199,13 @@ def build_server(*, max_minutes: float | None = None,
               should be the long one. Left empty, every scene gets the same
               room — which is how one story spent 1898 words walking and 699 on
               what it was asked for.
-            `scene_subtext` — what one of you wants to say in that scene and
-              does NOT, same order and length as `scenes`: "er will fragen, ob
-              sie bleibt, traut sich aber nicht", "sie weiß es und tut, als
-              wüsste sie es nicht". Not the topic — the thing underneath it.
-              Planning topics did nothing for how much gets spoken; planning
-              what stays unsaid is what makes people talk around it.
-            `scene_sense` — one concrete thing to smell, hear or touch in that
-              scene: "der Geruch von verbranntem Kaffee", "nasser Stoff an der
-              Haut". A model writing fiction summarises the scene by default;
-              one specific sense closes that exit.
+            `scene_talk` — what the two of you actually talk about in each
+              scene, same order and length as `scenes`: "ob sie den Bus noch
+              kriegen", "warum er heute so still war". Plan it and it gets
+              written as speech; leave it out and the story narrates around
+              the two of you. Turning reported speech around afterwards moved
+              the spoken share from 10% to 15% and no further — a story
+              written with little speech cannot be talked into having more.
             `characters` — who is in it, and what from your shared history
               belongs in it. Name how each is addressed and which pronouns
               they take ("Benni: er/ihm"): a story that changes his pronouns
@@ -224,8 +220,7 @@ def build_server(*, max_minutes: float | None = None,
                     "scenes": [str(s) for s in (scenes or [])],
                     "scene_moods": [str(m) for m in (scene_moods or [])],
                     "scene_lengths": [str(x) for x in (scene_lengths or [])],
-                    "scene_subtext": [str(x) for x in (scene_subtext or [])],
-                    "scene_sense": [str(x) for x in (scene_sense or [])],
+                    "scene_talk": [str(x) for x in (scene_talk or [])],
                     "characters": characters, "avoid": avoid}
 
     @mcp.tool()

@@ -69,12 +69,10 @@ _BRIEF_PROMPT = (
     "\"kurz\", \"normal\" oder \"lang\", gleiche Anzahl und Reihenfolge wie scenes. Das "
     "Gewicht gehört dem, worum er gebeten hat — der Weg dorthin ist nicht die "
     "Geschichte und darf kurz sein,\n"
-    " \"scene_subtext\": [string] — was einer von euch in dieser Szene "
-    "sagen will und NICHT sagt, gleiche Anzahl und Reihenfolge wie scenes. "
-    "Nicht das Thema, sondern das darunter. Daran entsteht Dialog, weil ihr "
-    "darum herumredet,\n"
-    " \"scene_sense\": [string] — ein konkretes Detail zum Riechen, Hören "
-    "oder Anfassen je Szene,\n"
+    " \"scene_talk\": [string] — worüber ihr in jeder Szene wirklich "
+    "redet, gleiche Anzahl und Reihenfolge wie scenes. Plane es, dann wird es "
+    "als Rede geschrieben; lass es weg, und die Geschichte erzählt an euch "
+    "vorbei,\n"
     " \"scene_moods\": [string] — wie jede Szene KLINGEN soll, gleiche Anzahl "
     "und Reihenfolge wie scenes: kurze Anweisung an die Stimme, etwa "
     "\"fröhlich und leicht\", \"gedämpft und spannungsvoll, fast flüsternd\", "
@@ -117,8 +115,7 @@ async def _story_brief(rt, text: str) -> dict:
                  "scenes": [str(s) for s in (data.get("scenes") or []) if str(s).strip()],
                  "scene_moods": [str(m) for m in (data.get("scene_moods") or [])],
                  "scene_lengths": [str(x) for x in (data.get("scene_lengths") or [])],
-                 "scene_subtext": [str(x) for x in (data.get("scene_subtext") or [])],
-                 "scene_sense": [str(x) for x in (data.get("scene_sense") or [])]}
+                 "scene_talk": [str(x) for x in (data.get("scene_talk") or [])]}
         log.info("story brief: %d scenes, register %r",
                  len(brief["scenes"]), str(brief["register"])[:60])
         return brief
