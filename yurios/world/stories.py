@@ -207,10 +207,16 @@ class StoryLab:
             fixed = _trim_to_sentence(self._clean(answer))
             if not fixed or fixed.strip().upper().rstrip(".") == "OK":
                 continue
-            if _words(fixed) < 0.75 * _words(parts[i]):
-                log.warning("straightening passage %d came back %d words for "
-                            "%d — that is a summary, not a correction; kept the "
-                            "original", i + 1, _words(fixed), _words(parts[i]))
+            # Symmetric on purpose. The first guard caught a correction that
+            # was really a summary; the live run of 2026-09-12 showed the other
+            # direction — 8 of 8 passages "corrected" and the story 12% longer,
+            # which is not a correction either but a rewrite with new prose in
+            # it. A fix for a pronoun does not change the length.
+            vorher, nachher = _words(parts[i]), _words(fixed)
+            if not 0.75 * vorher <= nachher <= 1.2 * vorher:
+                log.warning("straightening passage %d went from %d words to %d "
+                            "— that is a rewrite, not a correction; kept the "
+                            "original", i + 1, vorher, nachher)
                 continue
             parts[i] = fixed
             corrected += 1

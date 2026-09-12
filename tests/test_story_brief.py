@@ -368,6 +368,18 @@ async def test_a_correction_that_is_really_a_summary_is_refused(tmp_path):
     assert teile[1] == lang          # unangetastet
 
 
+async def test_a_correction_that_grows_the_passage_is_refused(tmp_path):
+    """The other direction, and the one the live run hit: 8 of 8 passages
+    "corrected" and the story 12% longer. Fixing a pronoun does not add prose."""
+    lab = _lab(Recorder(), tmp_path)
+    original = " ".join(["Ein Satz mit Wörtern."] * 20)
+    aufgeblaeht = original + " " + " ".join(["Und noch ein ganz neuer Satz."] * 12)
+    teile = ["Anfang.", original]
+    lab._complete = lambda *a, **kw: _antwort(aufgeblaeht)
+    assert await lab._straighten(teile, "ERZÄHLPERSON: Du-Form") == 0
+    assert teile[1] == original
+
+
 async def test_a_real_correction_is_taken(tmp_path):
     lab = _lab(Recorder(), tmp_path)
     original = " ".join(["Ich ging durch den nassen Wald weiter."] * 20)
