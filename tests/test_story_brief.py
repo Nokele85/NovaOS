@@ -17,6 +17,11 @@ from yurios.world.qwenvoice import QwenVoice
 from yurios.world.stories import _BARE_ARC, StoryLab
 
 
+async def _antwort(text: str) -> str:
+    """One canned completion, awaited the way the real provider is."""
+    return text
+
+
 def _voice() -> QwenVoice:
     return QwenVoice(speech_url="http://unused", supervisor_url="http://unused",
                      speaker="sohee")
@@ -336,3 +341,61 @@ async def test_without_a_title_the_theme_still_names_the_story(tmp_path):
     while lab._tasks:
         await asyncio.sleep(0)
     assert posts and "Der Leuchtturm" in posts[-1]["text"]
+
+
+# -- the rules pass: narrow, and never destructive ------------------------
+
+async def test_a_passage_that_obeys_is_left_exactly_as_written(tmp_path):
+    """A pass that rewrites what is already fine is how good prose gets worn
+    down. An obedient passage costs one short "OK" and nothing changes."""
+    lab = _lab(Recorder(), tmp_path)
+    teile = ["Erster Absatz.", "Zweiter Absatz, völlig in Ordnung."]
+    lab._complete = lambda *a, **kw: _antwort("OK")
+    n = await lab._straighten(teile, "ERZÄHLPERSON: Du-Form")
+    assert n == 0
+    assert teile == ["Erster Absatz.", "Zweiter Absatz, völlig in Ordnung."]
+
+
+async def test_a_correction_that_is_really_a_summary_is_refused(tmp_path):
+    """The dangerous failure: the model answers with a tidy précis instead of
+    a corrected passage, and a quarter of the story quietly disappears."""
+    lab = _lab(Recorder(), tmp_path)
+    lang = " ".join(["Ein Satz mit vielen Wörtern darin."] * 30)
+    teile = ["Anfang.", lang]
+    lab._complete = lambda *a, **kw: _antwort("Sie gingen weiter.")
+    with_log = await lab._straighten(teile, "ERZÄHLPERSON: Du-Form")
+    assert with_log == 0
+    assert teile[1] == lang          # unangetastet
+
+
+async def test_a_real_correction_is_taken(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    original = " ".join(["Ich ging durch den nassen Wald weiter."] * 20)
+    korrigiert = " ".join(["Du gingst durch den nassen Wald weiter."] * 20)
+    teile = ["Anfang.", original]
+    lab._complete = lambda *a, **kw: _antwort(korrigiert)
+    assert await lab._straighten(teile, "ERZÄHLPERSON: Du-Form") == 1
+    assert teile[1].startswith("Du gingst")
+
+
+async def test_a_failing_rules_pass_never_costs_the_story(tmp_path):
+    """It runs after the story is finished. Nothing it does may lose it."""
+    lab = _lab(Recorder(), tmp_path)
+    teile = ["Anfang.", "Zweiter Absatz."]
+
+    async def kaputt(*a, **kw):
+        raise RuntimeError("provider weg")
+
+    lab._complete = kaputt
+    assert await lab._straighten(teile, "regeln") == 0
+    assert teile == ["Anfang.", "Zweiter Absatz."]
+
+
+async def test_the_rules_come_from_the_opening_not_from_a_template(tmp_path):
+    """Whatever scene 1 established is the law — so the pass cannot impose a
+    shape the story never had."""
+    util = Recorder()
+    lab = _lab(util, tmp_path)
+    await lab._house_rules("Du gingst durch den Wald, und Benni ging vor.")
+    assert any("Du gingst durch den Wald" in p for p in util.prompts)
+    assert any("ERZÄHLPERSON" in p for p in util.prompts)

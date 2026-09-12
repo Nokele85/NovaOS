@@ -157,6 +157,65 @@ class StoryLab:
             return {"title": theme, "characters": [],
                     "scenes": [{"purpose": p} for p in _BARE_ARC]}
 
+    async def _house_rules(self, opening: str) -> str:
+        """The story's own rules, read off its first scene.
+
+        The opening is the law: whatever perspective and pronouns it set are
+        what the rest has to keep. Deriving them instead of declaring them
+        means the pass cannot impose a shape the story never had."""
+        rules = await self._complete(
+            "Lies den Anfang einer Geschichte und notiere in höchstens drei "
+            "kurzen Zeilen, woran sich der Rest halten muss:\n"
+            "ERZÄHLPERSON: in welcher Person erzählt wird und wer mit \"du\" "
+            "beziehungsweise \"ich\" gemeint ist\n"
+            "FIGUREN: jede Figur mit ihren Pronomen\n"
+            "ZEIT: Tageszeit und Wetter am Ende dieses Anfangs\n\n"
+            f"Anfang:\n{opening[:3000]}",
+            max_tokens=300, persona=False)
+        return self._clean(rules)
+
+    async def _straighten(self, parts: list[str], rules: str) -> int:
+        """Hold every later passage against the opening's rules, in place.
+
+        DOC dropped Re3's edit pass as cost without proportional gain, and it
+        was right about Re3's: "fix what is wrong" over a whole draft is vague
+        and expensive. This one is narrow — named, checkable rules that we have
+        watched break twice — and it is cheap because a passage that already
+        obeys costs one short "OK" instead of a rewrite.
+
+        Two guards, because a repair pass that damages is worse than none: a
+        correction that comes back much shorter than the original is a summary,
+        not a correction, and is refused; and any failure leaves the passage
+        exactly as it was."""
+        corrected = 0
+        for i in range(1, len(parts)):
+            try:
+                answer = await self._complete(
+                    "Prüfe einen Abschnitt einer Geschichte gegen feste Regeln. "
+                    "Ändere NUR, was gegen eine Regel verstößt — Handlung, Bilder "
+                    "und Wortwahl bleiben unangetastet.\n\n"
+                    f"Regeln:\n{rules}\n\n"
+                    "Hält der Abschnitt alle Regeln ein, antworte mit genau: OK\n"
+                    "Sonst gib den korrigierten Abschnitt zurück, ohne Vorrede "
+                    "und ohne Überschrift.\n\n"
+                    f"Abschnitt:\n{parts[i]}",
+                    max_tokens=SCENE_MAX_TOKENS, persona=False)
+            except Exception:
+                log.warning("straightening passage %d failed; left as written",
+                            i + 1, exc_info=True)
+                continue
+            fixed = _trim_to_sentence(self._clean(answer))
+            if not fixed or fixed.strip().upper().rstrip(".") == "OK":
+                continue
+            if _words(fixed) < 0.75 * _words(parts[i]):
+                log.warning("straightening passage %d came back %d words for "
+                            "%d — that is a summary, not a correction; kept the "
+                            "original", i + 1, _words(fixed), _words(parts[i]))
+                continue
+            parts[i] = fixed
+            corrected += 1
+        return corrected
+
     async def _state_update(self, state: str, scene: str) -> str:
         """Carry the story's *state* forward, not its last 1200 characters.
 
@@ -175,6 +234,7 @@ class StoryLab:
                 "Führe die Zustandsakte einer Geschichte fort. Antworte in "
                 "höchstens 120 Wörtern, in vier Zeilen mit genau diesen "
                 "Anfängen:\n"
+                "ERZÄHLPERSON: in welcher Person erzählt wird und wer damit gemeint ist — wortgleich zur bisherigen Akte\n"
                 "ORT: wo die Figuren jetzt sind\n"
                 "ZEIT: Tageszeit und Wetter, wie sie JETZT sind\n"
                 "FIGUREN: wer dabei ist — mit Anrede und Pronomen, wortgleich zur bisherigen Akte — und was sich an ihnen geändert hat\n"
@@ -279,8 +339,9 @@ class StoryLab:
                        "und überspringe sie nicht mit einem Zeitsprung. "
                        if register else "")
                     + (f"Die NÄCHSTE Szene ist: {naechste} Erzähle sie NICHT mit; höre auf, bevor das passiert. " if naechste else "")
-                    + "Anreden und Pronomen der Figuren bleiben in der ganzen "
-                      "Geschichte gleich; wechsle sie niemals. "
+                    + "Erzählperspektive, Anreden und Pronomen bleiben in der "
+                      "ganzen Geschichte gleich; wechsle sie niemals. Wenn in der "
+                      "Akte steht, wer mit \"du\" gemeint ist, gilt das weiter. "
                     + (f"Vermeide ausdrücklich: {avoid}. " if avoid else "")
                     + "Keine Zusammenfassung, keine Überschrift, nur erzählender Text. "
                     + f"Umfang: {SCENE_WORDS} Wörter; beende die Szene mit einem "
@@ -359,6 +420,19 @@ class StoryLab:
                              "diesen Abend zu Ende.")
                 moods.append("")
                 story = "\n\n".join(parts)
+            # The last word before the file exists: hold the whole story
+            # against the rules its own opening set. Costs one short "OK" per
+            # passage that is already fine.
+            try:
+                rules = await self._house_rules(parts[0])
+                if rules:
+                    fixed = await self._straighten(parts, rules)
+                    story = "\n\n".join(parts)
+                    log.info("story %s: straightened %d of %d passages",
+                             story_id, fixed, len(parts) - 1)
+            except Exception:
+                log.warning("story %s: the rules pass failed; publishing as "
+                            "written", story_id, exc_info=True)
             story_path = folder / "story.md"
             story_path.write_text(f"# {plan.get('title', theme)}\n\n{story}\n", encoding="utf-8")
             if self.remember is not None:
