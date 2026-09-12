@@ -425,6 +425,9 @@ class StoryLab:
                 "Suche Sätze, die BERICHTEN, was jemand gesagt hat oder sagen "
                 "könnte, und schreibe sie als Dialog aus. Aus einem Satz dürfen "
                 "dabei mehrere werden.\n\n"
+                "Sieh besonders dort nach, wo lange nichts gesagt wird — in "
+                "körperlichen und handlungsdichten Abschnitten fehlt die Rede am "
+                "häufigsten, und gerade dort wird in Wirklichkeit geredet.\n\n"
                 "Was sich NICHT ändern darf: die Handlung, wer was tut, der Ton "
                 "und die Deutlichkeit. Du machst nichts zurückhaltender, nichts "
                 "andeutender und nichts kürzer. Beschreibung und innere Sätze "
@@ -716,6 +719,9 @@ class StoryLab:
                     + (f"Register, das Vorrang vor den Stilregeln hat: {register}. "
                        "Schreibe die verlangten Stellen wirklich aus, blende nicht ab "
                        "und überspringe sie nicht mit einem Zeitsprung. "
+                       "Auch dabei wird gesprochen — Fragen, Anweisungen, Namen, "
+                       "halbe Sätze, ein Lachen zwischendurch. Stumme Körper sind "
+                       "unwahrscheinlicher als redende. "
                        if register else "")
                     + (f"Die NÄCHSTE Szene ist: {naechste} Erzähle sie NICHT mit; höre auf, bevor das passiert. " if naechste else "")
                     + "Erzählperspektive, Anreden und Pronomen bleiben in der "

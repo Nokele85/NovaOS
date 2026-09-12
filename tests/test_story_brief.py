@@ -836,3 +836,24 @@ async def test_a_failing_dialogue_pass_costs_the_story_nothing(tmp_path):
     lab._complete = kaputt
     assert await lab._dialogue_pass(teile, "regeln") == 0
     assert teile == ["Anfang.", "Zweiter Absatz."]
+
+
+async def test_bodies_are_not_assumed_silent(tmp_path):
+    """Measured on a finished story: the physical passages are 51% of the text
+    and carry 15% speech, while the two conversational ones reach 32%. That
+    block is where the missing dialogue is — and people do talk."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path),
+               {"theme": "Wald", "scenes": ["A.", "B."], "register": "explizit"})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert all("Auch dabei wird gesprochen" in p for p in szenen)
+    assert all("Stumme Körper sind unwahrscheinlicher" in p for p in szenen)
+
+
+async def test_the_dialogue_agent_is_pointed_at_the_quiet_stretches(tmp_path):
+    util = Recorder("OK")
+    lab = _lab(util, tmp_path)
+    await lab._dialogue_pass(["Anfang.", "Zweiter."], "ANREDE: du")
+    p = util.prompts[-1]
+    assert "wo lange nichts gesagt wird" in p
+    assert "körperlichen und handlungsdichten Abschnitten" in p

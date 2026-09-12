@@ -187,6 +187,11 @@ def build_server(*, max_minutes: float | None = None,
               improvise; a line that says "auf dem Dach, sie beide, er gesteht
               die Kündigung, danach weiß sie es" does not. Detail here is
               measurably worth more than detail anywhere else.
+              A scene may also BE a conversation — "sie streiten darüber, ob
+              sie es ihm sagt" — and then the talking is the event rather than
+              something beside it. Those scenes carry most of the spoken words
+              in a finished story; the physical ones cannot, whatever anyone
+              asks of them.
             `scene_moods` — how each scene should SOUND, one short instruction
               per scene, same order and length as `scenes`: "fröhlich und
               leicht", "gedämpft und spannungsvoll, fast flüsternd", "ruhig und
