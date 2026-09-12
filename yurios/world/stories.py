@@ -390,6 +390,85 @@ class StoryLab:
                  sum(len(v) for v in funde.values()), len(funde), len(parts) - 1)
         return funde
 
+    async def _dialogue_pass(self, parts: list[str], rules: str) -> int:
+        """A second thinking pass with one job: make them talk.
+
+        Six ways of asking the writer for more spoken words changed nothing —
+        a quota, a topic per scene, subtext, a sensory anchor, a radio-play
+        framing, and the temperature dial. The writer is holding twenty
+        constraints at once and dialogue loses to all of them. This pass holds
+        one.
+
+        It is the opposite contract to `_straighten`, which may add nothing: a
+        conversion from report to speech necessarily adds words. So it gets its
+        own guards — a replacement must actually contain spoken text, may not
+        be shorter than what it replaces, and may not balloon.
+
+        It must also not soften anything. An earlier experiment with subtext
+        raised nothing and cut the physical density from 20 to 13, because
+        advice for restrained prose reached scenes that must not be
+        restrained."""
+        vorher = _dialogue_share("\n\n".join(parts))
+        karte: list[tuple[int, int]] = []
+        zeilen: list[str] = []
+        for pi, teil in enumerate(parts):
+            for li, satz in enumerate(_sentences(teil)):
+                karte.append((pi, li))
+                zeilen.append(f"{len(zeilen) + 1}: {satz}")
+        try:
+            antwort = await self._complete(
+                "Du bekommst ein Hörstück, Satz für Satz nummeriert. Dein "
+                "einziger Auftrag: mehr gesprochene Rede.\n\n"
+                f"Verbindliche Form:\n{rules}\n\n"
+                f"Derzeit sind {vorher * 100:.0f} % des Textes gesprochen; ein "
+                "Drittel wäre richtig.\n\n"
+                "Suche Sätze, die BERICHTEN, was jemand gesagt hat oder sagen "
+                "könnte, und schreibe sie als Dialog aus. Aus einem Satz dürfen "
+                "dabei mehrere werden.\n\n"
+                "Was sich NICHT ändern darf: die Handlung, wer was tut, der Ton "
+                "und die Deutlichkeit. Du machst nichts zurückhaltender, nichts "
+                "andeutender und nichts kürzer. Beschreibung und innere Sätze "
+                "lässt du in Ruhe — nicht jeder Satz will Rede sein.\n\n"
+                "Antworte je Zeile: <Nummer>: <der Satz als Dialog>\n"
+                "Nenne nur Sätze, die du wirklich umschreibst, höchstens 40.\n"
+                "Findest du keine, antworte: OK\n\n"
+                + "\n".join(zeilen),
+                max_tokens=REVIEW_MAX_TOKENS, persona=False, thinking=True)
+        except Exception:
+            log.warning("the dialogue pass failed; the story keeps its own "
+                        "share of spoken words", exc_info=True)
+            return 0
+        geaendert = 0
+        for nummer, satz in _numbered(antwort):
+            if not 1 <= nummer <= len(karte):
+                continue
+            pi, li = karte[nummer - 1]
+            if pi == 0:
+                continue
+            saetze = _sentences(parts[pi])
+            if li >= len(saetze):
+                continue
+            alt_satz = saetze[li]
+            if _META.search(satz) or _BROKEN_VERB.search(satz):
+                continue
+            # A conversion to speech that contains no speech is not one.
+            if not re.search(r"[„\"»]", satz):
+                log.warning("dialogue pass returned sentence %d without any "
+                            "spoken words; kept it", nummer)
+                continue
+            if not _words(alt_satz) <= _words(satz) <= 3.5 * _words(alt_satz):
+                log.warning("dialogue pass turned %d words into %d for sentence "
+                            "%d; kept the original", _words(alt_satz),
+                            _words(satz), nummer)
+                continue
+            saetze[li] = satz
+            parts[pi] = " ".join(saetze)
+            geaendert += 1
+        nachher = _dialogue_share("\n\n".join(parts))
+        log.info("dialogue pass: %d sentences spoken out, share %.0f%% -> %.0f%%",
+                 geaendert, vorher * 100, nachher * 100)
+        return geaendert
+
     async def _straighten(self, parts: list[str], rules: str,
                           funde: dict[int, dict[int, str]]) -> tuple[int, int]:
         """Hold the story against its own rules, sentence by sentence.
@@ -742,6 +821,10 @@ class StoryLab:
                 if rules:
                     funde = await self._review(parts, rules)
                     geaendert, gesamt = await self._straighten(parts, rules, funde)
+                    # Second: the one job the writer could never hold on to.
+                    # It runs after the repairs, so it works on the corrected
+                    # text and cannot undo them.
+                    await self._dialogue_pass(parts, rules)
                     story = "\n\n".join(parts)
                     log.info("story %s: straightened %d of %d sentences",
                              story_id, geaendert, gesamt)

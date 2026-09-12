@@ -777,3 +777,62 @@ async def test_scenes_are_written_at_the_temperature_writing_wants(tmp_path):
     assert szenen and all(tp == 0.75 for tp in szenen)
     # Planen, Akte und Prüfen wollen richtig sein, nicht überraschend
     assert andere and all(tp == 0.75 for tp in andere)
+
+
+# -- the second pass, whose only job is that they talk --------------------
+
+async def test_the_dialogue_pass_may_add_what_the_repair_pass_may_not(tmp_path):
+    """Opposite contract to `_straighten`: turning a report into speech
+    necessarily adds words, so this one is allowed to — and is therefore
+    guarded differently."""
+    lab = _lab(Recorder(), tmp_path)
+    teile = ["Anfang.", "Ich sagte ihm, dass ich müde war."]
+    lab._complete = lambda *a, **kw: _antwort(
+        '2: „Ich bin müde", sagte ich. „Dann setz dich", sagte er.')
+    assert await lab._dialogue_pass(teile, "ANREDE: du") == 1
+    assert teile[1].startswith("„Ich bin müde")
+
+
+async def test_a_conversion_without_any_spoken_words_is_not_one(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    teile = ["Anfang.", "Ich sagte ihm, dass ich müde war."]
+    lab._complete = lambda *a, **kw: _antwort("2: Ich war sehr müde an diesem Abend.")
+    assert await lab._dialogue_pass(teile, "ANREDE: du") == 0
+    assert teile[1] == "Ich sagte ihm, dass ich müde war."
+
+
+async def test_the_dialogue_pass_may_not_shorten_or_balloon(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    lang = "Ich sagte ihm sehr ausführlich, dass ich an diesem Abend müde war."
+    teile = ["Anfang.", lang]
+    lab._complete = lambda *a, **kw: _antwort('2: „Müde", sagte ich.')
+    assert await lab._dialogue_pass(teile, "ANREDE: du") == 0     # zu kurz
+    teile2 = ["Anfang.", "Wir redeten."]
+    lab._complete = lambda *a, **kw: _antwort(
+        '2: „' + " ".join(["Wort"] * 40) + '", sagte ich.')
+    assert await lab._dialogue_pass(teile2, "ANREDE: du") == 0     # zu lang
+
+
+async def test_the_dialogue_pass_is_told_not_to_soften_anything(tmp_path):
+    """The subtext experiment raised no dialogue and cut the physical density
+    from 20 to 13, because advice for restrained prose reached scenes that
+    must not be restrained."""
+    util = Recorder("OK")
+    lab = _lab(util, tmp_path)
+    await lab._dialogue_pass(["Anfang.", "Zweiter."], "ANREDE: du")
+    p = util.prompts[-1]
+    assert "einziger Auftrag: mehr gesprochene Rede" in p
+    assert "nichts zurückhaltender" in p and "Deutlichkeit" in p
+    assert "nicht jeder Satz will Rede sein" in p
+
+
+async def test_a_failing_dialogue_pass_costs_the_story_nothing(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    teile = ["Anfang.", "Zweiter Absatz."]
+
+    async def kaputt(*a, **kw):
+        raise RuntimeError("kein Modell")
+
+    lab._complete = kaputt
+    assert await lab._dialogue_pass(teile, "regeln") == 0
+    assert teile == ["Anfang.", "Zweiter Absatz."]
