@@ -477,3 +477,33 @@ async def test_an_ok_for_a_single_sentence_is_not_a_correction(tmp_path):
     geaendert, _ = await lab._straighten(teile, "ANREDE: er")
     assert geaendert == 1
     assert teile[1] == "Er ging voran. Zusammen."
+
+
+def test_no_control_character_ever_hides_in_a_pattern():
+    """A guard that cannot match is worse than no guard: it reports safety.
+
+    Writing these regexes through shell heredocs turned "\b" into a literal
+    backspace (0x08) five times over. The module imported, ruff passed, mypy
+    passed, every test passed — and the patterns silently matched nothing."""
+    from pathlib import Path
+    import yurios.world.stories as mod
+    quelle = Path(mod.__file__).read_bytes()
+    schlimm = {b"\x08": "backspace", b"\x0c": "formfeed", b"\x0b": "vertical tab",
+               b"\x07": "bell", b"\x1b": "escape"}
+    gefunden = {name for byte, name in schlimm.items() if byte in quelle}
+    assert not gefunden, f"control characters in stories.py: {gefunden}"
+
+
+def test_every_guard_actually_matches_what_it_is_for():
+    """The patterns, exercised. Each of these is a fault that reached a
+    published story on 2026-09-12."""
+    from yurios.world.stories import _META, _BROKEN_VERB, _mixed_address
+    assert _META.search("Verstöße: 1. Wetter: Es regnet")
+    assert _META.search("Korrigierter Abschnitt: Du drückst meine Hände")
+    assert not _META.search("Sie ging durch den Wald und blieb stehen.")
+    assert _BROKEN_VERB.search('„Komm mit", sagtest er leise')
+    assert not _BROKEN_VERB.search("Du sagtest es so, wie man etwas sagt")
+    assert _mixed_address(["Du gingst.", "Du bliebst.", "Er sah mich an.",
+                           "Du lachtest."]) == 1
+    assert _mixed_address(["Du gingst.", "Du bliebst, aber wieder.",
+                           "Du lachtest."]) == 0

@@ -49,7 +49,7 @@ _BARE_ARC = ("Der Anfang: die Lage und was die beiden gerade wollen.",
 # checker thinking out loud, and it must never reach the file — let alone the
 # recording, which would read it out.
 _META = re.compile(
-    r"(korrigierter\s+abschnitt|verst(ö|oe)(ß|ss)e?|gegen\s+die\s+regeln|"
+    r"(korrigierter\s+abschnitt|verst(ö|oe)(ß|ss)e?\b|gegen\s+die\s+regeln|"
     r"der\s+abschnitt\s+(spielt|verst|h(ä|ae)lt)|die\s+regel\s+verlangt|"
     r"ich\s+pr(ü|ue)fe\s+den\s+abschnitt)", re.I)
 
@@ -86,6 +86,21 @@ def _sentences(text: str) -> list[str]:
     if rest:
         out.append(rest)
     return out or [text]
+
+
+def _mixed_address(saetze: list[str]) -> int:
+    """How many sentences of a passage disagree with its own majority about
+    whether the second figure is spoken to or spoken about.
+
+    Measured rather than assumed: judging sentences one at a time is what
+    makes a passage drift between "du gingst" and "er ging", so the number
+    that says whether the pass fixed it or caused it has to exist."""
+    du = [bool(re.search(r"\b(du|dein\w*|dir|dich)\b", s, re.I)) for s in saetze]
+    er = [bool(re.search(r"\b(er|seine\w*|ihm|ihn)\b", s, re.I)) for s in saetze]
+    modi = [d for d, e in zip(du, er) if d != e]
+    if len(modi) < 2:
+        return 0
+    return min(sum(modi), len(modi) - sum(modi))
 
 
 def _numbered(answer: str) -> list[tuple[int, str]]:
@@ -268,6 +283,13 @@ class StoryLab:
                     "\"sagte er\", nicht \"sagtest er\".\n\n"
                     "Handlung, Bilder, Ton und Wortwahl sind NICHT dein "
                     "Auftrag. Dass dir ein Satz nicht gefällt, ist kein Grund.\n\n"
+                    "Beurteile jeden Satz im Zusammenhang mit dem davor und "
+                    "danach, nicht für sich allein. Die Sätze sind ein "
+                    "fortlaufender Absatz, keine Liste.\n"
+                    "Wenn du einen Satz änderst, prüfe seine Nachbarn: passen "
+                    "sie danach nicht mehr, nenne sie mit. Am Ende muss der "
+                    "ganze Absatz einheitlich sein — Anrede und Zeitform dürfen "
+                    "innerhalb eines Absatzes nirgends wechseln.\n\n"
                     "Antworte NUR mit den Nummern der Sätze, die gegen eine "
                     "Regel verstoßen, je Zeile eine:\n"
                     "<Nummer>: <der angeglichene Satz>\n\n"
@@ -304,6 +326,10 @@ class StoryLab:
                 saetze[nummer - 1] = satz
                 geaendert += 1
             parts[i] = " ".join(saetze)
+            gemischt = _mixed_address(saetze)
+            if gemischt:
+                log.info("passage %d still mixes forms of address in %d of %d "
+                         "sentences", i + 1, gemischt, len(saetze))
         return geaendert, gesamt
 
     async def _state_update(self, state: str, scene: str) -> str:
