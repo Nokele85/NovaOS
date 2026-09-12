@@ -381,11 +381,17 @@ class StoryLab:
         it reads for contradictions and cannot know where a scene was
         supposed to be.
 
-        The forbidden half is deliberately narrow. Asked whether a scene
-        *touches* the next one's material, this fires on 6 to 7 of 8
-        scenes in every story measured — which is not a finding, it is
-        the handover that storytelling is made of. A scene may lead to
-        the door. It may not go through it and arrive upstairs.
+        Only one of the two findings is repaired, and it is the narrow
+        one: did the scene start where it was supposed to. Two wider
+        questions were measured on live stories and both failed. "Does
+        it tick every element of its brief" fired on six of eight scenes
+        and all six rewrites failed the same check again — her outline
+        packs four or five elements into a line, and 400 words cannot
+        hold them all without becoming a list. "Does it touch the next
+        scene's material" fired on seven of eight, because leading into
+        the next scene is what an ending is. What is left is the fault
+        actually reported: a scene whose own opening ground never
+        appears, so it begins in the stairwell it was not due in.
 
         A fifth of a cent for eight scenes, against 1.6 cents for the
         end review that did not catch this."""
@@ -401,21 +407,23 @@ class StoryLab:
                 "das Hinführen.\n\n"
                 "Antworte in genau zwei Zeilen:\n"
                 "AUFTRAG: erfüllt / verfehlt <was fehlt>\n"
-                "VORGRIFF: nein / JA <was aus der nächsten Szene schon "
-                "erledigt wird>\n\n"
+                "BEGINN: richtig / FALSCH <wo die Szene stattdessen "
+                "einsetzt> — FALSCH nur dann, wenn der Ort oder die "
+                "Lage, mit der ihr Auftrag anfängt, im Text überhaupt "
+                "nicht vorkommt und die Szene schon weiter ist.\n\n"
                 f"Szene:\n{scene[:5000]}",
                 max_tokens=300, persona=False, temperature=0.2)
         except Exception:
             log.warning("scene check failed; the scene stands", exc_info=True)
             return "", ""
-        offen = vorgriff = ""
+        offen = anfang = ""
         for zeile in (antwort or "").splitlines():
             gross = zeile.upper()
             if gross.startswith("AUFTRAG") and "VERFEHLT" in gross:
                 offen = zeile.strip()
-            elif gross.startswith("VORGRIFF") and ": JA" in gross:
-                vorgriff = zeile.strip()
-        return offen, vorgriff
+            elif gross.startswith("BEGINN") and "FALSCH" in gross:
+                anfang = zeile.strip()
+        return offen, anfang
 
     async def _review(self, parts: list[str], rules: str) -> dict[int, dict[int, str]]:
         """Read the whole story at once and name the sentences that break it.
@@ -835,7 +843,7 @@ class StoryLab:
                 # else is the ground the next one builds on, and by the
                 # end of the story that is no longer repairable — the
                 # end review read past exactly this twice.
-                offen, vorgriff = await self._verify_scene(
+                offen, anfang = await self._verify_scene(
                     scene, state, _purpose_text(purpose), naechste or "keine")
                 if offen:
                     # Logged, not repaired. Her outline lines pack four or five
@@ -845,15 +853,17 @@ class StoryLab:
                     # and all six failed the same check again.
                     log.info("story %s scene %d did not tick every box: %s",
                              story_id, i + 1, offen[:110])
-                if vorgriff:
+                if anfang:
                     log.info("story %s scene %d: %s — one repair",
-                             story_id, i + 1, vorgriff[:120])
+                             story_id, i + 1, anfang[:120])
                     zweiter = _trim_to_sentence(self._clean(
                         await self._complete(
                             szenen_prompt + "\n\nEin erster Versuch hat "
-                            "vorweggenommen, was erst später dran ist: "
-                            f"{vorgriff} Schreibe die Szene neu und setze "
-                            "dort ein, wo ihr Auftrag beginnt.",
+                            "den Anfang der Szene übersprungen: "
+                            f"{anfang} Schreibe sie neu und setze "
+                            "dort ein, wo ihr Auftrag anfängt — der Ort "
+                            "und die Lage aus seiner ersten Zeile müssen "
+                            "vorkommen.",
                             max_tokens=SCENE_MAX_TOKENS,
                             temperature=WRITING_TEMPERATURE)))
                     # Only if it is actually better. A repair that fixes
@@ -869,6 +879,10 @@ class StoryLab:
                         else:
                             log.info("story %s scene %d: still %s — kept the "
                                      "first", story_id, i + 1, rest[:80])
+                    else:
+                        log.info("story %s scene %d: the repair came back at "
+                                 "%d of %d words — kept the first", story_id,
+                                 i + 1, _words(zweiter), _words(scene))
                 parts.append(scene)
                 moods.append(her_moods[i] if i < len(her_moods) else "")
                 if not rules:
