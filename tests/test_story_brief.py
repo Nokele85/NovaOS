@@ -737,3 +737,17 @@ async def test_a_scene_without_a_planned_conversation_is_not_given_an_empty_one(
     await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
     szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
     assert szenen and not any("sprechen die beiden über" in p for p in szenen)
+
+
+async def test_the_scenes_are_written_as_a_radio_play(tmp_path):
+    """Three attempts to talk a narrator into more speech failed — 10%, 15%,
+    13%, 14% spoken over four runs of the same request. This is not a tweak to
+    the same form but a different one: in a radio play the speech carries the
+    story, and the finished thing is a recording anyway. The prose was always
+    written for the page and then read out."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path), {"theme": "Heimweg", "scenes": ["A.", "B."]})
+    szenen = [p for p in util.prompts if "Hörspiels" in p]
+    assert len(szenen) == 2
+    assert all("lebt von gesprochener Rede" in p for p in szenen)
+    assert all("nur so viel, wie das Ohr braucht" in p for p in szenen)

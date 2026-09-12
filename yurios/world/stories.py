@@ -582,7 +582,11 @@ class StoryLab:
                 umfang = SCENE_LENGTHS.get(
                     her_lengths[i] if i < len(her_lengths) else "", SCENE_WORDS)
                 scene = await self._complete(
-                    "Schreibe die nächste Szene einer langen Geschichte auf Deutsch. "
+                    "Schreibe die nächste Szene eines Hörspiels auf Deutsch. "
+                    "Ein Hörspiel lebt von gesprochener Rede: Was die beiden "
+                    "erleben, erfährt man vor allem daran, was sie zueinander "
+                    "sagen. Beschreibung nur so viel, wie das Ohr braucht, um zu "
+                    "wissen, wo sie sind und was geschieht. "
                     f"Szene {i+1}/{len(purposes)}; {relationship} Thema: {theme}; "
                     f"Stimmung: {mood}. "
                     + (f"Verbindliche Form, die Szene 1 gesetzt hat und die in "
