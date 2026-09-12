@@ -717,23 +717,28 @@ async def test_the_repair_may_turn_a_report_into_spoken_words(tmp_path):
     assert "Ich bin müde" in p              # das Beispiel, beim Namen genannt
 
 
-async def test_she_plans_what_they_talk_about_in_each_scene(tmp_path):
-    """Turning reported speech around afterwards moved the spoken share from
-    10% to 15% and stopped there. A story written with little speech in it
-    cannot be talked into having more — so the talking is planned."""
+async def test_she_plans_what_stays_unsaid_and_one_thing_to_sense(tmp_path):
+    """Planning the topic of a conversation did nothing — 10%, 15%, 13% spoken
+    over three runs. The documented remedy is the opposite: give the writer
+    what goes unsaid, and the spoken lines have to circle it. The sensory
+    anchor closes the other exit, which is summarising a scene instead of
+    rendering it."""
     util = Recorder()
     await _run(_lab(util, tmp_path),
                {"theme": "Heimweg", "scenes": ["Der Weg.", "Die Wohnung."],
-                "scene_talk": ["ob sie den letzten Bus noch kriegen",
-                               "warum er den ganzen Abend so still war"]})
+                "scene_subtext": ["er will fragen, ob sie bleibt, traut sich nicht",
+                                  "sie weiß es längst und tut, als wüsste sie es nicht"],
+                "scene_sense": ["nasser Stoff an der Haut", "kalter Schlüssel"]})
     szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
-    assert "sprechen die beiden über: ob sie den letzten Bus noch kriegen" in szenen[0]
-    assert "warum er den ganzen Abend so still war" in szenen[1]
-    assert all("als gesprochene Rede aus, nicht als Bericht" in p for p in szenen)
+    assert "Unausgesprochen zwischen ihnen: er will fragen" in szenen[0]
+    assert "darum herumreden" in szenen[0]
+    assert "Sinnesanker, der in dieser Szene vorkommt: nasser Stoff" in szenen[0]
+    assert "kalter Schlüssel" in szenen[1]
 
 
-async def test_a_scene_without_a_planned_conversation_is_not_given_an_empty_one(tmp_path):
+async def test_nothing_unsaid_is_invented_when_she_planned_none(tmp_path):
     util = Recorder()
     await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
     szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
-    assert szenen and not any("sprechen die beiden über" in p for p in szenen)
+    assert szenen and not any("Unausgesprochen" in p or "Sinnesanker" in p
+                              for p in szenen)

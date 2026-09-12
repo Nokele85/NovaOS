@@ -533,11 +533,16 @@ class StoryLab:
         #: back to the ordinary length rather than refusing the story.
         her_lengths = [str(x).strip().lower()
                        for x in (contract.get("scene_lengths") or [])]
-        #: What the two of them talk about in each scene, hers to plan. Turning
-        #: reported speech around afterwards raised the spoken share from 10%
-        #: to 15% and no further: a story written with little speech in it
-        #: cannot be talked into having more after the fact.
-        her_talk = [str(x).strip() for x in (contract.get("scene_talk") or [])]
+        #: What one of them wants to say and does not, scene by scene. Planning
+        #: the *topic* of a conversation did nothing (10% -> 15% -> 13% over
+        #: three runs); the reported remedy is the opposite — give the writer
+        #: what stays unsaid, and the spoken lines have to circle it.
+        her_subtext = [str(x).strip() for x in (contract.get("scene_subtext") or [])]
+        #: One concrete thing to smell, hear or touch. The documented failure
+        #: mode of an instruction-tuned model writing fiction is summarising
+        #: the scene instead of rendering it, and a sensory anchor is what
+        #: closes that exit.
+        her_sense = [str(x).strip() for x in (contract.get("scene_sense") or [])]
         try:
             if her_scenes:
                 # She planned it. No second opinion: a planner that re-plans her
@@ -578,7 +583,8 @@ class StoryLab:
                 # it a second time. Naming the next scene and forbidding it is
                 # the cheap half of DOC's controller.
                 naechste = "" if last else _purpose_text(purposes[i + 1])
-                gespraech = her_talk[i] if i < len(her_talk) else ""
+                subtext = her_subtext[i] if i < len(her_subtext) else ""
+                sinn = her_sense[i] if i < len(her_sense) else ""
                 umfang = SCENE_LENGTHS.get(
                     her_lengths[i] if i < len(her_lengths) else "", SCENE_WORDS)
                 scene = await self._complete(
@@ -594,9 +600,12 @@ class StoryLab:
                     "Die Szenerie ist bereits eingeführt; führe sie nicht neu ein "
                     "und fange nicht von vorne an. "
                     "Zeige überwiegend konkrete Handlung, Dialog und eine sichtbare Veränderung. "
-                    + (f"In dieser Szene sprechen die beiden über: {gespraech} "
-                       "Schreib das als gesprochene Rede aus, nicht als Bericht "
-                       "darüber. " if gespraech else "")
+                    + (f"Sinnesanker, der in dieser Szene vorkommt: {sinn} "
+                       if sinn else "")
+                    + (f"Unausgesprochen zwischen ihnen: {subtext} "
+                       "Sag es nicht aus. Lass die beiden darum herumreden — "
+                       "was sie sagen, kreist darum, ohne es zu benennen. "
+                       if subtext else "")
                     + "Mindestens ein Drittel der Szene ist gesprochener Dialog: "
                     "die beiden reden miteinander, statt dass über sie berichtet "
                     "wird. Auch Streit, Necken, Halbsätze und Schweigen mitten im "
