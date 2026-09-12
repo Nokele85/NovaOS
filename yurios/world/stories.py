@@ -56,7 +56,13 @@ REVIEW_MAX_TOKENS = 48_000
 # moved the spoken share not at all while the dial stood in the wrong place.
 # Planning, the state note and the review keep a low temperature: those want
 # to be right, not surprising.
-WRITING_TEMPERATURE = 1.5
+#
+# 1.5 measured: the spoken share rose from 13% to 20% and repeated phrasing
+# fell — and the writing stopped obeying. It kept neither its own form (9.3%
+# of sentences mixed the address, against 0.8-2.5% elsewhere) nor its own
+# register, where an outline that said "heftiger Sex, explizit" came back at a
+# fifth of the usual physical density. 1.2 is the compromise being measured.
+WRITING_TEMPERATURE = 1.2
 SCENE_MAX_TOKENS = 1600
 
 # The shape of a story, for when no outline survives. Five distinct beats beat
