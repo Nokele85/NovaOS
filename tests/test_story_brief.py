@@ -352,10 +352,10 @@ async def test_the_pass_is_told_it_corrects_and_does_not_rewrite(tmp_path):
     lab = _lab(util, tmp_path)
     await lab._straighten(["Anfang.", "Zweiter."], "ERZÄHLPERSON: Ich-Form")
     p = util.prompts[-1]
-    assert "schreibst NICHT um" in p
-    assert "WORTGLEICH" in p
-    assert "genauso lang wie vorher" in p
-    assert "Kein Satz wird hinzugefügt" in p
+    assert "Kein Satz kommt hinzu" in p
+    assert "keiner fällt weg" in p and "keiner wird umgestellt" in p
+    assert "schöner gemacht" in p
+    assert "nicht dein" in p and "Auftrag" in p
 
 
 async def test_a_passage_that_obeys_is_left_exactly_as_written(tmp_path):
@@ -448,7 +448,7 @@ async def test_the_rules_never_turn_the_plot_into_law(tmp_path):
     lab = _lab(util, tmp_path)
     await lab._house_rules("Es war Abend und trocken, und Benni ging vor.")
     p = util.prompts[-1]
-    assert "ERZÄHLPERSON" in p and "PRONOMEN" in p
+    assert "ERZÄHLPERSON" in p and "ANREDE" in p and "ZEITFORM" in p
     assert "Die Hauptfiguren stehen fest: Nova und" in p
     assert "keine weiteren Regeln ab" in p
     assert "Wetter" in p and "gehören zur Handlung" in p
