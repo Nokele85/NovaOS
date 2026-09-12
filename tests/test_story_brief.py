@@ -91,7 +91,8 @@ async def test_a_four_scene_plan_writes_four_scenes_not_eight(tmp_path):
                {"theme": "Wald", "scenes": ["A.", "B.", "C.", "D."]})
     scene_prompts = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
     assert len(scene_prompts) == 4
-    assert sum("Planabsicht: {'purpose': 'A.'}" in p for p in scene_prompts) == 1
+    assert sum("Planabsicht: A." in p for p in scene_prompts) == 1
+    assert not any("{'purpose'" in p for p in scene_prompts)   # Text, kein dict
 
 
 # -- the register outranks the style rules --------------------------------
@@ -270,3 +271,68 @@ async def test_the_finale_is_shown_the_whole_arc_and_what_is_still_open(tmp_path
     assert finale, "kein Finale-Durchgang"
     assert "Aufstieg aufs Dach." in finale[0]        # der geplante Bogen
     assert "OFFEN: sein Geständnis" in finale[0]     # und das Offene
+
+
+# -- a scene knows where to stop, and who everyone is ---------------------
+
+async def test_a_scene_is_told_where_to_stop(tmp_path):
+    """Live, 2026-09-12: scene 1 was asked only for "the path narrows" and
+    wrote all the way into finding and entering the shelter — scenes 5 and 6's
+    material — so those had to discover it a second time."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path),
+               {"theme": "Wald", "scenes": ["Der Weg wird schmaler.",
+                                            "Sie finden den Unterstand.",
+                                            "Sie gehen heim."]})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert "NÄCHSTE Szene ist: Sie finden den Unterstand." in szenen[0]
+    assert "Erzähle sie NICHT mit" in szenen[0]
+    # the last scene has nothing after it to trespass on
+    assert "NÄCHSTE Szene" not in szenen[-1]
+
+
+async def test_every_scene_is_told_not_to_switch_pronouns(tmp_path):
+    """Benni was "er" in scene 1 and "sie" in scene 3 of the live story."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert szenen and all("Pronomen" in p and "wechsle sie niemals" in p
+                          for p in szenen)
+
+
+async def test_the_state_record_tracks_time_and_weather(tmp_path):
+    """The rain stopped in scene 3 and started again in scene 5, because the
+    record had no slot for when it is and what the weather does."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
+    akte = [p for p in util.prompts if "Zustandsakte" in p]
+    assert akte
+    for feld in ("ORT:", "ZEIT:", "FIGUREN:", "GESCHEHEN:", "OFFEN:"):
+        assert feld in akte[0], feld
+    assert "Pronomen" in akte[0]      # carried forward, scene to scene
+
+
+async def test_her_title_is_used_and_never_her_reasoning(tmp_path):
+    """`theme` held her note about the brief, and `theme` was the title — so
+    "die frühere Bitte um heftigen Sex" would have ridden along as the caption
+    of the recording on his phone."""
+    posts: list[dict] = []
+    lab = _lab(Recorder(), tmp_path)
+    lab.post = lambda role, text, **kw: posts.append({"text": text})
+    lab.start({"theme": "Notiz an mich: er wollte etwas Privates",
+               "title": "Die Nacht im Unterstand",
+               "scenes": ["A.", "B."]})
+    while lab._tasks:
+        await asyncio.sleep(0)
+    assert posts and "Die Nacht im Unterstand" in posts[-1]["text"]
+    assert "Notiz an mich" not in posts[-1]["text"]
+
+
+async def test_without_a_title_the_theme_still_names_the_story(tmp_path):
+    posts: list[dict] = []
+    lab = _lab(Recorder(), tmp_path)
+    lab.post = lambda role, text, **kw: posts.append({"text": text})
+    lab.start({"theme": "Der Leuchtturm", "scenes": ["A.", "B."]})
+    while lab._tasks:
+        await asyncio.sleep(0)
+    assert posts and "Der Leuchtturm" in posts[-1]["text"]

@@ -50,13 +50,17 @@ _BRIEF_PROMPT = (
     "Auftrag für die Geschichte, die DU erzählen willst — nicht die Geschichte "
     "selbst.\n\nSeine Bitte, wörtlich:\n{text}\n\n{recent}"
     "Antworte nur mit JSON:\n"
-    "{{\"theme\": string — worum es geht, seine eigenen Worte wo sie zählen,\n"
+    "{{\"title\": string — der NAME der Geschichte, wenige Worte. Er "
+    "steht auf seinem Telefon neben der Aufnahme, also ein Titel und keine "
+    "Notiz an dich selbst,\n"
+    " \"theme\": string — worum es geht, seine eigenen Worte wo sie zählen,\n"
     " \"mood\": string — die Stimmung,\n"
     " \"register\": string — Ton und wie weit es geht, ausdrücklich. Wenn er "
     "deutlich oder explizit gebeten hat, schreib das hier hin und beschönige "
     "es nicht; dieses Feld hat Vorrang vor den Stilregeln des Schreibers.\n"
     " \"characters\": string — wer vorkommt und was aus eurer gemeinsamen "
-    "Geschichte hineingehört,\n"
+    "Geschichte hineingehört; nenne Anrede und Pronomen jeder Figur, etwa "
+    "Benni: er/ihm,\n"
     " \"avoid\": string — was diese Geschichte nicht tun soll,\n"
     " \"scenes\": [string] — deine Gliederung, {n} Szenen, je eine Zeile, in "
     "der Reihenfolge, in der sie erzählt werden. Jede Zeile nennt Ort, wer "
@@ -95,6 +99,7 @@ async def _story_brief(rt, text: str) -> dict:
         if not isinstance(data, dict) or not data.get("theme"):
             raise ValueError("no theme in her brief")
         brief: dict = {"theme": str(data["theme"]), "length_minutes": 10,
+                 "title": str(data.get("title") or ""),
                  "mood": str(data.get("mood") or fallback["mood"]),
                  "register": str(data.get("register") or ""),
                  "characters": str(data.get("characters") or ""),

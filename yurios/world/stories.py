@@ -45,6 +45,14 @@ _BARE_ARC = ("Der Anfang: die Lage und was die beiden gerade wollen.",
              "Das Ende, das alles Offene schließt.")
 
 
+def _purpose_text(node) -> str:
+    """The words of one outline node, whether she wrote a line or the planner
+    wrote an object. Putting the dict in a prompt puts braces in her story."""
+    if isinstance(node, dict):
+        return str(node.get("purpose") or node.get("turn") or "").strip()
+    return str(node).strip()
+
+
 def _trim_to_sentence(text: str) -> str:
     """Cut a truncated completion back to its last complete sentence.
 
@@ -168,7 +176,8 @@ class StoryLab:
                 "höchstens 120 Wörtern, in vier Zeilen mit genau diesen "
                 "Anfängen:\n"
                 "ORT: wo die Figuren jetzt sind\n"
-                "FIGUREN: wer dabei ist und was sich an ihnen geändert hat\n"
+                "ZEIT: Tageszeit und Wetter, wie sie JETZT sind\n"
+                "FIGUREN: wer dabei ist — mit Anrede und Pronomen, wortgleich zur bisherigen Akte — und was sich an ihnen geändert hat\n"
                 "GESCHEHEN: die Tatsachen, die jetzt feststehen\n"
                 "OFFEN: was noch ungelöst ist\n\n"
                 f"Bisherige Akte:\n{state}\n\nNeue Szene:\n{scene[-2500:]}",
@@ -215,7 +224,8 @@ class StoryLab:
             if her_scenes:
                 # She planned it. No second opinion: a planner that re-plans her
                 # arc is how the story stopped being hers.
-                plan = {"title": theme, "characters": [],
+                plan = {"title": str(contract.get("title") or "").strip() or theme,
+                        "characters": [],
                         "scenes": [{"purpose": s} for s in her_scenes]}
                 log.info("story %s follows her own outline (%d scenes)",
                          story_id, len(her_scenes))
@@ -236,13 +246,21 @@ class StoryLab:
             state = "Noch keine Szene erzählt."
             for i, purpose in enumerate(purposes):
                 last = i == len(purposes) - 1
+                # Where a scene must STOP. Scene 1 of the live story of
+                # 2026-09-12 was asked only for "the path narrows" and wrote
+                # all the way into finding and entering the shelter — the
+                # material of scenes 5 and 6 — so those scenes had to discover
+                # it a second time. Naming the next scene and forbidding it is
+                # the cheap half of DOC's controller.
+                naechste = "" if last else _purpose_text(purposes[i + 1])
                 scene = await self._complete(
                     "Schreibe die nächste Szene einer langen Geschichte auf Deutsch. "
                     f"Szene {i+1}/{len(purposes)}; {relationship} Thema: {theme}; "
                     f"Stimmung: {mood}. "
                     + (f"Figuren und gemeinsame Vorgeschichte: {characters_brief}. "
                        if characters_brief else "")
-                    + f"Planabsicht: {purpose}. Bisheriger Zustand: {state}. "
+                    + f"Planabsicht: {_purpose_text(purpose)} "
+                    + f"Bisheriger Zustand: {state} "
                     "Die Szenerie ist bereits eingeführt; führe sie nicht neu ein "
                     "und fange nicht von vorne an. "
                     "Zeige überwiegend konkrete Handlung, Dialog und eine sichtbare Veränderung. "
@@ -260,6 +278,9 @@ class StoryLab:
                        "Schreibe die verlangten Stellen wirklich aus, blende nicht ab "
                        "und überspringe sie nicht mit einem Zeitsprung. "
                        if register else "")
+                    + (f"Die NÄCHSTE Szene ist: {naechste} Erzähle sie NICHT mit; höre auf, bevor das passiert. " if naechste else "")
+                    + "Anreden und Pronomen der Figuren bleiben in der ganzen "
+                      "Geschichte gleich; wechsle sie niemals. "
                     + (f"Vermeide ausdrücklich: {avoid}. " if avoid else "")
                     + "Keine Zusammenfassung, keine Überschrift, nur erzählender Text. "
                     + f"Umfang: {SCENE_WORDS} Wörter; beende die Szene mit einem "
@@ -308,9 +329,8 @@ class StoryLab:
                 # to see them: the outline says what was promised and the state
                 # note says what is still unresolved. Showing it only the last
                 # 3200 characters asked it to tie off threads it could not know.
-                bogen = "; ".join(
-                    str(s.get("purpose", "")) if isinstance(s, dict) else str(s)
-                    for s in (plan.get("scenes") or []))
+                bogen = "; ".join(_purpose_text(s)
+                                  for s in (plan.get("scenes") or []))
                 extra = await self._complete(
                     "Schreibe den abschließenden Abschnitt dieser deutschsprachigen Geschichte. "
                     "Der bisherige Text kann mitten in einem Satz abbrechen. Setze genau dort "

@@ -157,7 +157,8 @@ def build_server(*, max_minutes: float | None = None,
     if stories:
         @mcp.tool()
         def tell_story(theme: str, mood: str = "warm und spannend",
-                       length_minutes: int = 10, register: str = "",
+                       length_minutes: int = 10, title: str = "",
+                       register: str = "",
                        scenes: list[str] | None = None,
                        scene_moods: list[str] | None = None,
                        characters: str = "", avoid: str = "") -> dict:
@@ -169,6 +170,9 @@ def build_server(*, max_minutes: float | None = None,
             fields and nothing else. Say what you understood, not a summary of
             it:
 
+            `title` — the story's NAME, a handful of words. It is what he sees
+              on his phone next to the recording, so it is a title and not a
+              note to yourself: never put your reasoning about the brief in it.
             `theme` — what the story is about, in his words where they matter.
             `register` — the tone and how far it goes, plainly. This is where
               an explicit wish belongs: stated here it is honoured, buried in
@@ -187,13 +191,15 @@ def build_server(*, max_minutes: float | None = None,
               warm". The voice takes these per scene, so this is what stops a
               twenty-minute story arriving in one flat register.
             `characters` — who is in it, and what from your shared history
-              belongs in it.
+              belongs in it. Name how each is addressed and which pronouns
+              they take ("Benni: er/ihm"): a story that changes his pronouns
+              halfway through stops being about him.
             `avoid` — what this story must not do.
             """
             if length_minutes < 10 or length_minutes > 60:
                 raise ValueError("length_minutes must be between 10 and 60")
             return {"status": "started", "story_id": uuid.uuid4().hex[:10],
-                    "theme": theme, "mood": mood,
+                    "theme": theme, "mood": mood, "title": title,
                     "length_minutes": length_minutes, "register": register,
                     "scenes": [str(s) for s in (scenes or [])],
                     "scene_moods": [str(m) for m in (scene_moods or [])],
