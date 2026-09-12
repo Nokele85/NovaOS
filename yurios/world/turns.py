@@ -30,13 +30,96 @@ before a new one starts; text turns simply queue behind each other.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from contextlib import nullcontext
 
 from yurios.desktop.voice.emotion import EmotionParser
 from yurios.desktop.voice.sentences import cut_sentences
+from .tooltags import ToolCall
 
 log = logging.getLogger("world.turns")
+
+# What a story job needs that only she can know. The regex decides THAT a story
+# was asked for; this decides WHAT it is, and it has to, because she is the only
+# part of the chain that was in the conversation — the writer downstream sees
+# these fields and nothing else.
+_BRIEF_PROMPT = (
+    "Du bist Nova. {who} bittet dich gerade um eine Geschichte. Schreibe den "
+    "Auftrag für die Geschichte, die DU erzählen willst — nicht die Geschichte "
+    "selbst.\n\nSeine Bitte, wörtlich:\n{text}\n\n{recent}"
+    "Antworte nur mit JSON:\n"
+    "{{\"theme\": string — worum es geht, seine eigenen Worte wo sie zählen,\n"
+    " \"mood\": string — die Stimmung,\n"
+    " \"register\": string — Ton und wie weit es geht, ausdrücklich. Wenn er "
+    "deutlich oder explizit gebeten hat, schreib das hier hin und beschönige "
+    "es nicht; dieses Feld hat Vorrang vor den Stilregeln des Schreibers.\n"
+    " \"characters\": string — wer vorkommt und was aus eurer gemeinsamen "
+    "Geschichte hineingehört,\n"
+    " \"avoid\": string — was diese Geschichte nicht tun soll,\n"
+    " \"scenes\": [string] — deine Gliederung, {n} Szenen, je eine Zeile, in "
+    "der Reihenfolge, in der sie erzählt werden}}")
+
+
+async def _story_brief(rt, text: str) -> dict:
+    """Her brief for her own story, or today's bare contract if she can't write
+    one. Never raises: a brief that failed must still leave a story startable,
+    and the reason has to be in the log rather than in a silently thinner
+    story (the whole lesson of 2026-09-12)."""
+    fallback = {"theme": text, "mood": "stimmig, handlungsorientiert",
+                "length_minutes": 10}
+    provider = getattr(getattr(rt.brain, "state", None), "utility", None)
+    if provider is None:
+        return fallback
+    lines = []
+    for entry in (getattr(rt, "transcript", None) or [])[-8:]:
+        role = "Du" if entry.get("role") == "assistant" else "Er"
+        said = str(entry.get("text", ""))[:300]
+        if said:
+            lines.append(f"{role}: {said}")
+    recent = ("Woran ihr gerade wart:\n" + "\n".join(lines) + "\n\n") if lines else ""
+    try:
+        raw = await provider.complete(
+            [{"role": "user", "content": _BRIEF_PROMPT.format(
+                who=rt.cfg.user_name, text=text, recent=recent,
+                n=rt.cfg.story_scenes)}],
+            temperature=0.4, max_tokens=1600)
+        found = re.search(r"\{.*\}", raw or "", re.S)
+        data = json.loads(found.group(0) if found else "")
+        if not isinstance(data, dict) or not data.get("theme"):
+            raise ValueError("no theme in her brief")
+        brief: dict = {"theme": str(data["theme"]), "length_minutes": 10,
+                 "mood": str(data.get("mood") or fallback["mood"]),
+                 "register": str(data.get("register") or ""),
+                 "characters": str(data.get("characters") or ""),
+                 "avoid": str(data.get("avoid") or ""),
+                 "scenes": [str(s) for s in (data.get("scenes") or []) if str(s).strip()]}
+        log.info("story brief: %d scenes, register %r",
+                 len(brief["scenes"]), str(brief["register"])[:60])
+        return brief
+    except Exception as e:  # noqa: BLE001 — a thin story beats no story
+        log.warning("story brief failed (%s); falling back to the bare "
+                    "contract — the story will not carry her register", e)
+        return fallback
+
+# A *new* story is asked for with an indefinite noun ("eine Geschichte", "noch
+# eine Gutenachtgeschichte", "a story") next to a request ("erzähl", "schreib",
+# "kannst du", "ich hätte gern"). A definite one ("die Geschichte von gestern")
+# is a story that already exists, and a recall question about it must reach the
+# model and her memory — not start a second ten-minute job in its place.
+_NEW_STORY = re.compile(
+    r"\b(?:eine|ne|'ne|noch\s+eine|neue|a|another)\s+(?:\w+\s+){0,3}?"
+    r"(?:\w*geschichte|story|märchen|maerchen)\b")
+_STORY_REQUEST = re.compile(
+    r"\b(?:erzähl|erzaehl|schreib|dicht|denk\s+dir|ausdenk|mach\s+mir|vorles|"
+    r"kannst\s+du|könntest\s+du|koenntest\s+du|willst\s+du|magst\s+du|"
+    r"ich\s+(?:will|möchte|moechte|hätte\s+gern|haette\s+gern)|bitte|"
+    r"tell\s+me|write\s+me|write)")
+_STORY_RECALL = re.compile(
+    r"\b(?:erinner\w*|weißt\s+du\s+noch|weisst\s+du\s+noch|wie\s+ging|"
+    r"nochmal|noch\s+mal|remember|"
+    r"(?:letzte[nr]?|gestrige[nr]?|vorige[nr]?)\s+(?:\w*geschichte|story))\b")
 
 
 class TextTurns:
@@ -45,6 +128,20 @@ class TextTurns:
     def __init__(self, rt):
         self.rt = rt
         self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _story_intent(text: str) -> bool:
+        """Detect an explicit story request before the free-form model pass.
+
+        Image requests already have a reliable host-side handoff. Long stories
+        need the same boundary: a model must not silently turn an expensive,
+        asynchronous job into an ordinary paragraph just because the wording
+        also says "short" or "erotic".
+        """
+        line = text.casefold()
+        if _STORY_RECALL.search(line):
+            return False
+        return bool(_NEW_STORY.search(line) and _STORY_REQUEST.search(line))
 
     async def greet(self, *, channel: str,
                     session_id: str | None = None) -> dict:
@@ -162,6 +259,49 @@ class TextTurns:
             # blocked here would be waiting on a park waiting on it.
             await rt.park_gate.wait()
             rt.turn_started()
+            # A story request is a durable, long-running operation. Route it
+            # through the same Guard -> MCP -> host-realisation path as a
+            # marker, but decide the intent before DeepSeek can answer with a
+            # normal paragraph. This is the hardened counterpart to the
+            # voluntary token-stream marker described in docs/tools.md.
+            if self._story_intent(text) and getattr(rt, "_tool_runner", None) is not None \
+                    and hasattr(rt.brain, "_execute"):
+                # The trigger is a regex, but the brief is hers. It used to be
+                # three hardcoded values, which is why every story arrived with
+                # the same mood and no register at all, and why an explicit
+                # wish reached the writer as one clause inside `theme` — where
+                # the scene prompt's style rules then smoothed it away.
+                args = await _story_brief(rt, text)
+                # Inside the turn's scope, like a marker would be: the job
+                # finishes minutes later off-turn and reads its channel and
+                # corr_id from here — without it the audio has no address.
+                turn_context = getattr(rt.brain, "turn_context", None)
+                context = turn_context(channel=channel, client_id=client_id,
+                                       session_id=session_id) \
+                    if turn_context else nullcontext()
+                try:
+                    with context:
+                        result = await rt.brain._execute(
+                            ToolCall(tool="tell_story", args=args),
+                            rt.brain.guard.turn())
+                finally:
+                    rt.turn_ended()
+                # `_execute` never raises; a refused or failed call comes back
+                # as "denied (…)" / "error (…)", and promising audio then is
+                # the one thing a delivery contract must never do.
+                if str(result).startswith(("denied", "error")):
+                    ack = ("Ich kann die Geschichte gerade nicht starten "
+                           f"({result}). Versuch es gleich noch einmal.")
+                else:
+                    ack = ("Ich plane und vertone jetzt eine vollständige Geschichte. "
+                           "Du bekommst sie danach hier als Audio.")
+                entry = rt.post_message("assistant", ack, channel=channel,
+                                        session_id=session_id)
+                rt.signals.post("turn_committed", {"text": text, "reply": ack},
+                                source=channel)
+                return {"session_id": session_id, "message": entry,
+                        "user_message": user_entry, "story_result": result,
+                        "active_selfies": []}
             parser = EmotionParser(default=rt.cfg.expression_default)
             raw: list[str] = []          # model output verbatim (tags kept, for persist)
             shown: list[str] = []        # committed sentences, tags stripped

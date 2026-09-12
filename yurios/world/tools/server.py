@@ -101,6 +101,7 @@ def build_server(*, max_minutes: float | None = None,
                  workspace: "Workspace | None" = None,
                  skills: "SkillStore | None" = None,
                  selfedit: bool | None = None,
+                 stories: bool | None = None,
                  settings: ToolServerEnv | None = None) -> FastMCP:
     """Build the FastMCP server. Args are the test seams; `python -m` reads env.
 
@@ -148,8 +149,42 @@ def build_server(*, max_minutes: float | None = None,
     # the queue this writes into is only *read* where the mind is running.
     if selfedit is None:
         selfedit = env.selfedit
+    if stories is None:
+        stories = env.stories
 
     mcp = FastMCP("world-companion-tools")
+
+    if stories:
+        @mcp.tool()
+        def tell_story(theme: str, mood: str = "warm und spannend",
+                       length_minutes: int = 10, register: str = "",
+                       scenes: list[str] | None = None,
+                       characters: str = "", avoid: str = "") -> dict:
+            """Start an asynchronous complete story job; the finished German
+            story is checked for a real ending, voiced and sent to Telegram.
+
+            You are the only one in this chain who was in the conversation, so
+            the brief is yours to write — the writer downstream sees these
+            fields and nothing else. Say what you understood, not a summary of
+            it:
+
+            `theme` — what the story is about, in his words where they matter.
+            `register` — the tone and how far it goes, plainly. This is where
+              an explicit wish belongs: stated here it is honoured, buried in
+              `theme` it gets smoothed away by the style rules.
+            `scenes` — your own outline, one line per scene, in order. Give it
+              and no separate planner runs: the story follows YOUR arc.
+            `characters` — who is in it, and what from your shared history
+              belongs in it.
+            `avoid` — what this story must not do.
+            """
+            if length_minutes < 10 or length_minutes > 60:
+                raise ValueError("length_minutes must be between 10 and 60")
+            return {"status": "started", "story_id": uuid.uuid4().hex[:10],
+                    "theme": theme, "mood": mood,
+                    "length_minutes": length_minutes, "register": register,
+                    "scenes": [str(s) for s in (scenes or [])],
+                    "characters": characters, "avoid": avoid}
 
     @mcp.tool()
     def set_timer(minutes: float, label: str = "") -> dict:

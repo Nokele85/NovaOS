@@ -35,6 +35,15 @@ def _has_complete_sentence(text: str) -> bool:
 SCENE_WORDS = "350 bis 450"
 SCENE_MAX_TOKENS = 1600
 
+# The shape of a story, for when no outline survives. Five distinct beats beat
+# one repeated purpose: the failure mode being guarded against is a story that
+# tells its opening eight times over.
+_BARE_ARC = ("Der Anfang: die Lage und was die beiden gerade wollen.",
+             "Die erste Entwicklung, die etwas verändert.",
+             "Der Wendepunkt, an dem es ernst wird.",
+             "Die Folge daraus, ausgespielt.",
+             "Das Ende, das alles Offene schließt.")
+
 
 def _trim_to_sentence(text: str) -> str:
     """Cut a truncated completion back to its last complete sentence.
@@ -106,6 +115,39 @@ class StoryLab:
         return await provider.complete([{"role": "user", "content": prompt}],
                                            temperature=0.75, max_tokens=max_tokens)
 
+    async def _plan(self, story_id: str, theme: str, mood: str,
+                    relationship: str, register: str) -> dict:
+        """The fallback outline, for when she did not bring one.
+
+        It asks for exactly as many scenes as the story is configured for, and
+        it says out loud when it comes back unusable. The old version swallowed
+        that in a bare `except` and left an empty plan behind: every scene then
+        got the same empty purpose, and the story restarted eight times with
+        small variations (live, 2026-09-12) with nothing in the log to show
+        for it."""
+        plan_raw = await self._complete(
+            "Plane eine zusammenhängende deutschsprachige Geschichte. "
+            f"{relationship} Thema: {theme}. Stimmung: {mood}. "
+            + (f"Register: {register}. " if register else "")
+            + f"Sie braucht genau {self.scenes} Szenen mit Anfang, Mitte, "
+            "Wendepunkt und einem befriedigenden Ende. Antworte nur "
+            "mit JSON: {\"title\": string, \"characters\": [string], "
+            "\"scenes\": [{\"purpose\": string, \"turn\": string}]}.",
+            max_tokens=1600)
+        try:
+            found = re.search(r"\{.*\}", plan_raw, re.S)
+            plan = json.loads(found.group(0) if found else "")
+            if not isinstance(plan, dict) or not plan.get("scenes"):
+                raise ValueError("no scenes in the plan")
+            return plan
+        except Exception as e:
+            log.error("story %s: the planner returned no usable outline (%s); "
+                      "%d characters came back. Falling back to a bare arc — "
+                      "the story will be thinner than it should be.",
+                      story_id, e, len(plan_raw or ""))
+            return {"title": theme, "characters": [],
+                    "scenes": [{"purpose": p} for p in _BARE_ARC]}
+
     @staticmethod
     def _clean(text: str) -> str:
         text = re.sub(r"<[^>]+>", "", text)
@@ -120,36 +162,68 @@ class StoryLab:
                         f"Die Geschichte handelt von Nova und {self.user_name} als gemeinsamem Paar; "
                         "keine beliebigen Ersatzfiguren und kein unbeteiligter Außenplot. "
                         "Der Nutzer wird als anwesender Handlungspartner in die Ereignisse einbezogen.")
+        # Her own words, straight from the tool call. She is the only one in
+        # this chain who was in the conversation; what she wrote here is the
+        # brief, and `register` in particular is not decoration — measured
+        # 2026-09-12, the style rules below halve the physical density of an
+        # intimate scene and add fade-outs unless the register says otherwise.
+        register = str(contract.get("register") or "").strip()
+        characters_brief = str(contract.get("characters") or "").strip()
+        avoid = str(contract.get("avoid") or "").strip()
+        her_scenes = [str(s).strip() for s in (contract.get("scenes") or [])
+                      if str(s).strip()]
         try:
-            plan_raw = await self._complete(
-                "Plane eine zusammenhängende deutschsprachige Geschichte. "
-                f"{relationship} Thema: {theme}. Stimmung: {mood}. Sie braucht Anfang, "
-                "Mitte, Wendepunkt und ein befriedigendes Ende. Antworte nur "
-                "mit JSON: {\"title\": string, \"characters\": [string], "
-                "\"scenes\": [{\"purpose\": string, \"turn\": string}]}.")
-            try:
-                found = re.search(r"\{.*\}", plan_raw, re.S)
-                plan = json.loads(found.group(0) if found else "")
-            except Exception:
-                plan = {"title": theme, "characters": [], "scenes": []}
+            if her_scenes:
+                # She planned it. No second opinion: a planner that re-plans her
+                # arc is how the story stopped being hers.
+                plan = {"title": theme, "characters": [],
+                        "scenes": [{"purpose": s} for s in her_scenes]}
+                log.info("story %s follows her own outline (%d scenes)",
+                         story_id, len(her_scenes))
+            else:
+                plan = await self._plan(story_id, theme, mood, relationship, register)
             (folder / "outline.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+            # One scene per planned scene. The old `i % len(scenes)` ran the
+            # configured count regardless and wrapped back to purpose 1, so a
+            # four-scene plan asked for eight scenes told the same story twice
+            # with small variations — the live complaint of 2026-09-12.
+            purposes = [s for s in (plan.get("scenes") or []) if s]
+            if not purposes:
+                purposes = [{"purpose": "Erzähle die Geschichte weiter."}] * self.scenes
             parts: list[str] = []
             state = "Noch keine Szene erzählt."
-            for i in range(self.scenes):
-                purpose = (plan.get("scenes") or [{}])[i % max(1, len(plan.get("scenes") or [{}]))]
+            for i, purpose in enumerate(purposes):
+                last = i == len(purposes) - 1
                 scene = await self._complete(
                     "Schreibe die nächste Szene einer langen Geschichte auf Deutsch. "
-                    f"Szene {i+1}/{self.scenes}; {relationship} Thema: {theme}; Stimmung: {mood}. "
-                    f"Planabsicht: {purpose}. Bisheriger Zustand: {state}. "
+                    f"Szene {i+1}/{len(purposes)}; {relationship} Thema: {theme}; "
+                    f"Stimmung: {mood}. "
+                    + (f"Figuren und gemeinsame Vorgeschichte: {characters_brief}. "
+                       if characters_brief else "")
+                    + f"Planabsicht: {purpose}. Bisheriger Zustand: {state}. "
+                    "Die Szenerie ist bereits eingeführt; führe sie nicht neu ein "
+                    "und fange nicht von vorne an. "
                     "Zeige überwiegend konkrete Handlung, Dialog und eine sichtbare Veränderung. "
                     "Vermeide langes Lamentieren, Selbstmitleid, wiederholte Gefühle und "
                     "poetische Füllsätze; innere Gedanken nur kurz und wenn sie eine Entscheidung "
                     "vorbereiten. Jeder Absatz soll Handlung, Dialog oder eine neue Information "
                     "bringen. Keine Szene darf nur aus Grübeln bestehen. "
-                    "Keine Zusammenfassung, keine Überschrift, nur erzählender Text. "
-                    f"Umfang: {SCENE_WORDS} Wörter; beende die Szene mit einem "
+                    # AFTER the style rules, deliberately: those rules say "move
+                    # the plot on", which is the opposite of what a sustained
+                    # intimate or physical scene does, and the model obeys the
+                    # last word. Measured: with the rules alone such a scene
+                    # came back at half the physical density and skipped the
+                    # act with "später"/"danach"; with this line it does not.
+                    + (f"Register, das Vorrang vor den Stilregeln hat: {register}. "
+                       "Schreibe die verlangten Stellen wirklich aus, blende nicht ab "
+                       "und überspringe sie nicht mit einem Zeitsprung. "
+                       if register else "")
+                    + (f"Vermeide ausdrücklich: {avoid}. " if avoid else "")
+                    + "Keine Zusammenfassung, keine Überschrift, nur erzählender Text. "
+                    + f"Umfang: {SCENE_WORDS} Wörter; beende die Szene mit einem "
                     "vollständigen Satz. "
-                    "Die letzte Szene muss alle offenen Handlungsfäden schließen.",
+                    + ("Diese Szene ist die letzte und muss alle offenen "
+                       "Handlungsfäden schließen. " if last else ""),
                     max_tokens=SCENE_MAX_TOKENS)
                 scene = _trim_to_sentence(self._clean(scene))
                 parts.append(scene)
