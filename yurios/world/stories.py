@@ -61,8 +61,10 @@ REVIEW_MAX_TOKENS = 48_000
 # fell — and the writing stopped obeying. It kept neither its own form (9.3%
 # of sentences mixed the address, against 0.8-2.5% elsewhere) nor its own
 # register, where an outline that said "heftiger Sex, explizit" came back at a
-# fifth of the usual physical density. 1.2 is the compromise being measured.
-WRITING_TEMPERATURE = 1.2
+# fifth of the usual physical density. 1.2 then bought nothing at all —
+# 12.1% spoken against 13.0% at 0.75 — and still cost density. The dial
+# does not trade gradually, it tips, so it stays where the story is best.
+WRITING_TEMPERATURE = 0.75
 SCENE_MAX_TOKENS = 1600
 
 # The shape of a story, for when no outline survives. Five distinct beats beat
