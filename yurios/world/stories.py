@@ -191,9 +191,18 @@ class StoryLab:
         for i in range(1, len(parts)):
             try:
                 answer = await self._complete(
-                    "Prüfe einen Abschnitt einer Geschichte gegen feste Regeln. "
-                    "Ändere NUR, was gegen eine Regel verstößt — Handlung, Bilder "
-                    "und Wortwahl bleiben unangetastet.\n\n"
+                    "Prüfe einen Abschnitt einer Geschichte gegen feste Regeln.\n\n"
+                    "Du korrigierst. Du schreibst NICHT um und du verbesserst "
+                    "nichts.\n"
+                    "- Kein Satz wird hinzugefügt, keiner gestrichen, keiner "
+                    "umgestellt.\n"
+                    "- Geändert werden nur einzelne Wörter: Pronomen, Anreden, "
+                    "Zeit- und Wetterangaben.\n"
+                    "- Jeder Satz, der keine Regel verletzt, kommt WORTGLEICH "
+                    "zurück.\n"
+                    "- Der Abschnitt ist danach genauso lang wie vorher.\n"
+                    "Eine schönere Formulierung ist kein Grund für eine Änderung. "
+                    "Dass dir etwas nicht gefällt, auch nicht.\n\n"
                     f"Regeln:\n{rules}\n\n"
                     "Hält der Abschnitt alle Regeln ein, antworte mit genau: OK\n"
                     "Sonst gib den korrigierten Abschnitt zurück, ohne Vorrede "

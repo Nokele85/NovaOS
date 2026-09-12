@@ -345,6 +345,19 @@ async def test_without_a_title_the_theme_still_names_the_story(tmp_path):
 
 # -- the rules pass: narrow, and never destructive ------------------------
 
+async def test_the_pass_is_told_it_corrects_and_does_not_rewrite(tmp_path):
+    """It straightened 8 of 8 passages and grew the story by 12%, because the
+    instruction was polite instead of operational."""
+    util = Recorder("OK", "OK")
+    lab = _lab(util, tmp_path)
+    await lab._straighten(["Anfang.", "Zweiter."], "ERZÄHLPERSON: Ich-Form")
+    p = util.prompts[-1]
+    assert "schreibst NICHT um" in p
+    assert "WORTGLEICH" in p
+    assert "genauso lang wie vorher" in p
+    assert "Kein Satz wird hinzugefügt" in p
+
+
 async def test_a_passage_that_obeys_is_left_exactly_as_written(tmp_path):
     """A pass that rewrites what is already fine is how good prose gets worn
     down. An obedient passage costs one short "OK" and nothing changes."""
