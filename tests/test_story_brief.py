@@ -906,7 +906,8 @@ async def test_the_reviewer_is_handed_the_suspects_but_not_a_verdict(tmp_path):
 async def test_a_scene_that_did_its_job_is_not_touched(tmp_path):
     lab = _lab(Recorder(), tmp_path)
     lab._complete = lambda *a, **kw: _antwort("AUFTRAG: erfüllt\nVORGRIFF: nein")
-    assert await lab._verify_scene("Text.", "davor", "Auftrag", "danach") == ""
+    assert await lab._verify_scene(
+        "Text.", "davor", "Auftrag", "danach") == ("", "")
 
 
 async def test_a_scene_that_went_somewhere_else_is_named(tmp_path):
@@ -918,8 +919,10 @@ async def test_a_scene_that_went_somewhere_else_is_named(tmp_path):
     lab._complete = lambda *a, **kw: _antwort(
         "AUFTRAG: verfehlt kein Gehweg, ihr seid schon im Hauseingang\n"
         "VORGRIFF: JA das Aufschließen gehört in die nächste Szene")
-    maengel = await lab._verify_scene("Text.", "davor", "Gehweg", "Haustür")
-    assert "kein Gehweg" in maengel and "Aufschließen" in maengel
+    offen, vorgriff = await lab._verify_scene(
+        "Text.", "davor", "Gehweg", "Haustür")
+    assert "kein Gehweg" in offen
+    assert "Aufschließen" in vorgriff
 
 
 async def test_leading_to_the_next_scene_is_allowed_and_said_so(tmp_path):
@@ -941,7 +944,7 @@ async def test_a_failed_check_lets_the_scene_stand(tmp_path):
         raise RuntimeError("kein Modell")
 
     lab._complete = kaputt
-    assert await lab._verify_scene("Text.", "d", "a", "n") == ""
+    assert await lab._verify_scene("Text.", "d", "a", "n") == ("", "")
 
 
 async def test_a_repair_that_loses_half_the_scene_is_refused(tmp_path):
@@ -952,7 +955,8 @@ async def test_a_repair_that_loses_half_the_scene_is_refused(tmp_path):
         async def complete(self, messages, **kwargs):
             self.prompts.append(messages[-1]["content"])
             if "Du prüfst EINE Szene" in messages[-1]["content"]:
-                return "AUFTRAG: verfehlt etwas fehlt\nVORGRIFF: nein"
+                return ("AUFTRAG: erfüllt\n"
+                        "VORGRIFF: JA die Tür gehört in die nächste Szene")
             antworten.append(1)
             # erste Szene lang, die Reparatur viel zu kurz
             return "Kurz." if len(antworten) > 1 else " ".join(["Wort"] * 60) + "."
@@ -961,3 +965,4 @@ async def test_a_repair_that_loses_half_the_scene_is_refused(tmp_path):
     await _run(lab, {"theme": "Wald", "scenes": ["A."]})
     md = next(tmp_path.glob("*/story.md")).read_text(encoding="utf-8")
     assert "Kurz." not in md.split("\n\n")[1]
+    assert len(antworten) >= 2  # die Reparatur wurde wirklich versucht

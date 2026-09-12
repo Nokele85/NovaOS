@@ -370,7 +370,7 @@ class StoryLab:
         return self._clean(rules)
 
     async def _verify_scene(self, scene: str, davor: str, auftrag: str,
-                            danach: str) -> str:
+                            danach: str) -> tuple[str, str]:
         """What this scene failed to do, or "" if it did it.
 
         Checked here rather than at the end, because a scene that went
@@ -407,15 +407,15 @@ class StoryLab:
                 max_tokens=300, persona=False, temperature=0.2)
         except Exception:
             log.warning("scene check failed; the scene stands", exc_info=True)
-            return ""
-        maengel = []
+            return "", ""
+        offen = vorgriff = ""
         for zeile in (antwort or "").splitlines():
             gross = zeile.upper()
             if gross.startswith("AUFTRAG") and "VERFEHLT" in gross:
-                maengel.append(zeile.strip())
+                offen = zeile.strip()
             elif gross.startswith("VORGRIFF") and ": JA" in gross:
-                maengel.append(zeile.strip())
-        return " | ".join(maengel)
+                vorgriff = zeile.strip()
+        return offen, vorgriff
 
     async def _review(self, parts: list[str], rules: str) -> dict[int, dict[int, str]]:
         """Read the whole story at once and name the sentences that break it.
@@ -835,22 +835,31 @@ class StoryLab:
                 # else is the ground the next one builds on, and by the
                 # end of the story that is no longer repairable — the
                 # end review read past exactly this twice.
-                maengel = await self._verify_scene(
+                offen, vorgriff = await self._verify_scene(
                     scene, state, _purpose_text(purpose), naechste or "keine")
-                if maengel:
+                if offen:
+                    # Logged, not repaired. Her outline lines pack four or five
+                    # elements into a sentence, so this asks "did you tick every
+                    # box" — a 400-word scene often cannot without becoming a
+                    # list. Six such repairs were attempted on one live story
+                    # and all six failed the same check again.
+                    log.info("story %s scene %d did not tick every box: %s",
+                             story_id, i + 1, offen[:110])
+                if vorgriff:
                     log.info("story %s scene %d: %s — one repair",
-                             story_id, i + 1, maengel[:120])
+                             story_id, i + 1, vorgriff[:120])
                     zweiter = _trim_to_sentence(self._clean(
                         await self._complete(
-                            szenen_prompt + "\n\nEin erster Versuch hat den "
-                            f"Auftrag verfehlt: {maengel} Schreibe die Szene "
-                            "neu und halte dich diesmal an ihren Auftrag.",
+                            szenen_prompt + "\n\nEin erster Versuch hat "
+                            "vorweggenommen, was erst später dran ist: "
+                            f"{vorgriff} Schreibe die Szene neu und setze "
+                            "dort ein, wo ihr Auftrag beginnt.",
                             max_tokens=SCENE_MAX_TOKENS,
                             temperature=WRITING_TEMPERATURE)))
                     # Only if it is actually better. A repair that fixes
                     # the brief and loses half the scene is not one.
                     if _words(zweiter) >= 0.7 * _words(scene):
-                        rest = await self._verify_scene(
+                        _, rest = await self._verify_scene(
                             zweiter, state, _purpose_text(purpose),
                             naechste or "keine")
                         if not rest:
