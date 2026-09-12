@@ -464,3 +464,16 @@ def test_sentences_never_lose_a_word():
     text = 'Sie blieb stehen. „Hörst du das?“ Ganz leise … Er nickte und ging'
     assert " ".join(_sentences(text)) == text
     assert len(_sentences(text)) == 4
+
+
+async def test_an_ok_for_a_single_sentence_is_not_a_correction(tmp_path):
+    """"12: OK" means that sentence is fine. Read as a correction it replaces
+    the sentence with the word OK, and against a one-word sentence the length
+    window lets it through — it reached a published story on 2026-09-12 and
+    would have been read out loud."""
+    lab = _lab(Recorder(), tmp_path)
+    teile = ["Anfang.", "Du gingst voran. Zusammen."]
+    lab._complete = lambda *a, **kw: _antwort("1: Er ging voran.\n2: OK")
+    geaendert, _ = await lab._straighten(teile, "ANREDE: er")
+    assert geaendert == 1
+    assert teile[1] == "Er ging voran. Zusammen."

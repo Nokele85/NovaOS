@@ -282,6 +282,12 @@ class StoryLab:
                 if not 1 <= nummer <= len(saetze):
                     continue
                 alt = saetze[nummer - 1]
+                # "12: OK" means "this one is fine", not "replace it with the
+                # word OK" — and against a one-word sentence the length window
+                # lets that through. It reached a published story (live,
+                # 2026-09-12) and would have been read out loud.
+                if satz.strip().strip(".!—-").upper() in ("OK", "IO", ""):
+                    continue
                 if _META.search(satz):
                     log.warning("passage %d sentence %d answered with reasoning "
                                 "instead of prose; kept it", i + 1, nummer)
