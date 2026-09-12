@@ -95,6 +95,7 @@ class ToolServerEnv:
     #: The self-edit door (§23) — off without a mind, because the queue it
     #: writes into is only ever read by the loop and the inner-life panel.
     selfedit: bool = False
+    stories: bool = False
 
     @property
     def vault_path(self) -> Path | None:
@@ -121,6 +122,7 @@ class ToolServerEnv:
             workspace=bool(cfg.workspace_enabled),
             skills=bool(cfg.skills_enabled),
             selfedit=bool(cfg.mind_enabled),
+            stories=bool(cfg.story_enabled),
         )
 
     @classmethod
@@ -144,6 +146,7 @@ class ToolServerEnv:
             workspace=_read_flag(env, "WORKSPACE_ENABLED", True),
             skills=_read_flag(env, "SKILLS_ENABLED", True),
             selfedit=_read_flag(env, "SELFEDIT_ENABLED", False),
+            stories=_read_flag(env, "STORIES_ENABLED", False),
         )
 
     def to_environ(self) -> dict[str, str]:
@@ -165,6 +168,7 @@ class ToolServerEnv:
             "WORKSPACE_ENABLED": _flag(self.workspace),
             "SKILLS_ENABLED": _flag(self.skills),
             "SELFEDIT_ENABLED": _flag(self.selfedit),
+            "STORIES_ENABLED": _flag(self.stories),
         }
 
 

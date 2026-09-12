@@ -20,7 +20,7 @@ from yurios.world.stories import (SCENE_MAX_TOKENS, StoryLab, _has_complete_sent
 def _voice() -> QwenVoice:
     """A voice these tests never reach: the TTS itself is faked out below."""
     return QwenVoice(speech_url="http://unused", supervisor_url="http://unused",
-                     ref_audio="file:///ref.wav", ref_text="Hallo.")
+                     speaker="sohee")
 
 
 class TruncatingUtility:
@@ -30,8 +30,11 @@ class TruncatingUtility:
         self.calls: list[int] = []
 
     async def complete(self, messages, **kwargs):
-        self.calls.append(kwargs.get("max_tokens"))
-        if len(self.calls) == 1:
+        # Scene calls only: a state note is asked for with a small budget on
+        # purpose, and counting it here would hide the ceiling this pins.
+        if "Schreibe die nächste Szene" in messages[-1]["content"]                 or "abschließenden Abschnitt" in messages[-1]["content"]:
+            self.calls.append(kwargs.get("max_tokens"))
+        if "Antworte nur mit JSON" in messages[-1]["content"]:
             return json.dumps({"title": "Der Leuchtturm", "characters": ["Nova", "Benni"],
                                "scenes": [{"purpose": "Aufbruch", "turn": "Sturm"}]})
         words = " ".join(["Nova und Benni gingen weiter zum Leuchtturm."] * 60)
@@ -106,5 +109,5 @@ async def test_no_scene_of_a_finished_story_ends_mid_sentence(tmp_path):
     assert paragraphs and all(_has_complete_sentence(p) for p in paragraphs)
     assert not re.search(r"bestell\b", story)
     # every scene and the finale were asked for with room to finish
-    assert utility.calls[1:] and all(t == SCENE_MAX_TOKENS for t in utility.calls[1:])
+    assert utility.calls and all(t == SCENE_MAX_TOKENS for t in utility.calls)
     assert posts and posts[-1][1].get("audio_path", "").endswith(".mp3")

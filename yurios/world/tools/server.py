@@ -159,6 +159,7 @@ def build_server(*, max_minutes: float | None = None,
         def tell_story(theme: str, mood: str = "warm und spannend",
                        length_minutes: int = 10, register: str = "",
                        scenes: list[str] | None = None,
+                       scene_moods: list[str] | None = None,
                        characters: str = "", avoid: str = "") -> dict:
             """Start an asynchronous complete story job; the finished German
             story is checked for a real ending, voiced and sent to Telegram.
@@ -173,7 +174,18 @@ def build_server(*, max_minutes: float | None = None,
               an explicit wish belongs: stated here it is honoured, buried in
               `theme` it gets smoothed away by the style rules.
             `scenes` — your own outline, one line per scene, in order. Give it
-              and no separate planner runs: the story follows YOUR arc.
+              and no separate planner runs: the story follows YOUR arc. Write
+              each line with four things in it — where it happens, who is
+              there, what happens, and what changes because of it. A line that
+              only names a mood ("es wird zärtlich") leaves the writing to
+              improvise; a line that says "auf dem Dach, sie beide, er gesteht
+              die Kündigung, danach weiß sie es" does not. Detail here is
+              measurably worth more than detail anywhere else.
+            `scene_moods` — how each scene should SOUND, one short instruction
+              per scene, same order and length as `scenes`: "fröhlich und
+              leicht", "gedämpft und spannungsvoll, fast flüsternd", "ruhig und
+              warm". The voice takes these per scene, so this is what stops a
+              twenty-minute story arriving in one flat register.
             `characters` — who is in it, and what from your shared history
               belongs in it.
             `avoid` — what this story must not do.
@@ -184,6 +196,7 @@ def build_server(*, max_minutes: float | None = None,
                     "theme": theme, "mood": mood,
                     "length_minutes": length_minutes, "register": register,
                     "scenes": [str(s) for s in (scenes or [])],
+                    "scene_moods": [str(m) for m in (scene_moods or [])],
                     "characters": characters, "avoid": avoid}
 
     @mcp.tool()

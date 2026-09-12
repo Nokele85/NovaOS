@@ -59,7 +59,12 @@ _BRIEF_PROMPT = (
     "Geschichte hineingehört,\n"
     " \"avoid\": string — was diese Geschichte nicht tun soll,\n"
     " \"scenes\": [string] — deine Gliederung, {n} Szenen, je eine Zeile, in "
-    "der Reihenfolge, in der sie erzählt werden}}")
+    "der Reihenfolge, in der sie erzählt werden. Jede Zeile nennt Ort, wer "
+    "dabei ist, was passiert und was sich dadurch ändert,\n"
+    " \"scene_moods\": [string] — wie jede Szene KLINGEN soll, gleiche Anzahl "
+    "und Reihenfolge wie scenes: kurze Anweisung an die Stimme, etwa "
+    "\"fröhlich und leicht\", \"gedämpft und spannungsvoll, fast flüsternd\", "
+    "\"ruhig und warm erzählend\"}}")
 
 
 async def _story_brief(rt, text: str) -> dict:
@@ -94,7 +99,8 @@ async def _story_brief(rt, text: str) -> dict:
                  "register": str(data.get("register") or ""),
                  "characters": str(data.get("characters") or ""),
                  "avoid": str(data.get("avoid") or ""),
-                 "scenes": [str(s) for s in (data.get("scenes") or []) if str(s).strip()]}
+                 "scenes": [str(s) for s in (data.get("scenes") or []) if str(s).strip()],
+                 "scene_moods": [str(m) for m in (data.get("scene_moods") or [])]}
         log.info("story brief: %d scenes, register %r",
                  len(brief["scenes"]), str(brief["register"])[:60])
         return brief

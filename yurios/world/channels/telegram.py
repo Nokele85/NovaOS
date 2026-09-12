@@ -368,3 +368,9 @@ class TelegramChannel(Channel):
         data = resp.json()
         if not data.get("ok"):
             raise RuntimeError(f"telegram sendAudio: {data.get('description')}")
+        # A failure was always loud and a success always silent, so "it arrived"
+        # could only ever be inferred from the absence of a complaint. Telegram
+        # hands back the message_id it filed; that is the proof, so log it.
+        log.info("telegram: delivered %s (%.1f MB) as message %s", path.name,
+                 path.stat().st_size / 1e6,
+                 (data.get("result") or {}).get("message_id"))

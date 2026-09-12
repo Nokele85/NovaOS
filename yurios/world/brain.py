@@ -170,13 +170,14 @@ class ToolBrain(BrainAdapter):
 
     def __init__(self, state, cfg: Config, *, guard: Guard,
                  timers: TimerBoard, controller: VrmController,
-                 selfies=None, research=None):
+                 selfies=None, research=None, stories=None):
         super().__init__(state, cfg)
         self.guard = guard
         self.timers = timers
         self.controller = controller
         self.selfies = selfies                 # SelfieLab | None (§7.6)
         self.research = research               # Researcher | None (§7.7)
+        self.stories = stories
         # mind/selfedit.py's door (§23), wired by the MindLoop the same way the
         # shelf and the desk are. None means the tool was never advertised.
         self.selfedit = None
@@ -189,12 +190,12 @@ class ToolBrain(BrainAdapter):
 
     @classmethod
     def build(cls, cfg, *, guard: Guard, timers: TimerBoard,
-              controller: VrmController, selfies=None, research=None,
+              controller: VrmController, selfies=None, research=None, stories=None,
               chat_model=None, utility_model=None, embedder=None) -> "ToolBrain":
         base = BrainAdapter.build(cfg, chat_model=chat_model,
                                   utility_model=utility_model, embedder=embedder)
         return cls(base.state, base.cfg, guard=guard, timers=timers,
-                   controller=controller, selfies=selfies, research=research)
+                   controller=controller, selfies=selfies, research=research, stories=stories)
 
     def set_tools(self, runner: Optional[ToolRunner], specs: list[ToolSpec]) -> None:
         """Wire the discovered hands (SPEC §7.2). None/empty → she has no hands
@@ -530,6 +531,12 @@ class ToolBrain(BrainAdapter):
                 data["_client_id"] = origin.client_id if origin else None
                 data["_corr_id"] = origin.corr_id if origin else None
                 self.research.start(data)
+        elif call.tool == "tell_story" and data.get("status") == "started":
+            if self.stories is not None:
+                origin = correlate.current()
+                data["_channel"] = origin.channel if origin else None
+                data["_corr_id"] = origin.corr_id if origin else None
+                self.stories.start(data)
         elif (call.tool in ("take_selfie", "show_picture")
                 and data.get("status") == "started"):
             # start-don't-await (§7.6): the render happens off-turn; the photo

@@ -53,6 +53,8 @@ def tool_rates(cfg: Config) -> dict[str, int]:
     """
     rates = {"set_timer": cfg.tool_rate_timer,
              "play_music": cfg.tool_rate_music}
+    if cfg.story_enabled:
+        rates["tell_story"] = cfg.tool_rate_story
     if cfg.selfie_backend != "off":
         rates["take_selfie"] = cfg.tool_rate_selfie
         rates["show_picture"] = cfg.tool_rate_picture
@@ -168,7 +170,7 @@ def build_brain(rt, *, chat_model, utility_model, embedder) -> ToolBrain:
     return ToolBrain.build(
         cfg, guard=rt.guard, timers=rt.timers,
         controller=rt.controller, selfies=rt.selfies,
-        research=rt.research, chat_model=chat_model,
+        research=rt.research, stories=getattr(rt, "stories", None), chat_model=chat_model,
         utility_model=utility_model, embedder=embedder)
 
 

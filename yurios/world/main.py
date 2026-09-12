@@ -181,8 +181,7 @@ class Runtime:
             user_name=cfg.user_name,
             voice=QwenVoice(speech_url=cfg.story_tts_url,
                             supervisor_url=cfg.story_tts_supervisor_url,
-                            ref_audio=cfg.story_tts_ref_audio,
-                            ref_text=cfg.story_tts_ref_text,
+                            speaker=cfg.story_tts_speaker,
                             language=cfg.story_tts_language,
                             token=cfg.story_tts_token),
             min_words=cfg.story_min_words, scenes=cfg.story_scenes)

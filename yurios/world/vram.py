@@ -237,6 +237,31 @@ def shared_render_lock() -> asyncio.Lock:
     return _RENDER_LOCK
 
 
+#: The *other* machine's card. A LAN GPU (the gaming PC: 12 GB) serves two
+#: remote services this process calls - the ComfyUI camera and the story TTS
+#: server - and nothing on that machine arbitrates between them. Observed
+#: 2026-09-11: a story's TTS `/load` (22:24) and a selfie render (22:25) ran at
+#: once; the render timed out after 300 s, the load after 600 s, and the load
+#: then finished server-side and held 7 GB that nobody unloaded, so the next
+#: selfie (22:38) timed out too. Every character of a node runs in this one
+#: process and both callers live here, so a process-wide lock is enough.
+_REMOTE_GPU_LOCK: Optional[asyncio.Lock] = None
+
+
+def remote_gpu_lock() -> asyncio.Lock:
+    """One job at a time on the LAN GPU (see `_REMOTE_GPU_LOCK`)."""
+    global _REMOTE_GPU_LOCK
+    if _REMOTE_GPU_LOCK is None:
+        _REMOTE_GPU_LOCK = asyncio.Lock()
+    return _REMOTE_GPU_LOCK
+
+
+def reset_remote_gpu_lock() -> None:
+    """For tests: each event loop gets a fresh lock."""
+    global _REMOTE_GPU_LOCK
+    _REMOTE_GPU_LOCK = None
+
+
 def cancel_idle_unload() -> None:
     """A render is about to use the card — don't drop it out from under it."""
     global _IDLE_TASK

@@ -55,7 +55,8 @@ def test_every_setting_actually_crosses(cfg):
                     "selfie_templates": "/tmp/hers.yaml",
                     "selfie_templates_extra": "/tmp/x.yaml",
                     "searxng_url": "http://elsewhere:9",
-                    "search_language": "ja", "mind_enabled": True},
+                    "search_language": "ja", "mind_enabled": True,
+                    "story_enabled": True},
                    {"workspace_enabled": False, "skills_enabled": False}):
         sent = ToolServerEnv.from_config(cfg.model_copy(update=update))
         landed = ToolServerEnv.from_environ(sent.to_environ())

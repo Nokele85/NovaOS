@@ -73,12 +73,11 @@ class QwenVoice:
     """The LAN voice: turn it on, speak passages, always turn it off."""
 
     def __init__(self, *, speech_url: str, supervisor_url: str,
-                 ref_audio: str, ref_text: str, language: str = "German",
+                 speaker: str = "sohee", language: str = "German",
                  token: str = "", sample_rate: int = 24000):
         self.speech_url = speech_url.rstrip("/")
         self.supervisor_url = supervisor_url.rstrip("/")
-        self.ref_audio = ref_audio
-        self.ref_text = ref_text
+        self.speaker = speaker
         self.language = language
         self.token = token
         self.sample_rate = sample_rate
@@ -127,21 +126,26 @@ class QwenVoice:
 
     # -- speaking ----------------------------------------------------------
 
-    def _body(self, text: str) -> dict[str, Any]:
-        return {
+    def _body(self, text: str, instruct: str = "") -> dict[str, Any]:
+        body: dict[str, Any] = {
             "model": "qwen3-tts",
             "input": text,
             "language": self.language,
-            # "Base" is the cloning model: one fixed timbre from the reference
-            # clip, rather than a voice re-designed (and drifting) per call.
-            "task_type": "Base",
-            "ref_audio": self.ref_audio,
-            "ref_text": self.ref_text,
+            # CustomVoice, not Base: one of the model's own speakers, which is
+            # the only variant that also takes a per-request instruction. Base
+            # clones a reference clip and ignores `instructions` entirely, so
+            # every passage of a 23-minute story came out in one flat register.
+            "task_type": "CustomVoice",
+            "voice": self.speaker,
             "response_format": "pcm",
         }
+        if instruct:
+            body["instructions"] = instruct
+        return body
 
-    async def speak(self, client: httpx.AsyncClient, text: str) -> bytes:
+    async def speak(self, client: httpx.AsyncClient, text: str,
+                    instruct: str = "") -> bytes:
         r = await client.post(f"{self.speech_url}/v1/audio/speech",
-                              json=self._body(text))
+                              json=self._body(text, instruct))
         r.raise_for_status()
         return r.content

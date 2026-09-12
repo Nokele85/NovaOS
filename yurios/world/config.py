@@ -45,11 +45,12 @@ class Config(VoiceConfig):
     # minutes of narration do not leave 7 GB parked on a card the camera shares.
     story_tts_url: str = "http://192.168.0.104:8091"          # speaks
     story_tts_supervisor_url: str = "http://192.168.0.104:8092"  # loads/unloads
-    # The clone reference and its exact transcript — a path on the TTS *server*.
-    # They belong together: the model conditions on both, so a transcript that
-    # does not match the clip is a worse voice, not an error.
-    story_tts_ref_audio: str = ""
-    story_tts_ref_text: str = ""
+    # One of the CustomVoice model's own speakers. That variant is the only one
+    # that also honours a per-request instruction ("gedämpft und spannungsvoll"),
+    # which is what lets a scene sound different from the one before it; the
+    # Base cloning model ignores instructions entirely and narrates 23 minutes
+    # in one register (measured 2026-09-12).
+    story_tts_speaker: str = "sohee"
     story_tts_language: str = "German"
     story_tts_token: str = ""                   # supervisor token, if it sets one
     story_min_words: int = 1500

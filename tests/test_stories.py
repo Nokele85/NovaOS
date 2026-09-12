@@ -12,7 +12,7 @@ from yurios.world.qwenvoice import QwenVoice
 def _voice() -> QwenVoice:
     """Never reached: these tests fake the TTS call itself."""
     return QwenVoice(speech_url="http://unused", supervisor_url="http://unused",
-                     ref_audio="file:///ref.wav", ref_text="Hallo.")
+                     speaker="sohee")
 
 
 class Utility:

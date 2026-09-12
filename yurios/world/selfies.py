@@ -44,6 +44,7 @@ from .vram import (
     cancel_idle_unload,
     claim_card,
     release_card,
+    remote_gpu_lock,
     schedule_idle_unload,
     shared_render_lock,
 )
@@ -229,6 +230,18 @@ def build_forge(cfg) -> tuple["ImageForge", str]:
             log.warning("selfies: the %s backend can't run — degrading to the "
                         "mock backend (placeholder cards). %s", name, hint)
             backend, status = make_backend("mock"), f"mock ({name} unavailable — placeholder)"
+    elif name == "comfyui":
+        backend = make_backend(
+            "comfyui", shared=False, host=cfg.selfie_comfy_host,
+            port=cfg.selfie_comfy_port, timeout=cfg.selfie_comfy_timeout,
+            release_after_render=cfg.selfie_comfy_release_after_render,
+            unet_name=cfg.selfie_comfy_unet, clip_name=cfg.selfie_comfy_clip,
+            vae_name=cfg.selfie_comfy_vae, lora_name=cfg.selfie_comfy_lora,
+            lora_strength=cfg.selfie_comfy_lora_strength,
+            prompt_trigger=cfg.selfie_comfy_trigger)
+        if not backend.health():
+            log.warning("selfies: remote ComfyUI is unavailable — using mock backend")
+            backend, status = make_backend("mock"), "mock (comfyui unavailable — placeholder)"
     else:
         backend = make_backend(name)
 
@@ -281,8 +294,12 @@ class SelfieLab:
         self._resident = (
             getattr(getattr(forge, "backend", None), "RESIDENT_FREE_GIB",
                     None) is not None)
+        # A camera on the LAN GPU (ComfyUI on the gaming PC) takes that card's
+        # lock instead: the story TTS renders on the same 12 GB (world/vram.py).
+        remote = bool(getattr(getattr(forge, "backend", None), "REMOTE_GPU", False))
         self._render_lock = (
-            shared_render_lock() if self._resident else asyncio.Lock())
+            shared_render_lock() if self._resident
+            else remote_gpu_lock() if remote else asyncio.Lock())
 
     def _compose(self, kind: str, kw: dict):
         """Which of the two cameras this contract asked for (§7.6).

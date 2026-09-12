@@ -30,7 +30,7 @@ def _lab(**kw) -> StoryLab:
     return StoryLab(utility=None, post=lambda *a, **k: None, root=kw.pop("root"),
                     voice=QwenVoice(speech_url="http://tts",
                                     supervisor_url="http://tts:8092",
-                                    ref_audio="file:///ref.wav", ref_text="Hallo."),
+                                    speaker="sohee"),
                     **kw)
 
 
@@ -55,7 +55,7 @@ def test_the_card_is_given_back_even_when_the_load_timed_out(tmp_path, monkeypat
 
     monkeypatch.setattr(stories.httpx, "AsyncClient", Client)
     with pytest.raises(httpx.ReadTimeout):
-        asyncio.run(_lab(root=tmp_path)._tts("Ein Satz.", tmp_path / "s.wav"))
+        asyncio.run(_lab(root=tmp_path)._tts([("Ein Satz.", "")], tmp_path / "s.wav"))
     assert calls == ["an", "aus"]
 
 
@@ -66,13 +66,13 @@ def test_the_story_voice_waits_while_a_render_holds_the_card(tmp_path):
         lock = asyncio.Lock()
         lab = _lab(root=tmp_path, gpu_lock=lock)
 
-        async def on_card(text, target):
+        async def on_card(sections, target):
             order.append("tts")
             return target
 
         lab._tts_on_card = on_card
         await lock.acquire()                      # a render is running
-        job = asyncio.create_task(lab._tts("x", tmp_path / "s.wav"))
+        job = asyncio.create_task(lab._tts([("x", "")], tmp_path / "s.wav"))
         await asyncio.sleep(0.01)
         order.append("render done")
         lock.release()

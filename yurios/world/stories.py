@@ -100,9 +100,10 @@ class StoryLab:
         async with self._one_at_a_time:
             await self._run(story_id, contract)
 
-    async def _complete(self, prompt: str, *, max_tokens: int = 900) -> str:
+    async def _complete(self, prompt: str, *, max_tokens: int = 900,
+                        persona: bool = True) -> str:
         provider = self.utility() if callable(self.utility) else self.utility
-        if self.character_context is not None:
+        if persona and self.character_context is not None:
             soul = self.character_context() if callable(self.character_context) else self.character_context
             prompt = ("Du schreibst als Teil der Figur Nova. Ihre Persona ist verbindlich: "
                       f"{getattr(soul, 'personality', '')}\n"
@@ -148,6 +149,40 @@ class StoryLab:
             return {"title": theme, "characters": [],
                     "scenes": [{"purpose": p} for p in _BARE_ARC]}
 
+    async def _state_update(self, state: str, scene: str) -> str:
+        """Carry the story's *state* forward, not its last 1200 characters.
+
+        The old hand-off was the tail of the previous scene — surface text, not
+        state. Nothing told the writer what had already been established, so it
+        established it again: the live story of 2026-09-12 said "Wald" 24 times
+        because every scene re-introduced the forest. The long-form literature
+        is unanimous that a running record belongs here — who is where, what
+        changed, what is still open — and that a detailed plan plus a carried
+        state is what buys coherence (DOC, +22.5 points over a three-beat plan).
+
+        Never raises. A state note that fails falls back to the old tail: worse,
+        but not broken, and it says so in the log."""
+        try:
+            note = await self._complete(
+                "Führe die Zustandsakte einer Geschichte fort. Antworte in "
+                "höchstens 120 Wörtern, in vier Zeilen mit genau diesen "
+                "Anfängen:\n"
+                "ORT: wo die Figuren jetzt sind\n"
+                "FIGUREN: wer dabei ist und was sich an ihnen geändert hat\n"
+                "GESCHEHEN: die Tatsachen, die jetzt feststehen\n"
+                "OFFEN: was noch ungelöst ist\n\n"
+                f"Bisherige Akte:\n{state}\n\nNeue Szene:\n{scene[-2500:]}",
+                max_tokens=400, persona=False)
+            note = self._clean(note)
+            if note and "ORT" in note.upper():
+                return note
+            log.warning("story state note came back unusable; falling back "
+                        "to the previous scene's tail")
+        except Exception:
+            log.warning("story state note failed; falling back to the tail",
+                        exc_info=True)
+        return scene[-1200:]
+
     @staticmethod
     def _clean(text: str) -> str:
         text = re.sub(r"<[^>]+>", "", text)
@@ -172,6 +207,10 @@ class StoryLab:
         avoid = str(contract.get("avoid") or "").strip()
         her_scenes = [str(s).strip() for s in (contract.get("scenes") or [])
                       if str(s).strip()]
+        # One instruction per scene, hers. The voice honours it per request, so
+        # this is what makes scene 7 sound unlike scene 2 instead of the whole
+        # story arriving in one register.
+        her_moods = [str(m).strip() for m in (contract.get("scene_moods") or [])]
         try:
             if her_scenes:
                 # She planned it. No second opinion: a planner that re-plans her
@@ -191,6 +230,9 @@ class StoryLab:
             if not purposes:
                 purposes = [{"purpose": "Erzähle die Geschichte weiter."}] * self.scenes
             parts: list[str] = []
+            # Aligned with `parts`: each text carries the instruction it is to
+            # be spoken with ("" = her plain narrating register).
+            moods: list[str] = []
             state = "Noch keine Szene erzählt."
             for i, purpose in enumerate(purposes):
                 last = i == len(purposes) - 1
@@ -227,7 +269,8 @@ class StoryLab:
                     max_tokens=SCENE_MAX_TOKENS)
                 scene = _trim_to_sentence(self._clean(scene))
                 parts.append(scene)
-                state = scene[-1200:]
+                moods.append(her_moods[i] if i < len(her_moods) else "")
+                state = await self._state_update(state, scene)
             story = "\n\n".join(parts)
             # Do not let a short model completion masquerade as the configured
             # long-form contract. Add bounded continuation scenes before the
@@ -254,12 +297,20 @@ class StoryLab:
                 if _words(extra) == 0:
                     raise RuntimeError("Story-Modell lieferte keine Erweiterung.")
                 parts.append(extra)
+                moods.append("")
                 story = "\n\n".join(parts)
             # Always give the host model a dedicated finale pass. A syntactically
             # complete last sentence is not the same thing as a resolved ending.
             needs_finale = True
             if needs_finale:
                 tail = story[-3200:]
+                # It is told to close every open thread, so it has to be able
+                # to see them: the outline says what was promised and the state
+                # note says what is still unresolved. Showing it only the last
+                # 3200 characters asked it to tie off threads it could not know.
+                bogen = "; ".join(
+                    str(s.get("purpose", "")) if isinstance(s, dict) else str(s)
+                    for s in (plan.get("scenes") or []))
                 extra = await self._complete(
                     "Schreibe den abschließenden Abschnitt dieser deutschsprachigen Geschichte. "
                     "Der bisherige Text kann mitten in einem Satz abbrechen. Setze genau dort "
@@ -267,19 +318,27 @@ class StoryLab:
                     "ein klares, befriedigendes Ende. Schreibe mindestens 220 Wörter, nur "
                     "Erzähltext, keine Zusammenfassung und keine Überschrift. Der allerletzte "
                     "Satz muss vollständig sein und mit Punkt, Fragezeichen oder Ausrufezeichen "
-                    "enden. Hier ist der bisherige Schluss als Kontext:\n\n"
-                    f"{tail}", max_tokens=SCENE_MAX_TOKENS)
-                story += "\n\n" + self._clean(extra)
+                    "enden.\n\n"
+                    f"Der geplante Bogen der ganzen Geschichte: {bogen}\n\n"
+                    f"Stand der Dinge, besonders das Offene:\n{state}\n\n"
+                    f"Hier ist der bisherige Schluss als Kontext:\n\n{tail}",
+                    max_tokens=SCENE_MAX_TOKENS)
+                parts.append(self._clean(extra))
+                moods.append("")
+                story = "\n\n".join(parts)
             # A provider may still truncate despite the explicit contract. Never
             # publish an audio file that ends halfway through a sentence: drop
             # only the incomplete tail and add a deterministic closing sentence.
-            if not _has_complete_sentence(story):
-                boundaries = [story.rfind(mark) for mark in ".!?…"]
-                last_boundary = max(boundaries)
-                if last_boundary >= 0:
-                    story = story[:last_boundary + 1].rstrip()
-                story += ("\n\nUnd damit war ihre gemeinsame Geschichte für diesen Abend "
-                          "zu Ende.")
+            if not _has_complete_sentence(story) and parts:
+                # Trim the PART, not just the joined text: the audio is spoken
+                # from the parts, so trimming only `story` would publish a text
+                # that ends cleanly and a recording that still reads the broken
+                # tail out loud.
+                parts[-1] = _trim_to_sentence(parts[-1])
+                parts.append("Und damit war ihre gemeinsame Geschichte für "
+                             "diesen Abend zu Ende.")
+                moods.append("")
+                story = "\n\n".join(parts)
             story_path = folder / "story.md"
             story_path.write_text(f"# {plan.get('title', theme)}\n\n{story}\n", encoding="utf-8")
             if self.remember is not None:
@@ -294,7 +353,8 @@ class StoryLab:
                            f"Anfang: {story[:900]}\nEnde: {story[-900:]}")
                 await self.remember(story_id, title, theme, summary,
                                     str(story_path))
-            audio_path = await self._tts(story, folder / "story.wav")
+            audio_path = await self._tts(list(zip(parts, moods)),
+                                         folder / "story.wav")
             audio_path = await self._telegram_audio(audio_path)
             self.post("assistant", f"Deine Geschichte „{plan.get('title', theme)}“ ist fertig und vertont.",
                       audio_path=str(audio_path), proactive=True,
@@ -306,7 +366,7 @@ class StoryLab:
                       proactive=True, channel=contract.get("_channel"),
                       corr_id=contract.get("_corr_id"))
 
-    async def _tts(self, text: str, target: Path) -> Path:
+    async def _tts(self, sections: list[tuple[str, str]], target: Path) -> Path:
         # The TTS server renders on the gaming PC's card, which the ComfyUI
         # camera shares: the whole load -> speak -> unload holds that card's
         # lock, so a photo waits for the voice instead of starving it.
@@ -314,18 +374,26 @@ class StoryLab:
         if lock.locked():
             log.info("story TTS waits for the LAN GPU (a render is running)")
         async with lock:
-            return await self._tts_on_card(text, target)
+            return await self._tts_on_card(sections, target)
 
-    async def _tts_on_card(self, text: str, target: Path) -> Path:
+    async def _tts_on_card(self, sections: list[tuple[str, str]],
+                           target: Path) -> Path:
         pcm = bytearray()
         rate = self.voice.sample_rate
-        parts = passages(text)
+        # One (passage, instruction) pair per request. A scene may be longer
+        # than one request may carry, so it becomes several passages — all
+        # spoken in that scene's register, which is what makes the tense scene
+        # sound tense and the one after it not.
+        parts: list[tuple[str, str]] = [
+            (passage, instruct)
+            for text, instruct in sections
+            for passage in passages(text)]
         timeout = httpx.Timeout(connect=15, read=600, write=30, pool=30)
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             try:
                 await self.voice.power_on(client)
-                for index, passage in enumerate(parts):
-                    pcm.extend(await self.voice.speak(client, passage))
+                for index, (passage, instruct) in enumerate(parts):
+                    pcm.extend(await self.voice.speak(client, passage, instruct))
                     # A short natural breath between passages. PCM is 16-bit
                     # mono, so this is silent audio, not a blocking sleep.
                     if index < len(parts) - 1:
@@ -336,7 +404,8 @@ class StoryLab:
                 # nobody released (2026-09-11). Unloading is what gives the
                 # card back — 7336 MiB, measured — so it is not optional.
                 await self.voice.power_off(client)
-        log.info("story audio: %d passages, %.1f s", len(parts), len(pcm) / 2 / rate)
+        log.info("story audio: %d passages (%d with a register), %.1f s",
+                 len(parts), sum(1 for _, i in parts if i), len(pcm) / 2 / rate)
         with wave.open(str(target), "wb") as out:
             out.setnchannels(1); out.setsampwidth(2); out.setframerate(rate)
             out.writeframes(bytes(pcm))

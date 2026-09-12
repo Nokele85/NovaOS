@@ -18,7 +18,7 @@ from yurios.world.qwenvoice import SPEAK_MAX_WORDS, QwenVoice, passages
 
 def _voice(**kw) -> QwenVoice:
     return QwenVoice(speech_url="http://speak", supervisor_url="http://power",
-                     ref_audio="file:///ref.wav", ref_text="Hallo.", **kw)
+                     speaker="sohee", **kw)
 
 
 # -- splitting ------------------------------------------------------------
@@ -111,12 +111,20 @@ def test_the_supervisor_token_travels_but_the_speech_call_is_plain():
     assert _voice()._headers == {}
 
 
-def test_the_clone_reference_and_its_transcript_are_sent_together():
-    body = _voice().speak.__self__._body("Ein Satz.")
-    assert body["task_type"] == "Base"          # clone, not design-per-call
-    assert body["ref_audio"] == "file:///ref.wav"
-    assert body["ref_text"] == "Hallo."
-    assert body["language"] == "German"
-    assert body["response_format"] == "pcm"
+def test_the_speaker_rides_on_every_call_and_the_register_only_when_given():
+    """CustomVoice, not Base: the speaker is the identity and `instructions` is
+    the per-scene register. Base ignored instructions, which is why 23 minutes
+    of story arrived in one flat tone (measured 2026-09-12)."""
+    plain = _voice()._body("Ein Satz.")
+    assert plain["voice"] == "sohee"
+    assert plain["language"] == "German"
+    assert plain["response_format"] == "pcm"
+    assert "instructions" not in plain          # no register = her plain voice
+    assert plain["task_type"] == "CustomVoice"     # the server validates this
+    assert "ref_audio" not in plain
     # Not streamed on purpose: the model plans prosody over a whole request.
-    assert "stream" not in body
+    assert "stream" not in plain
+
+    tense = _voice()._body("Ein Satz.", "gedämpft und spannungsvoll")
+    assert tense["instructions"] == "gedämpft und spannungsvoll"
+    assert tense["voice"] == "sohee"
