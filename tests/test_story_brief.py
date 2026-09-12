@@ -715,3 +715,25 @@ async def test_the_repair_may_turn_a_report_into_spoken_words(tmp_path):
     p = util.prompts[-1]
     assert "in gesprochene Rede verwandeln" in p
     assert "Ich bin müde" in p              # das Beispiel, beim Namen genannt
+
+
+async def test_she_plans_what_they_talk_about_in_each_scene(tmp_path):
+    """Turning reported speech around afterwards moved the spoken share from
+    10% to 15% and stopped there. A story written with little speech in it
+    cannot be talked into having more — so the talking is planned."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path),
+               {"theme": "Heimweg", "scenes": ["Der Weg.", "Die Wohnung."],
+                "scene_talk": ["ob sie den letzten Bus noch kriegen",
+                               "warum er den ganzen Abend so still war"]})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert "sprechen die beiden über: ob sie den letzten Bus noch kriegen" in szenen[0]
+    assert "warum er den ganzen Abend so still war" in szenen[1]
+    assert all("als gesprochene Rede aus, nicht als Bericht" in p for p in szenen)
+
+
+async def test_a_scene_without_a_planned_conversation_is_not_given_an_empty_one(tmp_path):
+    util = Recorder()
+    await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert szenen and not any("sprechen die beiden über" in p for p in szenen)
