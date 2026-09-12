@@ -36,6 +36,11 @@ class Recorder:
 
     async def complete(self, messages, **kwargs):
         self.prompts.append(messages[-1]["content"])
+        # The per-scene check runs between every pair of scenes. Answering it
+        # cleanly here keeps it out of the scripted answers, so a test can go
+        # on saying what the SCENES come back as.
+        if "Du prüfst EINE Szene" in messages[-1]["content"]:
+            return "AUFTRAG: erfüllt\nVORGRIFF: nein"
         return self._answers.pop(0) if self._answers else (
             "Sie gingen weiter und kamen an. Dann war es still.")
 
@@ -894,3 +899,65 @@ async def test_the_reviewer_is_handed_the_suspects_but_not_a_verdict(tmp_path):
     p = util.prompts[-1]
     assert "schlüssel in Absatz 2 und 3" in p
     assert "ist es dasselbe Ereignis ein zweites Mal, oder gehört es dorthin" in p
+
+
+# -- a scene is checked before it counts ----------------------------------
+
+async def test_a_scene_that_did_its_job_is_not_touched(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    lab._complete = lambda *a, **kw: _antwort("AUFTRAG: erfüllt\nVORGRIFF: nein")
+    assert await lab._verify_scene("Text.", "davor", "Auftrag", "danach") == ""
+
+
+async def test_a_scene_that_went_somewhere_else_is_named(tmp_path):
+    """Passage 2 walked into the stairwell it was not due in, and passage 3
+    then unlocked the same door a second time. The end-of-story review named
+    37 other sentences and missed both — it reads for contradictions and
+    cannot know where a scene was supposed to be."""
+    lab = _lab(Recorder(), tmp_path)
+    lab._complete = lambda *a, **kw: _antwort(
+        "AUFTRAG: verfehlt kein Gehweg, ihr seid schon im Hauseingang\n"
+        "VORGRIFF: JA das Aufschließen gehört in die nächste Szene")
+    maengel = await lab._verify_scene("Text.", "davor", "Gehweg", "Haustür")
+    assert "kein Gehweg" in maengel and "Aufschließen" in maengel
+
+
+async def test_leading_to_the_next_scene_is_allowed_and_said_so(tmp_path):
+    """Asked whether a scene *touches* the next one's material, the check fired
+    on 6 to 7 of 8 scenes in every story measured — which is not a finding,
+    it is the handover storytelling is made of."""
+    util = Recorder("AUFTRAG: erfüllt\nVORGRIFF: nein")
+    lab = _lab(util, tmp_path)
+    await lab._verify_scene("Text.", "davor", "Auftrag", "danach")
+    p = util.prompts[-1]
+    assert "darf zur Tür führen" in p
+    assert "Nur das Erledigen ist ein Verstoß, nicht das Hinführen" in p
+
+
+async def test_a_failed_check_lets_the_scene_stand(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+
+    async def kaputt(*a, **kw):
+        raise RuntimeError("kein Modell")
+
+    lab._complete = kaputt
+    assert await lab._verify_scene("Text.", "d", "a", "n") == ""
+
+
+async def test_a_repair_that_loses_half_the_scene_is_refused(tmp_path):
+    """A repair that satisfies the brief and drops half the prose is not one."""
+    antworten = []
+
+    class Streng(Recorder):
+        async def complete(self, messages, **kwargs):
+            self.prompts.append(messages[-1]["content"])
+            if "Du prüfst EINE Szene" in messages[-1]["content"]:
+                return "AUFTRAG: verfehlt etwas fehlt\nVORGRIFF: nein"
+            antworten.append(1)
+            # erste Szene lang, die Reparatur viel zu kurz
+            return "Kurz." if len(antworten) > 1 else " ".join(["Wort"] * 60) + "."
+
+    lab = _lab(Streng(), tmp_path, scenes=1)
+    await _run(lab, {"theme": "Wald", "scenes": ["A."]})
+    md = next(tmp_path.glob("*/story.md")).read_text(encoding="utf-8")
+    assert "Kurz." not in md.split("\n\n")[1]

@@ -369,6 +369,54 @@ class StoryLab:
             max_tokens=300, persona=False)
         return self._clean(rules)
 
+    async def _verify_scene(self, scene: str, davor: str, auftrag: str,
+                            danach: str) -> str:
+        """What this scene failed to do, or "" if it did it.
+
+        Checked here rather than at the end, because a scene that went
+        somewhere else is the ground the next one builds on: passage 2
+        walked into the stairwell it was not due in, and passage 3 then
+        unlocked the same door a second time (live, 2026-09-12). The
+        end-of-story review missed both while naming 37 other sentences —
+        it reads for contradictions and cannot know where a scene was
+        supposed to be.
+
+        The forbidden half is deliberately narrow. Asked whether a scene
+        *touches* the next one's material, this fires on 6 to 7 of 8
+        scenes in every story measured — which is not a finding, it is
+        the handover that storytelling is made of. A scene may lead to
+        the door. It may not go through it and arrive upstairs.
+
+        A fifth of a cent for eight scenes, against 1.6 cents for the
+        end review that did not catch this."""
+        try:
+            antwort = await self._complete(
+                "Du prüfst EINE Szene gegen ihren Auftrag.\n\n"
+                f"Vorher galt: {davor}\n"
+                f"Diese Szene soll leisten: {auftrag}\n"
+                f"Die NÄCHSTE Szene ist: {danach}\n\n"
+                "Die nächste Szene darf angesteuert werden — eine Szene "
+                "darf zur Tür führen. Sie darf nicht hindurchgehen und "
+                "oben ankommen. Nur das Erledigen ist ein Verstoß, nicht "
+                "das Hinführen.\n\n"
+                "Antworte in genau zwei Zeilen:\n"
+                "AUFTRAG: erfüllt / verfehlt <was fehlt>\n"
+                "VORGRIFF: nein / JA <was aus der nächsten Szene schon "
+                "erledigt wird>\n\n"
+                f"Szene:\n{scene[:5000]}",
+                max_tokens=300, persona=False, temperature=0.2)
+        except Exception:
+            log.warning("scene check failed; the scene stands", exc_info=True)
+            return ""
+        maengel = []
+        for zeile in (antwort or "").splitlines():
+            gross = zeile.upper()
+            if gross.startswith("AUFTRAG") and "VERFEHLT" in gross:
+                maengel.append(zeile.strip())
+            elif gross.startswith("VORGRIFF") and ": JA" in gross:
+                maengel.append(zeile.strip())
+        return " | ".join(maengel)
+
     async def _review(self, parts: list[str], rules: str) -> dict[int, dict[int, str]]:
         """Read the whole story at once and name the sentences that break it.
 
@@ -728,7 +776,7 @@ class StoryLab:
                 gespraech = her_talk[i] if i < len(her_talk) else ""
                 umfang = SCENE_LENGTHS.get(
                     her_lengths[i] if i < len(her_lengths) else "", SCENE_WORDS)
-                scene = await self._complete(
+                szenen_prompt = (
                     "Schreibe die nächste Szene eines Hörspiels auf Deutsch. "
                     "Ein Hörspiel lebt von gesprochener Rede: Was die beiden "
                     "erleben, erfährt man vor allem daran, was sie zueinander "
@@ -778,10 +826,40 @@ class StoryLab:
                     + f"Umfang: {umfang} Wörter; beende die Szene mit einem "
                     "vollständigen Satz. "
                     + ("Diese Szene ist die letzte und muss alle offenen "
-                       "Handlungsfäden schließen. " if last else ""),
-                    max_tokens=SCENE_MAX_TOKENS,
+                       "Handlungsfäden schließen. " if last else ""))
+                scene = await self._complete(
+                    szenen_prompt, max_tokens=SCENE_MAX_TOKENS,
                     temperature=WRITING_TEMPERATURE)
                 scene = _trim_to_sentence(self._clean(scene))
+                # Checked before it counts. A scene that went somewhere
+                # else is the ground the next one builds on, and by the
+                # end of the story that is no longer repairable — the
+                # end review read past exactly this twice.
+                maengel = await self._verify_scene(
+                    scene, state, _purpose_text(purpose), naechste or "keine")
+                if maengel:
+                    log.info("story %s scene %d: %s — one repair",
+                             story_id, i + 1, maengel[:120])
+                    zweiter = _trim_to_sentence(self._clean(
+                        await self._complete(
+                            szenen_prompt + "\n\nEin erster Versuch hat den "
+                            f"Auftrag verfehlt: {maengel} Schreibe die Szene "
+                            "neu und halte dich diesmal an ihren Auftrag.",
+                            max_tokens=SCENE_MAX_TOKENS,
+                            temperature=WRITING_TEMPERATURE)))
+                    # Only if it is actually better. A repair that fixes
+                    # the brief and loses half the scene is not one.
+                    if _words(zweiter) >= 0.7 * _words(scene):
+                        rest = await self._verify_scene(
+                            zweiter, state, _purpose_text(purpose),
+                            naechste or "keine")
+                        if not rest:
+                            log.info("story %s scene %d: repaired",
+                                     story_id, i + 1)
+                            scene = zweiter
+                        else:
+                            log.info("story %s scene %d: still %s — kept the "
+                                     "first", story_id, i + 1, rest[:80])
                 parts.append(scene)
                 moods.append(her_moods[i] if i < len(her_moods) else "")
                 if not rules:
