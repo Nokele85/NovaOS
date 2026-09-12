@@ -75,12 +75,18 @@ def _git_env(vault: Path) -> dict | None:
     if not shim.exists():
         home = Path.home()
         xdg = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+        # Forward slashes, on every platform. Git reads a config value with
+        # backslash escapes, so a Windows path writes C:\Users\... as the
+        # escapes \U and \b and the file is rejected whole ("bad config line
+        # 2"), which took every vault write on Windows down with it. Git
+        # accepts forward slashes in a path there, and on POSIX `as_posix()`
+        # changes nothing.
         shim.write_text(
             "[include]\n"
-            f"\tpath = {home / '.gitconfig'}\n"          # missing files are
-            f"\tpath = {xdg / 'git' / 'config'}\n"       # silently skipped
+            f"\tpath = {(home / '.gitconfig').as_posix()}\n"     # missing files
+            f"\tpath = {(xdg / 'git' / 'config').as_posix()}\n"  # are skipped
             "[safe]\n"
-            f"\tdirectory = {vault_abs}\n",
+            f"\tdirectory = {vault_abs.as_posix()}\n",
             encoding="utf-8")
     return os.environ | {"GIT_CONFIG_GLOBAL": str(shim)}
 
