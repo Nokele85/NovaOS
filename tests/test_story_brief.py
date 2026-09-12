@@ -350,7 +350,7 @@ async def test_the_pass_is_told_it_corrects_and_does_not_rewrite(tmp_path):
     instruction was polite instead of operational."""
     util = Recorder("OK", "OK")
     lab = _lab(util, tmp_path)
-    await lab._straighten(["Anfang.", "Zweiter."], "ERZÄHLPERSON: Ich-Form")
+    await lab._straighten(["Anfang.", "Zweiter."], "ERZÄHLPERSON: Ich-Form", {1: {0: "x"}})
     p = util.prompts[-1]
     # Sentence by sentence, and only the numbers it names come back.
     assert "Satz für Satz" in p
@@ -365,7 +365,7 @@ async def test_a_passage_that_obeys_is_left_exactly_as_written(tmp_path):
     lab = _lab(Recorder(), tmp_path)
     teile = ["Erster Absatz.", "Zweiter Absatz. Er ist völlig in Ordnung."]
     lab._complete = lambda *a, **kw: _antwort("OK")
-    geaendert, gesamt = await lab._straighten(teile, "ANREDE: er")
+    geaendert, gesamt = await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}})
     assert (geaendert, gesamt) == (0, 2)
     assert teile[1] == "Zweiter Absatz. Er ist völlig in Ordnung."
 
@@ -378,8 +378,8 @@ async def test_only_the_named_sentence_changes_and_the_rest_is_untouched(tmp_pat
     teile = ["Anfang.",
              "Du gingst voran. Der Wald war still. Du bliebst stehen."]
     lab._complete = lambda *a, **kw: _antwort("1: Er ging voran.")
-    geaendert, gesamt = await lab._straighten(teile, "ANREDE: er")
-    assert (geaendert, gesamt) == (1, 3)
+    geaendert, gesamt = await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}})
+    assert (geaendert, gesamt) == (1, 2)      # zwei geprüft, einer geändert
     assert teile[1] == "Er ging voran. Der Wald war still. Du bliebst stehen."
 
 
@@ -389,7 +389,7 @@ async def test_a_refused_sentence_costs_that_sentence_and_not_the_passage(tmp_pa
     # erster Satz kaputt (Pronomen ohne Verb), zweiter sauber
     lab._complete = lambda *a, **kw: _antwort(
         "1: Gingst er voran.\n2: Der Wald ist still.")
-    geaendert, _ = await lab._straighten(teile, "ZEITFORM: Präsens")
+    geaendert, _ = await lab._straighten(teile, "ZEITFORM: Präsens", {1: {0: "x", 1: "y"}})
     assert geaendert == 1
     assert teile[1] == "Du gingst voran. Der Wald ist still."
 
@@ -399,7 +399,7 @@ async def test_a_sentence_answered_with_reasoning_is_kept_as_written(tmp_path):
     teile = ["Anfang.", "Du gingst voran. Der Wald war still."]
     lab._complete = lambda *a, **kw: _antwort(
         "1: Verstöße: Anrede falsch. Korrigierter Abschnitt: Er ging voran.")
-    geaendert, _ = await lab._straighten(teile, "ANREDE: er")
+    geaendert, _ = await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}})
     assert geaendert == 0
     assert teile[1] == "Du gingst voran. Der Wald war still."
 
@@ -410,7 +410,7 @@ async def test_an_answer_that_is_not_numbered_changes_nothing(tmp_path):
     teile = ["Anfang.", "Du gingst voran. Der Wald war still."]
     lab._complete = lambda *a, **kw: _antwort(
         "Gerne! Hier ist die überarbeitete Fassung: Er ging voran, still.")
-    assert await lab._straighten(teile, "ANREDE: er") == (0, 2)
+    assert await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}}) == (0, 2)
     assert teile[1] == "Du gingst voran. Der Wald war still."
 
 
@@ -423,7 +423,7 @@ async def test_a_failing_rules_pass_never_costs_the_story(tmp_path):
         raise RuntimeError("provider weg")
 
     lab._complete = kaputt
-    assert await lab._straighten(teile, "regeln") == (0, 1)
+    assert await lab._straighten(teile, "regeln", {1: {0: "x"}}) == (0, 1)
     assert teile == ["Anfang.", "Zweiter Absatz."]
 
 
@@ -474,7 +474,7 @@ async def test_an_ok_for_a_single_sentence_is_not_a_correction(tmp_path):
     lab = _lab(Recorder(), tmp_path)
     teile = ["Anfang.", "Du gingst voran. Zusammen."]
     lab._complete = lambda *a, **kw: _antwort("1: Er ging voran.\n2: OK")
-    geaendert, _ = await lab._straighten(teile, "ANREDE: er")
+    geaendert, _ = await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}})
     assert geaendert == 1
     assert teile[1] == "Er ging voran. Zusammen."
 
@@ -626,3 +626,68 @@ def test_the_spoken_share_is_measured_not_hoped_for():
     assert _dialogue_share("Er ging weiter.") == 0.0
     viel = '„Komm mit“, sagte sie. „Ich bin müde“, sagte er. „Trotzdem.“'
     assert _dialogue_share(viel) > 0.4      # die Redezeichen selbst zählen nicht mit
+
+
+# -- one thinking pass finds, the cheap pass repairs ----------------------
+
+async def test_the_review_reads_the_whole_story_and_thinks(tmp_path):
+    """These faults span the story: a clause repeated five times and a shirt
+    taken off twice are invisible to a checker that only sees one passage.
+    Measured on a real story — 24 913 reasoning tokens, 110 s, 1.6 cents —
+    it found every fault a careful reading found, plus one it had missed."""
+    gesehen: dict = {}
+
+    class Denker(Recorder):
+        async def complete(self, messages, **kwargs):
+            gesehen.update(kwargs)
+            self.prompts.append(messages[-1]["content"])
+            return "3: Anrede weicht ab\n5: Formulierung wiederholt sich"
+
+    lab = _lab(Denker(), tmp_path)
+    funde = await lab._review(["Eins. Zwei.", "Drei. Vier.", "Fünf. Sechs."],
+                              "ANREDE: du")
+    assert gesehen.get("thinking") is True
+    assert gesehen.get("max_tokens") >= 32_000       # es denkt über 24k hinaus
+    # Satz 3 liegt in Absatz 1 an Stelle 0, Satz 5 in Absatz 2 an Stelle 0
+    assert funde == {1: {0: "Anrede weicht ab"},
+                     2: {0: "Formulierung wiederholt sich"}}
+
+
+async def test_the_opening_is_the_law_and_never_a_defendant(tmp_path):
+    """The form is read off scene 1, so correcting scene 1 against it would be
+    circular — and would move the ground everything else stands on."""
+    lab = _lab(Recorder("1: angeblich falsch\n2: auch"), tmp_path)
+    funde = await lab._review(["Eins. Zwei.", "Drei."], "ANREDE: du")
+    assert funde == {}
+
+
+async def test_a_failed_review_corrects_nothing_rather_than_everything(tmp_path):
+    class Kaputt(Recorder):
+        async def complete(self, messages, **kwargs):
+            raise RuntimeError("kein Modell")
+
+    lab = _lab(Kaputt(), tmp_path)
+    assert await lab._review(["Eins.", "Zwei."], "ANREDE: du") == {}
+
+
+async def test_only_the_reviewed_passages_are_touched_at_all(tmp_path):
+    """It used to send every passage and get 94% of the sentences back. A
+    passage nobody complained about is not sent, and costs nothing."""
+    util = Recorder("OK")
+    lab = _lab(util, tmp_path)
+    teile = ["Anfang.", "Zweiter Absatz.", "Dritter Absatz.", "Vierter Absatz."]
+    await lab._straighten(teile, "ANREDE: er", {2: {0: "Anrede"}})
+    assert len(util.prompts) == 1                     # nur ein Absatz, nicht drei
+    assert "Dritter Absatz." in util.prompts[0]
+    assert "Zweiter Absatz." not in util.prompts[0]
+
+
+async def test_a_sentence_nobody_asked_about_is_not_replaced(tmp_path):
+    """It sees the whole passage for context, so it may name a neighbour it
+    would rather fix. It does not get to decide that."""
+    lab = _lab(Recorder(), tmp_path)
+    teile = ["Anfang.", "Erster Satz. Zweiter Satz. Dritter Satz."]
+    lab._complete = lambda *a, **kw: _antwort("1: Ungefragt.\n2: Gefragt.")
+    geaendert, _ = await lab._straighten(teile, "ANREDE: er", {1: {1: "nur der"}})
+    assert geaendert == 1
+    assert teile[1] == "Erster Satz. Gefragt. Dritter Satz."

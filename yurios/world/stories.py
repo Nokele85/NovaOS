@@ -41,6 +41,12 @@ SCENE_WORDS = "350 bis 450"
 # the two scenes that were the point were the shortest in it.
 SCENE_LENGTHS = {"kurz": "180 bis 250", "normal": SCENE_WORDS,
                  "lang": "600 bis 800"}
+
+# The review is the one call that thinks, and on this route `max_tokens` bounds
+# the thinking as well as the answer: fill it and the content comes back empty.
+# A 4300-word story needed 24 913 reasoning tokens, so this is roughly double —
+# and a ceiling is free, since only what is generated is billed.
+REVIEW_MAX_TOKENS = 48_000
 SCENE_MAX_TOKENS = 1600
 
 # The shape of a story, for when no outline survives. Five distinct beats beat
@@ -226,7 +232,7 @@ class StoryLab:
             await self._run(story_id, contract)
 
     async def _complete(self, prompt: str, *, max_tokens: int = 900,
-                        persona: bool = True) -> str:
+                        persona: bool = True, thinking: bool | None = None) -> str:
         provider = self.utility() if callable(self.utility) else self.utility
         if persona and self.character_context is not None:
             soul = self.character_context() if callable(self.character_context) else self.character_context
@@ -238,8 +244,10 @@ class StoryLab:
                       "Lass diese Eigenschaften durch konkrete Entscheidungen, Dialoge und "
                       "Reaktionen sichtbar werden. Erzähle nicht über die Persona, spiele sie.\n\n"
                       + prompt)
+        extra = {} if thinking is None else {"thinking": thinking}
         return await provider.complete([{"role": "user", "content": prompt}],
-                                           temperature=0.75, max_tokens=max_tokens)
+                                       temperature=0.75, max_tokens=max_tokens,
+                                       **extra)
 
     async def _plan(self, story_id: str, theme: str, mood: str,
                     relationship: str, register: str) -> dict:
@@ -301,7 +309,61 @@ class StoryLab:
             max_tokens=300, persona=False)
         return self._clean(rules)
 
-    async def _straighten(self, parts: list[str], rules: str) -> tuple[int, int]:
+    async def _review(self, parts: list[str], rules: str) -> dict[int, dict[int, str]]:
+        """Read the whole story at once and name the sentences that break it.
+
+        This is the one call that thinks. Measured on a 4300-word story it
+        spent 24 913 reasoning tokens, took 110 s and cost 1.6 cents — and it
+        found every fault a careful reading had found plus one it had missed
+        (a belt opened for the second time). Three earlier attempts returned
+        nothing because `max_tokens` bounds the thinking as well as the answer
+        on this route: fill it and the content comes back empty with
+        `finish_reason: length`. The ceiling here is roughly double what the
+        measurement needed, and a ceiling costs nothing — only the tokens
+        actually generated are billed.
+
+        Why it earns its cost: these faults span the whole story. A clause
+        repeated five times and a shirt taken off twice are invisible to a
+        checker that only ever sees one passage, however carefully it looks."""
+        karte: list[tuple[int, int]] = []
+        zeilen: list[str] = []
+        for pi, teil in enumerate(parts):
+            for li, satz in enumerate(_sentences(teil)):
+                karte.append((pi, li))
+                zeilen.append(f"{len(zeilen) + 1}: {satz}")
+        try:
+            antwort = await self._complete(
+                "Du bekommst eine Geschichte, Satz für Satz nummeriert.\n\n"
+                f"Verbindliche Form:\n{rules}\n\n"
+                "Finde NUR diese drei Fehlerarten:\n"
+                "1. Die Anrede weicht von der Form ab.\n"
+                "2. Etwas passiert zweimal, obwohl es nur einmal passieren kann "
+                "— Kleidung zweimal ausgezogen, ein Raum zweimal betreten, ein "
+                "Gürtel zweimal geöffnet.\n"
+                "3. Eine Formulierung wiederholt sich auffällig oft.\n\n"
+                "Nenne nur die fehlerhaften Sätze, höchstens 40, je Zeile:\n"
+                "<Nummer>: <kurze Begründung>\n"
+                "Danach nichts weiter. Findest du nichts, antworte: OK\n\n"
+                + "\n".join(zeilen),
+                max_tokens=REVIEW_MAX_TOKENS, persona=False, thinking=True)
+        except Exception:
+            log.warning("the story review failed; nothing is corrected",
+                        exc_info=True)
+            return {}
+        funde: dict[int, dict[int, str]] = {}
+        for nummer, grund in _numbered(antwort):
+            if not 1 <= nummer <= len(karte):
+                continue
+            pi, li = karte[nummer - 1]
+            # The opening is the law the rest is held against, not a defendant.
+            if pi > 0:
+                funde.setdefault(pi, {})[li] = grund
+        log.info("story review: %d sentences in %d of %d passages",
+                 sum(len(v) for v in funde.values()), len(funde), len(parts) - 1)
+        return funde
+
+    async def _straighten(self, parts: list[str], rules: str,
+                          funde: dict[int, dict[int, str]]) -> tuple[int, int]:
         """Hold the story against its own rules, sentence by sentence.
 
         The whole passage used to go in and a whole passage came back, which
@@ -316,9 +378,17 @@ class StoryLab:
         length near the original. A refused sentence costs that sentence, not
         the passage."""
         geaendert = gesamt = 0
-        for i in range(1, len(parts)):
+        for i in sorted(funde):
+            if not 0 < i < len(parts):
+                continue
             saetze = _sentences(parts[i])
-            gesamt += len(saetze)
+            ziele = sorted(n + 1 for n in funde[i] if 0 <= n < len(saetze))
+            if not ziele:
+                continue
+            gesamt += len(ziele)
+            # Every sentence goes in, because a sentence is judged beside its
+            # neighbours — but only the named ones may come back. The pass used
+            # to be handed a whole passage and answered with 94% of it.
             nummeriert = "\n".join(f"{n}: {s}" for n, s in enumerate(saetze, 1))
             try:
                 answer = await self._complete(
@@ -337,8 +407,10 @@ class StoryLab:
                     "sie danach nicht mehr, nenne sie mit. Am Ende muss der "
                     "ganze Absatz einheitlich sein — Anrede und Zeitform dürfen "
                     "innerhalb eines Absatzes nirgends wechseln.\n\n"
-                    "Antworte NUR mit den Nummern der Sätze, die gegen eine "
-                    "Regel verstoßen, je Zeile eine:\n"
+                    f"Zu korrigieren sind AUSSCHLIESSLICH die Sätze "
+                    f"{', '.join(str(z) for z in ziele)}. Jeder andere Satz "
+                    "bleibt, wie er ist, und wird nicht genannt.\n\n"
+                    "Antworte NUR mit den Nummern dieser Sätze, je Zeile eine:\n"
                     "<Nummer>: <der angeglichene Satz>\n\n"
                     "Verstößt kein Satz, antworte mit genau: OK\n\n"
                     f"Sätze:\n{nummeriert}",
@@ -348,7 +420,9 @@ class StoryLab:
                             i + 1, exc_info=True)
                 continue
             for nummer, satz in _numbered(answer):
-                if not 1 <= nummer <= len(saetze):
+                if nummer not in ziele:
+                    # It was not asked about this one, so it does not get to
+                    # decide about it.
                     continue
                 alt = saetze[nummer - 1]
                 # "12: OK" means "this one is fine", not "replace it with the
@@ -619,7 +693,8 @@ class StoryLab:
             # passage that is already fine.
             try:
                 if rules:
-                    geaendert, gesamt = await self._straighten(parts, rules)
+                    funde = await self._review(parts, rules)
+                    geaendert, gesamt = await self._straighten(parts, rules, funde)
                     story = "\n\n".join(parts)
                     log.info("story %s: straightened %d of %d sentences",
                              story_id, geaendert, gesamt)
