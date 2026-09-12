@@ -132,6 +132,47 @@ def _dialogue_share(text: str) -> float:
     return gesprochen / max(len(text), 1)
 
 
+#: Function words carry no event, so they only make echoes look alike.
+_FUELLWOERTER = frozenset("""
+und der die das ein eine einen einem einer ich du er sie es mich dich mir dir
+sich nicht wie als auf den dem des zum zur mit von vor hinter über unter für
+ist war hat habe hast haben wird werden noch nur schon dann aber oder wenn
+weil dass sein ihre ihr mein dein bis aus bei nach seit doch ganz mehr sehr
+""".split())
+
+
+def _echoes(parts: list[str], hoechstens: int = 14) -> list[str]:
+    """Things that turn up in more than one passage.
+
+    Nouns, not word sequences. The fault this exists for is the same
+    event written twice in different words — "der Schlüssel dreht sich"
+    and "ich schließe auf" share nothing to match on, but both need the
+    key. A door that closes in two passages and a key that turns in
+    three went straight past the reviewer with 37 other sentences named
+    (live, 2026-09-12), and counting is what a computer is good at.
+
+    Suspects, not a verdict: a coat can be worn all evening and a bed
+    can be lain in twice. Only reading tells a repeat from a return."""
+    vor: dict[str, set[int]] = {}
+    for pi, teil in enumerate(parts, 1):
+        # German writes its nouns large, which is the whole parser we need.
+        for wort in re.findall(r"\b[A-ZÄÖÜ][a-zäöüß]{3,}\b", teil):
+            klein = wort.lower()
+            if klein not in _FUELLWOERTER:
+                vor.setdefault(klein, set()).add(pi)
+    # Few passages, and next to each other. A thing in nine passages is a
+    # motif; a thing in two adjoining ones is a scene that overshot into
+    # the next and a scene that did it again. Ranking by frequency finds
+    # hands and breath, which is the opposite of the question.
+    verdacht = []
+    for wort, ps in vor.items():
+        folge = sorted(ps)
+        if len(folge) == 2 and folge[1] - folge[0] == 1:
+            verdacht.append((folge, wort))
+    return [f"{w} in Absatz {folge[0]} und {folge[1]}"
+            for folge, w in sorted(verdacht)[:hoechstens]]
+
+
 def _mixed_address(saetze: list[str]) -> int:
     """How many sentences of a passage disagree with its own majority about
     whether the second figure is spoken to or spoken about.
@@ -345,6 +386,7 @@ class StoryLab:
         repeated five times and a shirt taken off twice are invisible to a
         checker that only ever sees one passage, however carefully it looks."""
         anteil = _dialogue_share("\n\n".join(parts)) * 100
+        verdacht = _echoes(parts)
         karte: list[tuple[int, int]] = []
         zeilen: list[str] = []
         for pi, teil in enumerate(parts):
@@ -369,7 +411,11 @@ class StoryLab:
                 "dass das erreichbar wird — aber nur solche, in denen wirklich "
                 "jemand etwas sagt oder sagen könnte. Beschreibung, Handlung "
                 "und innere Sätze bleiben, was sie sind.\n\n"
-                "Nenne nur die fehlerhaften Sätze, höchstens 40, je Zeile:\n"
+                + (("Diese Dinge kommen in benachbarten Absätzen zweimal vor. "
+                    "Prüfe jedes einzeln: ist es dasselbe Ereignis ein zweites "
+                    "Mal, oder gehört es dorthin? Nur das Erste ist ein Fehler.\n"
+                    + "\n".join(verdacht) + "\n\n") if verdacht else "")
+                + "Nenne nur die fehlerhaften Sätze, höchstens 40, je Zeile:\n"
                 "<Nummer>: <kurze Begründung>\n"
                 "Danach nichts weiter. Findest du nichts, antworte: OK\n\n"
                 + "\n".join(zeilen),

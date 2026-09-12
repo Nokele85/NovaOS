@@ -857,3 +857,40 @@ async def test_the_dialogue_agent_is_pointed_at_the_quiet_stretches(tmp_path):
     p = util.prompts[-1]
     assert "wo lange nichts gesagt wird" in p
     assert "körperlichen und handlungsdichten Abschnitten" in p
+
+
+# -- what a computer finds better than a reader ---------------------------
+
+def test_a_thing_in_two_neighbouring_passages_is_a_suspect():
+    """Live, 2026-09-12: the key turned in passage 2 and again in 3, the
+    jackets fell in 3 and again in 4 — and the reviewer named 37 other
+    sentences and missed every one. Counting is what a computer is for."""
+    from yurios.world.stories import _echoes
+    teile = ["Wir gingen los.",
+             "Ich drehte den Schlüssel im Schloss.",
+             "Der Schlüssel drehte sich zweimal, dann gab das Schloss nach.",
+             "Die Jacke fiel zu Boden.",
+             "Ihre Jacke landete neben meiner."]
+    gefunden = " ".join(_echoes(teile))
+    assert "schlüssel in Absatz 2 und 3" in gefunden
+    assert "schloss in Absatz 2 und 3" in gefunden
+    assert "jacke in Absatz 4 und 5" in gefunden
+
+
+def test_a_thing_running_through_the_whole_story_is_a_motif_not_a_repeat():
+    """Ranking by frequency finds hands and breath, which is the opposite of
+    the question: a thing in nine passages belongs there."""
+    from yurios.world.stories import _echoes
+    teile = [f"Seine Hand lag auf meiner Schulter, Absatz {i}." for i in range(1, 7)]
+    assert _echoes(teile) == []
+
+
+async def test_the_reviewer_is_handed_the_suspects_but_not_a_verdict(tmp_path):
+    util = Recorder("OK")
+    lab = _lab(util, tmp_path)
+    await lab._review(["Anfang.",
+                       "Ich drehte den Schlüssel.",
+                       "Der Schlüssel drehte sich noch einmal."], "ANREDE: du")
+    p = util.prompts[-1]
+    assert "schlüssel in Absatz 2 und 3" in p
+    assert "ist es dasselbe Ereignis ein zweites Mal, oder gehört es dorthin" in p
