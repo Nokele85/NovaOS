@@ -165,6 +165,9 @@ class StoryLab:
         # server, and the first one's closing /unload would pull the model out
         # from under the second mid-synthesis. A second request queues.
         self._one_at_a_time = asyncio.Lock()
+        #: Did we turn the LAN voice on and not off again? Only the shutdown
+        #: path can know, and only it can hand the card back.
+        self._voice_on = False
 
     def start(self, contract: dict) -> str:
         story_id = contract.get("story_id") or uuid4().hex[:10]
@@ -173,6 +176,30 @@ class StoryLab:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return story_id
+
+    async def close(self) -> None:
+        """Stop a story in flight and give the card back.
+
+        A finished story unloads the voice in a `finally`, but a process that
+        is killed never reaches it: every story interrupted by a restart on
+        2026-09-12 left 8.4 GB on a card the camera shares, until whichever
+        later story happened to finish released it. Shutdown is the only place
+        that can see this, so it is the place that has to."""
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        if not self._voice_on:
+            return
+        # A fresh client, and not the job's: once a task is cancelled, an await
+        # inside its `finally` is cancelled too, so the unload has to happen
+        # out here or not at all.
+        timeout = httpx.Timeout(connect=10, read=120, write=30, pool=30)
+        try:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+                await self.voice.power_off(client)
+        finally:
+            self._voice_on = False
 
     async def _queued(self, story_id: str, contract: dict) -> None:
         async with self._one_at_a_time:
@@ -622,6 +649,7 @@ class StoryLab:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             try:
                 await self.voice.power_on(client)
+                self._voice_on = True
                 for index, (passage, instruct) in enumerate(parts):
                     pcm.extend(await self.voice.speak(client, passage, instruct))
                     # A short natural breath between passages. PCM is 16-bit
@@ -634,6 +662,7 @@ class StoryLab:
                 # nobody released (2026-09-11). Unloading is what gives the
                 # card back — 7336 MiB, measured — so it is not optional.
                 await self.voice.power_off(client)
+                self._voice_on = False
         log.info("story audio: %d passages (%d with a register), %.1f s",
                  len(parts), sum(1 for _, i in parts if i), len(pcm) / 2 / rate)
         with wave.open(str(target), "wb") as out:

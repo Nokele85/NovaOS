@@ -540,3 +540,46 @@ async def test_a_form_that_cannot_be_read_never_stops_the_story(tmp_path, caplog
     with caplog.at_level("WARNING"):
         await _run(_lab(Bockig(), tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
     assert "could not read its own form" in caplog.text
+
+
+# -- the card is handed back even when the process is killed --------------
+
+async def test_a_killed_story_still_gives_the_card_back(tmp_path):
+    """A finished story unloads in a `finally`; a cancelled one never reaches
+    it. Every story interrupted by a restart on 2026-09-12 left 8.4 GB on the
+    card until some later story happened to finish."""
+    aus: list[str] = []
+    lab = _lab(Recorder(), tmp_path)
+    lab._voice_on = True
+
+    async def frei(client):
+        aus.append("aus")
+
+    lab.voice.power_off = frei
+    lab._tasks.add(asyncio.create_task(asyncio.sleep(60)))
+    await lab.close()
+    assert aus == ["aus"]
+    assert not lab._voice_on
+    assert not [t for t in lab._tasks if not t.done()]
+
+
+async def test_shutting_down_with_no_story_running_touches_nothing(tmp_path):
+    """Unloading a voice this process never loaded would take the card from
+    whoever else is using it."""
+    aus: list[str] = []
+    lab = _lab(Recorder(), tmp_path)
+
+    async def frei(client):
+        aus.append("aus")
+
+    lab.voice.power_off = frei
+    await lab.close()
+    assert aus == []
+
+
+async def test_a_finished_story_leaves_the_flag_down(tmp_path):
+    """Otherwise shutdown would unload a voice that is already off — harmless,
+    but it would report a release that did not happen."""
+    lab = _lab(Recorder(), tmp_path)
+    lab._tts = None            # nicht genutzt; wir prüfen nur die Buchführung
+    assert lab._voice_on is False

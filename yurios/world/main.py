@@ -811,6 +811,11 @@ class Runtime:
             await self.selfies.close()
         if self.research is not None:
             await self.research.close()
+        if self.stories is not None:
+            # Before the task sweep below: a cancelled story cannot unload the
+            # voice from inside its own `finally`, so the card is handed back
+            # here or it stays taken (measured 2026-09-12: 8.4 GB).
+            await self.stories.close()
         for t in self._tasks:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)

@@ -530,6 +530,24 @@ async def test_telegram_sends_story_mp3_with_audio_mpeg_mime(tmp_path):
     await ch._client.aclose()
 
 
+async def test_a_delivered_recording_says_so_with_telegram_s_own_receipt(tmp_path, caplog):
+    """A failure was always loud and a success always silent, so "it arrived"
+    could only be inferred from the absence of a complaint — twice on
+    2026-09-12 the owner had to be asked. Telegram hands back the message_id
+    it filed; that is the proof."""
+    (tmp_path / "story.mp3").write_bytes(b"fake mp3")
+    tr = ScriptedTelegram()
+    ch = tg(tr, selfie_dir=tmp_path, sending_enabled=True)
+    with caplog.at_level("INFO"):
+        await ch._deliver_event({"type": "message", "role": "assistant",
+                                 "text": "fertig",
+                                 "audio_path": str(tmp_path / "story.mp3"),
+                                 "channel": "telegram"})
+    assert "telegram: delivered story.mp3" in caplog.text
+    assert "as message" in caplog.text
+    await ch._client.aclose()
+
+
 async def test_a_finished_recording_reaches_the_phone_whatever_asked_for_it(tmp_path):
     """Delivery, not company: a story voiced over twenty minutes belongs on the
     phone even when it was asked for in the room. Words still wait for opt-in."""
