@@ -507,3 +507,36 @@ def test_every_guard_actually_matches_what_it_is_for():
                            "Du lachtest."]) == 1
     assert _mixed_address(["Du gingst.", "Du bliebst, aber wieder.",
                            "Du lachtest."]) == 0
+
+
+async def test_every_scene_after_the_first_is_told_the_form_scene_one_set(tmp_path):
+    """Measured over five runs: no correction pass, however it was cut, beat
+    not breaking the form in the first place. Scene 1 decides it; every scene
+    after it is handed that decision verbatim."""
+    util = Recorder(
+        "Ich ging voran, und du bliebst dicht hinter mir.",      # Szene 1
+        "ERZÄHLPERSON: Ich-Form, ich ist Nova\nANREDE: du\nZEITFORM: Vergangenheit",
+        "Zweite Szene.")
+    await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert len(szenen) == 2
+    # The opening cannot be told a form that does not exist yet.
+    assert "Verbindliche Form" not in szenen[0]
+    assert "Verbindliche Form" in szenen[1]
+    assert "ANREDE: du" in szenen[1]
+    assert "ZEITFORM: Vergangenheit" in szenen[1]
+
+
+async def test_a_form_that_cannot_be_read_never_stops_the_story(tmp_path, caplog):
+    """It is a help, not a precondition. If scene 1 yields no form, the later
+    scenes simply decide for themselves, as they always did."""
+    class Bockig(Recorder):
+        async def complete(self, messages, **kwargs):
+            self.prompts.append(messages[-1]["content"])
+            if "woran sich der Rest halten muss" in messages[-1]["content"]:
+                raise RuntimeError("kein Modell")
+            return "Eine Szene, die weitergeht und endet."
+
+    with caplog.at_level("WARNING"):
+        await _run(_lab(Bockig(), tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
+    assert "could not read its own form" in caplog.text

@@ -415,6 +415,13 @@ class StoryLab:
             purposes = [s for s in (plan.get("scenes") or []) if s]
             if not purposes:
                 purposes = [{"purpose": "Erzähle die Geschichte weiter."}] * self.scenes
+            # The form scene 1 sets, carried to every scene after it. Derived
+            # once and passed verbatim rather than travelling in the state
+            # note, because the note is written by a model each time and the
+            # form is not negotiable. Repairing this afterwards was measured
+            # over five runs and never beat not breaking it: the address
+            # drifted because every scene decided again.
+            rules = ""
             parts: list[str] = []
             # Aligned with `parts`: each text carries the instruction it is to
             # be spoken with ("" = her plain narrating register).
@@ -433,6 +440,8 @@ class StoryLab:
                     "Schreibe die nächste Szene einer langen Geschichte auf Deutsch. "
                     f"Szene {i+1}/{len(purposes)}; {relationship} Thema: {theme}; "
                     f"Stimmung: {mood}. "
+                    + (f"Verbindliche Form, die Szene 1 gesetzt hat und die in "
+                       f"jedem Satz gilt: {rules} " if rules else "")
                     + (f"Figuren und gemeinsame Vorgeschichte: {characters_brief}. "
                        if characters_brief else "")
                     + f"Planabsicht: {_purpose_text(purpose)} "
@@ -468,6 +477,18 @@ class StoryLab:
                 scene = _trim_to_sentence(self._clean(scene))
                 parts.append(scene)
                 moods.append(her_moods[i] if i < len(her_moods) else "")
+                if not rules:
+                    # After the opening, not before: the first scene is what
+                    # decides the form, so there is nothing to state until it
+                    # exists.
+                    try:
+                        rules = await self._house_rules(scene)
+                        log.info("story %s writes to its own form: %s",
+                                 story_id, rules.replace(chr(10), " | ")[:160])
+                    except Exception:
+                        log.warning("story %s: could not read its own form from "
+                                    "scene 1; the later scenes decide for "
+                                    "themselves", story_id, exc_info=True)
                 state = await self._state_update(state, scene)
             story = "\n\n".join(parts)
             # Do not let a short model completion masquerade as the configured
@@ -540,7 +561,6 @@ class StoryLab:
             # against the rules its own opening set. Costs one short "OK" per
             # passage that is already fine.
             try:
-                rules = await self._house_rules(parts[0])
                 if rules:
                     geaendert, gesamt = await self._straighten(parts, rules)
                     story = "\n\n".join(parts)
