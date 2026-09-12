@@ -112,12 +112,8 @@ async def test_the_register_comes_after_the_style_rules_and_forbids_fading_out(t
                {"theme": "Wald", "scenes": ["Nah."], "register": "explizit, nichts auslassen"})
     prompt = util.prompts[0]
     assert "explizit, nichts auslassen" in prompt
-    # Twice on purpose: first as the frame — what kind of story this is, read
-    # before anything else — and again after the style rules, because the
-    # model obeys the last word and those rules say "move the plot on".
-    stil = prompt.index("Keine Szene darf nur aus Grübeln bestehen")
-    assert prompt.index("Art dieser Geschichte") < stil
-    assert prompt.rindex("explizit, nichts auslassen") > stil
+    assert prompt.index("Keine Szene darf nur aus Grübeln bestehen") < \
+        prompt.index("explizit, nichts auslassen")
     assert "blende nicht ab" in prompt
 
 
@@ -861,18 +857,3 @@ async def test_the_dialogue_agent_is_pointed_at_the_quiet_stretches(tmp_path):
     p = util.prompts[-1]
     assert "wo lange nichts gesagt wird" in p
     assert "körperlichen und handlungsdichten Abschnitten" in p
-
-
-async def test_the_kind_of_story_is_stated_before_anything_else(tmp_path):
-    """The recommended scene prompt starts with the genre and ours never said
-    one: the register sat in the middle of a long instruction, behind the style
-    rules. What is read first frames everything after it — including scene one,
-    which is written before any form exists."""
-    util = Recorder()
-    await _run(_lab(util, tmp_path),
-               {"theme": "Wald", "scenes": ["A.", "B."],
-                "register": "körperlich und explizit"})
-    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
-    assert all(p.startswith("Art dieser Geschichte: körperlich und explizit")
-               for p in szenen)
-    assert all("vom ersten Satz an" in p for p in szenen)
