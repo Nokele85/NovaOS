@@ -208,6 +208,41 @@ def _purpose_text(node) -> str:
     return str(node).strip()
 
 
+#: Who, not where — the chunk of an outline line that names the cast.
+_WER = re.compile(r"(?i)^(beide|wir|ich|er|sie|du|nova|benni|zu zweit|allein)\b")
+
+
+def _last_sentences(part: str, n: int = 2) -> str:
+    """The seam: the last couple of sentences of the scene before.
+
+    The state note says what has changed; it does not say what the listener
+    just heard. Handing the writer the actual last words is what lets the
+    next scene continue instead of setting up again."""
+    satzen = _sentences(part)
+    return " ".join(s.strip() for s in satzen[-n:]).strip()
+
+
+def _opening(purpose: str) -> str:
+    """The ground a scene has to start on: the first thing its brief names.
+
+    Her outline lines are a place, then who is in it, then the beats:
+    "Gehweg und Straße, beide, wir laufen schnell, Hände finden sich — die
+    Ungeduld wird körperlich." The scenes that went wrong all skipped that
+    first chunk and opened on a later beat, so it is the one part of the
+    line the writer is told to start on rather than merely to cover."""
+    kopf = purpose.split("—")[0].strip()
+    teile = [t.strip() for t in kopf.split(",") if t.strip()]
+    ort: list[str] = []
+    for teil in teile[:2]:
+        # "beide", "wir", a name: that says who, not where, and two scenes
+        # in the same flat are told apart by the second chunk ("Wohnung,
+        # Bett"), so the place is as many leading chunks as are places.
+        if _WER.match(teil):
+            break
+        ort.append(teil)
+    return ", ".join(ort)
+
+
 def _trim_to_sentence(text: str) -> str:
     """Cut a truncated completion back to its last complete sentence.
 
@@ -782,6 +817,8 @@ class StoryLab:
                 # the cheap half of DOC's controller.
                 naechste = "" if last else _purpose_text(purposes[i + 1])
                 gespraech = her_talk[i] if i < len(her_talk) else ""
+                anfang = _opening(_purpose_text(purpose))
+                naht = _last_sentences(parts[-1]) if parts else ""
                 umfang = SCENE_LENGTHS.get(
                     her_lengths[i] if i < len(her_lengths) else "", SCENE_WORDS)
                 szenen_prompt = (
@@ -798,8 +835,22 @@ class StoryLab:
                        if characters_brief else "")
                     + f"Planabsicht: {_purpose_text(purpose)} "
                     + f"Bisheriger Zustand: {state} "
-                    "Die Szenerie ist bereits eingeführt; führe sie nicht neu ein "
-                    "und fange nicht von vorne an. "
+                    # This used to read "the setting is introduced, do not
+                    # start over" and nothing else. It was aimed at scene 1
+                    # being retold, but read as "do not start at the start":
+                    # five of eight scenes opened on a later beat of their own
+                    # brief — on the pavement while he was already unlocking,
+                    # in bed before the scene that leads there. Naming the
+                    # ground the scene opens on costs one sentence and is the
+                    # thing three rounds of after-the-fact repair could not do.
+                    + (f"Diese Szene setzt hier ein: {anfang}. Der erste "
+                       "Absatz spielt dort und noch nicht weiter. "
+                       if anfang else "")
+                    + (f"Unmittelbar davor endete die Erzählung so: „{naht}“ "
+                       "Knüpfe dort an, ohne den Moment noch einmal zu "
+                       "erzählen. " if naht else "")
+                    + "Die Szenerie ist bereits eingeführt; führe sie nicht "
+                    "neu ein und erzähle nichts noch einmal, was schon dasteht. "
                     "Zeige überwiegend konkrete Handlung, Dialog und eine sichtbare Veränderung. "
                     + (f"In dieser Szene sprechen die beiden über: {gespraech} "
                        "Schreib das als gesprochene Rede aus, nicht als Bericht "

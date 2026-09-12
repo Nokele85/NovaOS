@@ -966,3 +966,29 @@ async def test_a_repair_that_loses_half_the_scene_is_refused(tmp_path):
     md = next(tmp_path.glob("*/story.md")).read_text(encoding="utf-8")
     assert "Kurz." not in md.split("\n\n")[1]
     assert len(antworten) >= 2  # die Reparatur wurde wirklich versucht
+
+
+# -- a scene is told where it starts, not only what it must cover ---------
+
+def test_the_ground_a_scene_opens_on_is_read_off_its_own_line():
+    """Five of eight scenes opened on a later beat of their own brief — on the
+    pavement while he was already unlocking the door. The place is the leading
+    chunks of the outline line, up to where it starts naming people."""
+    from yurios.world.stories import _opening
+    assert _opening("Gehweg und Straße, beide, wir laufen schnell — Ungeduld.")         == "Gehweg und Straße"
+    # two scenes in the same flat are told apart by the second chunk
+    assert _opening("Wohnung, Bett, beide, er fickt mich.") == "Wohnung, Bett"
+    assert _opening("Wohnung, Flur und Wand, beide, Kuss.") == "Wohnung, Flur und Wand"
+    # a line that names only people anchors nothing, and says so
+    assert _opening("beide, irgendwo") == ""
+    assert _opening("") == ""
+
+
+def test_the_seam_is_the_last_words_the_listener_heard():
+    """The state note says what changed; it does not say what was just said.
+    Handing over the actual last sentences is what lets the next scene
+    continue instead of setting up again."""
+    from yurios.world.stories import _last_sentences
+    naht = _last_sentences("Er sucht den Schlüssel. Sie friert. „Komm schon.“")
+    assert naht == "Sie friert. „Komm schon.“"
+    assert _last_sentences("") == ""
