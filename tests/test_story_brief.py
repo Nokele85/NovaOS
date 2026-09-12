@@ -452,3 +452,36 @@ async def test_the_rules_never_turn_the_plot_into_law(tmp_path):
     assert "Die Hauptfiguren stehen fest: Nova und" in p
     assert "keine weiteren Regeln ab" in p
     assert "Wetter" in p and "gehören zur Handlung" in p
+
+
+async def test_a_pronoun_swapped_without_its_verb_is_refused(tmp_path):
+    """The pass produced "sagtest er" while it was forbidden to change more
+    than single words — my own constraint caused it. It may fix the verb now,
+    and a passage that still comes back broken is kept as it was."""
+    lab = _lab(Recorder(), tmp_path)
+    original = " ".join(['„Komm mit", sagtest du leise, und gingst voran.'] * 12)
+    kaputt = " ".join(['„Komm mit", sagtest er leise, und gingst er voran.'] * 12)
+    teile = ["Anfang.", original]
+    lab._complete = lambda *a, **kw: _antwort(kaputt)
+    assert await lab._straighten(teile, "ANREDE: er") == 0
+    assert teile[1] == original
+
+
+async def test_the_pass_may_change_the_verb_that_the_pronoun_requires(tmp_path):
+    """The instruction has to permit what the job needs, or it produces the
+    very fault it was added to remove."""
+    util = Recorder("OK")
+    lab = _lab(util, tmp_path)
+    await lab._straighten(["Anfang.", "Zweiter."], "ANREDE: er")
+    p = util.prompts[-1]
+    assert "auch die Verbformen" in p
+    assert "sagtest er" in p               # the counter-example, by name
+    assert "Erzählperson, Anrede und" in p
+
+
+async def test_the_house_rules_name_address_and_tense(tmp_path):
+    util = Recorder()
+    lab = _lab(util, tmp_path)
+    await lab._house_rules("Du gingst durch den Wald.")
+    p = util.prompts[-1]
+    assert "ANREDE:" in p and "ZEITFORM:" in p

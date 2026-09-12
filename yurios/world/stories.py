@@ -54,6 +54,18 @@ _META = re.compile(
     r"ich\s+pr(ü|ue)fe\s+den\s+abschnitt)", re.I)
 
 
+# A pronoun swapped without its verb: "sagtest er". The rules pass produced
+# exactly this while it was forbidden to touch anything but single words, and
+# a broken verb form is worse than the inconsistency it was fixing.
+_BROKEN_VERB = re.compile(
+    # Only endings that can be nothing but second person. A bare "-st"
+    # would flag "ist er selbst", which is correct German and none of
+    # our business.
+    r"\b(?:\w{2,}test|warst|hattest|wurdest|gingst|bliebst|sahst|"
+    r"standst|hieltst|nahmst|kamst|zogst|liefst|riefst|fandst|gabst)"
+    r"\s+(?:er|sie|es)\b", re.I)
+
+
 def _purpose_text(node) -> str:
     """The words of one outline node, whether she wrote a line or the planner
     wrote an object. Putting the dict in a prompt puts braces in her story."""
@@ -183,7 +195,9 @@ class StoryLab:
             "nichts:\n"
             "ERZÄHLPERSON: in welcher Person erzählt wird und wer mit \"du\" "
             "beziehungsweise \"ich\" gemeint ist\n"
-            "PRONOMEN: welches Pronomen jede Figur bekommt\n\n"
+            "ANREDE: ob die zweite Figur durchgehend angesprochen (\"du\") "
+            "oder über sie gesprochen wird (\"er\"/\"sie\")\n"
+            "ZEITFORM: Präsens oder Vergangenheit\n\n"
             f"Die Hauptfiguren stehen fest: Nova und {self.user_name}. Leite "
             "keine weiteren Regeln ab. Wetter, Tageszeit, Zeitform, Orte und "
             "Namen gehören zur Handlung und sind keine Regeln.\n\n"
@@ -208,22 +222,23 @@ class StoryLab:
         for i in range(1, len(parts)):
             try:
                 answer = await self._complete(
-                    "Prüfe einen Abschnitt einer Geschichte gegen feste Regeln.\n\n"
-                    "Du korrigierst. Du schreibst NICHT um und du verbesserst "
-                    "nichts.\n"
-                    "- Kein Satz wird hinzugefügt, keiner gestrichen, keiner "
-                    "umgestellt.\n"
-                    "- Geändert werden nur einzelne Wörter: Pronomen, Anreden, "
-                    "Zeit- und Wetterangaben.\n"
-                    "- Jeder Satz, der keine Regel verletzt, kommt WORTGLEICH "
-                    "zurück.\n"
-                    "- Der Abschnitt ist danach genauso lang wie vorher.\n"
-                    "Eine schönere Formulierung ist kein Grund für eine Änderung. "
-                    "Dass dir etwas nicht gefällt, auch nicht.\n\n"
-                    f"Regeln:\n{rules}\n\n"
-                    "Hält der Abschnitt alle Regeln ein, antworte mit genau: OK\n"
-                    "Sonst gib den korrigierten Abschnitt zurück, ohne Vorrede "
+                    "Bringe einen Abschnitt einer Geschichte mit ihren Regeln "
+                    "in Übereinstimmung.\n\n"
+                    "Dein einziger Auftrag sind Erzählperson, Anrede und "
+                    "Zeitform. Ändere alles, was dafür nötig ist — auch die "
+                    "Verbformen, die daraus folgen. Aus \"sagtest du\" wird "
+                    "\"sagte er\", nicht \"sagtest er\": ein getauschtes "
+                    "Pronomen ohne angepasstes Verb ist ein Fehler, kein "
+                    "Ergebnis.\n\n"
+                    "Alles andere bleibt unangetastet. Kein Satz kommt hinzu, "
+                    "keiner fällt weg, keiner wird umgestellt, kein Wort wird "
+                    "schöner gemacht. Handlung, Bilder und Ton sind nicht dein "
+                    "Auftrag, und dass dir etwas nicht gefällt, ist kein Grund.\n\n"
+                    "Hält der Abschnitt die Regeln schon ein, antworte mit "
+                    "genau: OK\n"
+                    "Sonst gib den angeglichenen Abschnitt zurück, ohne Vorrede "
                     "und ohne Überschrift.\n\n"
+                    f"Regeln:\n{rules}\n\n"
                     f"Abschnitt:\n{parts[i]}",
                     max_tokens=SCENE_MAX_TOKENS, persona=False)
             except Exception:
@@ -236,6 +251,10 @@ class StoryLab:
             # reasoning in front of them ("Verstöße: 1. Wetter …"), and the
             # length window waved them through. Prose about the rules is never
             # a corrected passage.
+            if _BROKEN_VERB.search(fixed) and not _BROKEN_VERB.search(parts[i]):
+                log.warning("straightening passage %d swapped a pronoun without "
+                            "its verb (\"sagtest er\"); kept the original", i + 1)
+                continue
             if _META.search(fixed):
                 log.warning("straightening passage %d answered with its own "
                             "reasoning instead of prose; kept the original",
