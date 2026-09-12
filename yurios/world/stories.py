@@ -47,6 +47,16 @@ SCENE_LENGTHS = {"kurz": "180 bis 250", "normal": SCENE_WORDS,
 # A 4300-word story needed 24 913 reasoning tokens, so this is roughly double —
 # and a ceiling is free, since only what is generated is billed.
 REVIEW_MAX_TOKENS = 48_000
+
+# DeepSeek publishes a temperature per use case: 0.0 for code, 1.0 for data
+# work, 1.3 for conversation — and 1.5 for creative writing. Her scenes were
+# written at 0.75, nearer the coding end than the writing one, which is the
+# setting that pushes a model towards the most obvious next phrase. The most
+# obvious way to render a scene is to report it, so five prompt experiments
+# moved the spoken share not at all while the dial stood in the wrong place.
+# Planning, the state note and the review keep a low temperature: those want
+# to be right, not surprising.
+WRITING_TEMPERATURE = 1.5
 SCENE_MAX_TOKENS = 1600
 
 # The shape of a story, for when no outline survives. Five distinct beats beat
@@ -232,7 +242,8 @@ class StoryLab:
             await self._run(story_id, contract)
 
     async def _complete(self, prompt: str, *, max_tokens: int = 900,
-                        persona: bool = True, thinking: bool | None = None) -> str:
+                        persona: bool = True, thinking: bool | None = None,
+                        temperature: float = 0.75) -> str:
         provider = self.utility() if callable(self.utility) else self.utility
         if persona and self.character_context is not None:
             soul = self.character_context() if callable(self.character_context) else self.character_context
@@ -246,7 +257,7 @@ class StoryLab:
                       + prompt)
         extra = {} if thinking is None else {"thinking": thinking}
         return await provider.complete([{"role": "user", "content": prompt}],
-                                       temperature=0.75, max_tokens=max_tokens,
+                                       temperature=temperature, max_tokens=max_tokens,
                                        **extra)
 
     async def _plan(self, story_id: str, theme: str, mood: str,
@@ -629,7 +640,8 @@ class StoryLab:
                     "vollständigen Satz. "
                     + ("Diese Szene ist die letzte und muss alle offenen "
                        "Handlungsfäden schließen. " if last else ""),
-                    max_tokens=SCENE_MAX_TOKENS)
+                    max_tokens=SCENE_MAX_TOKENS,
+                    temperature=WRITING_TEMPERATURE)
                 scene = _trim_to_sentence(self._clean(scene))
                 parts.append(scene)
                 moods.append(her_moods[i] if i < len(her_moods) else "")
@@ -668,7 +680,8 @@ class StoryLab:
                     "und bereite den späteren Abschluss vor. Keine Überschrift, "
                     "keine Zusammenfassung, nur Erzähltext. Bisheriger Schluss:\n\n"
                     f"{story[-1800:]}",
-                    max_tokens=SCENE_MAX_TOKENS)))
+                    max_tokens=SCENE_MAX_TOKENS,
+                    temperature=WRITING_TEMPERATURE)))
                 if _words(extra) == 0:
                     raise RuntimeError("Story-Modell lieferte keine Erweiterung.")
                 parts.append(extra)
@@ -696,7 +709,8 @@ class StoryLab:
                     f"Der geplante Bogen der ganzen Geschichte: {bogen}\n\n"
                     f"Stand der Dinge, besonders das Offene:\n{state}\n\n"
                     f"Hier ist der bisherige Schluss als Kontext:\n\n{tail}",
-                    max_tokens=SCENE_MAX_TOKENS)
+                    max_tokens=SCENE_MAX_TOKENS,
+                    temperature=WRITING_TEMPERATURE)
                 parts.append(self._clean(extra))
                 moods.append("")
                 story = "\n\n".join(parts)

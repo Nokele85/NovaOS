@@ -751,3 +751,28 @@ async def test_the_scenes_are_written_as_a_radio_play(tmp_path):
     assert len(szenen) == 2
     assert all("lebt von gesprochener Rede" in p for p in szenen)
     assert all("nur so viel, wie das Ohr braucht" in p for p in szenen)
+
+
+async def test_scenes_are_written_at_the_temperature_writing_wants(tmp_path):
+    """DeepSeek publishes 1.5 for creative writing and 0.0 for code; her scenes
+    ran at 0.75. That setting pushes a model to the most obvious next phrase,
+    and the most obvious way to render a scene is to report it — which is why
+    five prompt experiments moved the spoken share not at all."""
+    gesehen: list[float] = []
+
+    class Temperaturen(Recorder):
+        async def complete(self, messages, **kwargs):
+            gesehen.append(kwargs.get("temperature"))
+            self.prompts.append(messages[-1]["content"])
+            return "Eine Szene, die weitergeht. Und endet."
+
+    util = Temperaturen()
+    lab = _lab(util, tmp_path)
+    await _run(lab, {"theme": "Wald", "scenes": ["A.", "B."]})
+    szenen = [tp for tp, pr in zip(gesehen, util.prompts)
+              if "Schreibe die nächste Szene" in pr]
+    andere = [tp for tp, pr in zip(gesehen, util.prompts)
+              if "Zustandsakte" in pr or "woran sich der Rest" in pr]
+    assert szenen and all(tp == 1.5 for tp in szenen)
+    # Planen, Akte und Prüfen wollen richtig sein, nicht überraschend
+    assert andere and all(tp == 0.75 for tp in andere)
