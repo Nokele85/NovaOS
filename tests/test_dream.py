@@ -6,7 +6,8 @@ from __future__ import annotations
 import pytest
 
 from yurios.app.memory.store import FileMemoryStore
-from yurios.mind.dream import DreamConsolidator, keep_fact
+from yurios.mind.dream import (DreamConsolidator, keep_fact,
+                               without_work_products)
 from yurios.mind.vaultio import MindVault
 from yurios.kernel.clock import VirtualClock
 
@@ -108,3 +109,39 @@ async def test_summariser_nothing_is_not_stored(rig):
     facts = facts_path.read_text() if facts_path.exists() else ""
     assert "NOTHING" not in facts
     assert "into what I keep" not in facts
+
+
+def test_a_story_she_wrote_is_not_the_day_that_happened():
+    """Live vault, 2026-09-11: three finished stories were journalled at 00:55
+    with 900 characters of their own prose each, and the summariser reads the
+    first 6000 characters of a day. The whole window was fiction — five of that
+    night's ten stored facts are a club called Paradies and a cast named Lena
+    and Tom, and the day's real events never reached the model at all."""
+    journal = """# Journal — 2026-09-11
+
+### 00:55  story:02aa5631b3  Samstagnacht im Paradies — Thema: Club
+Nova und Benni sind die Hauptfiguren. Figuren: Lena, Tom, Clara, Max.
+Der Türsteher musterte sie kurz, dann nickte er.
+Quelle: vault/stories/02aa5631b3/story.md
+
+### 09:12  [she] watered the plant on the sill
+She noticed it had been dry for days.
+
+### 18:40  story:516c65ab4a  Ein Samstagabend — Thema: Club
+Figuren: Lena, Markus, Sonja.
+
+### 21:03  user: my sister is visiting on friday
+"""
+    uebrig = without_work_products(journal)
+    assert "Lena" not in uebrig and "Paradies" not in uebrig
+    assert "Markus" not in uebrig and "Quelle:" not in uebrig
+    # what actually happened that day survives, both before and after a story
+    assert "watered the plant" in uebrig
+    assert "my sister is visiting" in uebrig
+    assert uebrig.startswith("# Journal")
+
+
+def test_a_journal_without_stories_is_handed_on_unchanged():
+    tag = "# Journal — 2026-07-04\n\n### 10:00  user: hello\nhi\n"
+    assert without_work_products(tag) == tag
+    assert without_work_products("") == ""

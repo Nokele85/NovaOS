@@ -1464,6 +1464,15 @@ turn** — separate files, separate indexes, separate `inspect()`.
   bookkeeping ("folded … into what I keep", "wrote a diary entry", "had a picture
   made") as facts: those are the pipeline talking about itself, and storing them
   is how "kept memory" became a desk folder she then tried to list.
+  It **MUST NOT** read her own work as the day's events either. A finished story is
+  journalled as a section headed `story:<id>` (§6's `remember_story`, which already
+  refuses to let the turn extractor take a story's prose for facts about the user);
+  the night **MUST** drop those sections before summarising, because a filter one layer
+  up that the next layer undoes is not a filter. Its cast, its setting and its plot are
+  invented and are facts about no one — measured on a live vault (2026-09-11), three
+  stories appended at 00:55 filled the whole 6 000-character summary window, five of that
+  night's ten stored facts were a club called Paradies and a cast named Lena and Tom, and
+  the day's real events never reached the model at all.
 - **Oldest-first and resumable** (`state/dream_progress.json`): a night that runs out of budget
   leaves a backlog, not an overrun, and the next DREAM tick resumes. The night's work is journaled
   ("slept on it: folded … into what I keep").

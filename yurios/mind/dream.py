@@ -44,7 +44,38 @@ SUMMARISE_SYSTEM = (
     "long-term — things that will still matter in a month. One per line, no "
     "bullets, no preamble. Facts about them, the relationship, or the world "
     "— not that a diary was written, a picture was made, or a night was "
-    "folded. If nothing durable happened output NOTHING and nothing else.")
+    "folded, and nothing out of a story she wrote: its cast, its setting and "
+    "its plot are invented and are not facts about anyone. "
+    "If nothing durable happened output NOTHING and nothing else.")
+
+#: A journal section she filed as a work product, not as something that
+#: happened: `remember_story` heads each finished story with `story:<id>`
+#: (SPEC §21), and that marker is what is matched — not a guess at its
+#: wording. The chat-turn extractor already refuses to read a story's
+#: prose as facts about the user; without this the night undoes that one
+#: layer later.
+_WORK_PRODUCT = "  story:"
+
+
+def without_work_products(journal: str) -> str:
+    """The day's journal minus the stories she wrote into it (SPEC §21).
+
+    Measured on the live vault, 2026-09-11: three finished stories were
+    appended at 00:55 with 900 characters of their own prose each, and the
+    summariser reads only the first 6000 characters of a day. So the whole
+    window was fiction — five of that night's ten stored facts are a club
+    called Paradies and a cast named Lena, Tom and Clara, and the day's
+    real events never reached the model at all.
+
+    A section runs from its `### …  story:<id>` heading to the next heading."""
+    heraus: list[str] = []
+    ueberspringen = False
+    for zeile in journal.splitlines(keepends=True):
+        if zeile.startswith("### "):
+            ueberspringen = _WORK_PRODUCT in zeile
+        if not ueberspringen:
+            heraus.append(zeile)
+    return "".join(heraus)
 
 #: Night bookkeeping the summariser used to store as if it were about *them*.
 #: "folded a note" is a real event; "folded the day into what I keep" is not.
@@ -161,6 +192,7 @@ class DreamConsolidator:
         return report
 
     async def _summarise_day(self, day: str, text: str) -> list[str]:
+        text = without_work_products(text)
         if self.utility is None:
             # offline heuristic: keep the lines someone flagged as worth keeping
             lines = [l for l in text.splitlines() if l.startswith("### ")]
