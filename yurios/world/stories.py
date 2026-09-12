@@ -33,6 +33,14 @@ def _has_complete_sentence(text: str) -> bool:
 # of 2026-09-11 hit a 900-token ceiling in 7 of 9 scenes and were stitched
 # together mid-word ("…bestell", "…z"), which the audio then read out.
 SCENE_WORDS = "350 bis 450"
+
+# What a scene weighs, when she says so. Every scene used to be asked for the
+# same 350-450 words, so a story spent its length on whatever had the most
+# scenes rather than on what mattered: the live story of 2026-09-12 gave 1898
+# words to walking through the forest and 699 to what had been asked for, and
+# the two scenes that were the point were the shortest in it.
+SCENE_LENGTHS = {"kurz": "180 bis 250", "normal": SCENE_WORDS,
+                 "lang": "600 bis 800"}
 SCENE_MAX_TOKENS = 1600
 
 # The shape of a story, for when no outline survives. Five distinct beats beat
@@ -86,6 +94,18 @@ def _sentences(text: str) -> list[str]:
     if rest:
         out.append(rest)
     return out or [text]
+
+
+def _dialogue_share(text: str) -> float:
+    """How much of a story is spoken aloud, as a fraction of its characters.
+
+    An intention that is not measured is a hope: the scene prompt has asked
+    for "action, dialogue and a visible change" all along, and the share still
+    fell from 22.6% to 12.9% between two live stories without anyone noticing.
+    """
+    gesprochen = sum(len(m) for m in
+                     re.findall(r"[„\"]([^\"„“]{2,400})[“\"]", text))
+    return gesprochen / max(len(text), 1)
 
 
 def _mixed_address(saetze: list[str]) -> int:
@@ -423,6 +443,10 @@ class StoryLab:
         # this is what makes scene 7 sound unlike scene 2 instead of the whole
         # story arriving in one register.
         her_moods = [str(m).strip() for m in (contract.get("scene_moods") or [])]
+        #: How much room each scene gets, hers to decide. An unknown word falls
+        #: back to the ordinary length rather than refusing the story.
+        her_lengths = [str(x).strip().lower()
+                       for x in (contract.get("scene_lengths") or [])]
         try:
             if her_scenes:
                 # She planned it. No second opinion: a planner that re-plans her
@@ -463,6 +487,8 @@ class StoryLab:
                 # it a second time. Naming the next scene and forbidding it is
                 # the cheap half of DOC's controller.
                 naechste = "" if last else _purpose_text(purposes[i + 1])
+                umfang = SCENE_LENGTHS.get(
+                    her_lengths[i] if i < len(her_lengths) else "", SCENE_WORDS)
                 scene = await self._complete(
                     "Schreibe die nächste Szene einer langen Geschichte auf Deutsch. "
                     f"Szene {i+1}/{len(purposes)}; {relationship} Thema: {theme}; "
@@ -476,6 +502,10 @@ class StoryLab:
                     "Die Szenerie ist bereits eingeführt; führe sie nicht neu ein "
                     "und fange nicht von vorne an. "
                     "Zeige überwiegend konkrete Handlung, Dialog und eine sichtbare Veränderung. "
+                    "Mindestens ein Drittel der Szene ist gesprochener Dialog: "
+                    "die beiden reden miteinander, statt dass über sie berichtet "
+                    "wird. Auch Streit, Necken, Halbsätze und Schweigen mitten im "
+                    "Satz gehören dazu. "
                     "Vermeide langes Lamentieren, Selbstmitleid, wiederholte Gefühle und "
                     "poetische Füllsätze; innere Gedanken nur kurz und wenn sie eine Entscheidung "
                     "vorbereiten. Jeder Absatz soll Handlung, Dialog oder eine neue Information "
@@ -496,7 +526,7 @@ class StoryLab:
                       "Akte steht, wer mit \"du\" gemeint ist, gilt das weiter. "
                     + (f"Vermeide ausdrücklich: {avoid}. " if avoid else "")
                     + "Keine Zusammenfassung, keine Überschrift, nur erzählender Text. "
-                    + f"Umfang: {SCENE_WORDS} Wörter; beende die Szene mit einem "
+                    + f"Umfang: {umfang} Wörter; beende die Szene mit einem "
                     "vollständigen Satz. "
                     + ("Diese Szene ist die letzte und muss alle offenen "
                        "Handlungsfäden schließen. " if last else ""),
@@ -596,6 +626,8 @@ class StoryLab:
             except Exception:
                 log.warning("story %s: the rules pass failed; publishing as "
                             "written", story_id, exc_info=True)
+            log.info("story %s: %.0f%% of it is spoken aloud", story_id,
+                     _dialogue_share(story) * 100)
             story_path = folder / "story.md"
             story_path.write_text(f"# {plan.get('title', theme)}\n\n{story}\n", encoding="utf-8")
             if self.remember is not None:

@@ -65,6 +65,10 @@ _BRIEF_PROMPT = (
     " \"scenes\": [string] — deine Gliederung, {n} Szenen, je eine Zeile, in "
     "der Reihenfolge, in der sie erzählt werden. Jede Zeile nennt Ort, wer "
     "dabei ist, was passiert und was sich dadurch ändert,\n"
+    " \"scene_lengths\": [string] — wie viel Raum jede Szene bekommt: "
+    "\"kurz\", \"normal\" oder \"lang\", gleiche Anzahl und Reihenfolge wie scenes. Das "
+    "Gewicht gehört dem, worum er gebeten hat — der Weg dorthin ist nicht die "
+    "Geschichte und darf kurz sein,\n"
     " \"scene_moods\": [string] — wie jede Szene KLINGEN soll, gleiche Anzahl "
     "und Reihenfolge wie scenes: kurze Anweisung an die Stimme, etwa "
     "\"fröhlich und leicht\", \"gedämpft und spannungsvoll, fast flüsternd\", "
@@ -105,7 +109,8 @@ async def _story_brief(rt, text: str) -> dict:
                  "characters": str(data.get("characters") or ""),
                  "avoid": str(data.get("avoid") or ""),
                  "scenes": [str(s) for s in (data.get("scenes") or []) if str(s).strip()],
-                 "scene_moods": [str(m) for m in (data.get("scene_moods") or [])]}
+                 "scene_moods": [str(m) for m in (data.get("scene_moods") or [])],
+                 "scene_lengths": [str(x) for x in (data.get("scene_lengths") or [])]}
         log.info("story brief: %d scenes, register %r",
                  len(brief["scenes"]), str(brief["register"])[:60])
         return brief

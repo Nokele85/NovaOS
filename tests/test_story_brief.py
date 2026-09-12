@@ -583,3 +583,46 @@ async def test_a_finished_story_leaves_the_flag_down(tmp_path):
     lab = _lab(Recorder(), tmp_path)
     lab._tts = None            # nicht genutzt; wir prüfen nur die Buchführung
     assert lab._voice_on is False
+
+
+# -- weight goes where she puts it, and people talk -----------------------
+
+async def test_she_decides_how_much_room_each_scene_gets(tmp_path):
+    """One live story gave 1898 words to walking through the forest and 699 to
+    what had been asked for — because every scene was asked for the same 350
+    to 450 words, so length followed scene count instead of importance."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path),
+               {"theme": "Wald", "scenes": ["Hinweg.", "Ankunft.", "Darum ging es."],
+                "scene_lengths": ["kurz", "normal", "lang"]})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert "Umfang: 180 bis 250" in szenen[0]
+    assert "Umfang: 350 bis 450" in szenen[1]
+    assert "Umfang: 600 bis 800" in szenen[2]
+
+
+async def test_an_unknown_length_falls_back_instead_of_refusing(tmp_path):
+    util = Recorder()
+    await _run(_lab(util, tmp_path),
+               {"theme": "Wald", "scenes": ["A.", "B."],
+                "scene_lengths": ["episch", ""]})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert all("Umfang: 350 bis 450" in p for p in szenen)
+
+
+async def test_every_scene_is_asked_for_real_dialogue(tmp_path):
+    """The prompt asked for "action, dialogue and a visible change" all along
+    and the spoken share still fell from 22.6% to 12.9% between two stories.
+    A share that is not named is not asked for."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert szenen and all("ein Drittel der Szene ist gesprochener Dialog" in p
+                          for p in szenen)
+
+
+def test_the_spoken_share_is_measured_not_hoped_for():
+    from yurios.world.stories import _dialogue_share
+    assert _dialogue_share("Er ging weiter.") == 0.0
+    viel = '„Komm mit“, sagte sie. „Ich bin müde“, sagte er. „Trotzdem.“'
+    assert _dialogue_share(viel) > 0.4      # die Redezeichen selbst zählen nicht mit

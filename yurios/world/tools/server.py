@@ -161,6 +161,7 @@ def build_server(*, max_minutes: float | None = None,
                        register: str = "",
                        scenes: list[str] | None = None,
                        scene_moods: list[str] | None = None,
+                       scene_lengths: list[str] | None = None,
                        characters: str = "", avoid: str = "") -> dict:
             """Start an asynchronous complete story job; the finished German
             story is checked for a real ending, voiced and sent to Telegram.
@@ -190,6 +191,13 @@ def build_server(*, max_minutes: float | None = None,
               leicht", "gedämpft und spannungsvoll, fast flüsternd", "ruhig und
               warm". The voice takes these per scene, so this is what stops a
               twenty-minute story arriving in one flat register.
+            `scene_lengths` — how much room each scene gets: "kurz", "normal"
+              or "lang", same order and length as `scenes`. Weight goes to what
+              he asked for. Getting there is not the story: a walk through the
+              woods can be two short scenes, and the scene he actually wanted
+              should be the long one. Left empty, every scene gets the same
+              room — which is how one story spent 1898 words walking and 699 on
+              what it was asked for.
             `characters` — who is in it, and what from your shared history
               belongs in it. Name how each is addressed and which pronouns
               they take ("Benni: er/ihm"): a story that changes his pronouns
@@ -203,6 +211,7 @@ def build_server(*, max_minutes: float | None = None,
                     "length_minutes": length_minutes, "register": register,
                     "scenes": [str(s) for s in (scenes or [])],
                     "scene_moods": [str(m) for m in (scene_moods or [])],
+                    "scene_lengths": [str(x) for x in (scene_lengths or [])],
                     "characters": characters, "avoid": avoid}
 
     @mcp.tool()
