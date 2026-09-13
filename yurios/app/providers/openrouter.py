@@ -15,6 +15,7 @@ For lm_studio/… the server's base url is passed as `api_base` (LMSTUDIO_BASE_U
 """
 from __future__ import annotations
 
+import logging
 from typing import AsyncIterator
 
 import litellm
@@ -22,6 +23,8 @@ import litellm
 from yurios import attribution
 from yurios.app.providers.admission import inference_admission
 from yurios.app.providers.usage import chunk_prompt_tokens, chunk_text
+
+log = logging.getLogger("app.providers")
 
 
 def _route(model: str) -> str:
@@ -143,6 +146,21 @@ class LiteLLMChatModel:
                     yield text
 
 
+def _plain_json(response_format: dict | None) -> dict | None:
+    """The strict schema, reduced to the JSON mode every OpenAI-shaped API has.
+
+    `gguf.py::_llama_response_format` does the same thing for llama.cpp: a
+    backend that cannot take `json_schema` is given `json_object` instead. The
+    caller's schema is not lost — every caller that asks for one also spells the
+    object out in its prompt (`mind/goals.py`), and the parser refuses anything
+    that does not match, so the guarantee moves from the API to the parse."""
+    if not isinstance(response_format, dict):
+        return response_format
+    if response_format.get("type") != "json_schema":
+        return response_format
+    return {"type": "json_object"}
+
+
 class LiteLLMUtilityModel:
     """The cheap model (§3): partner-model fact extraction (§6.3) + summarisation (§7.3).
 
@@ -159,6 +177,32 @@ class LiteLLMUtilityModel:
         self.api_key = api_key or None
         self.max_tokens = max_tokens
         self.thinking = thinking
+        #: Set the first time this route refuses a strict schema, so the cost is
+        #: one rejected call per process rather than one per request.
+        self._plain_json_only = False
+
+    def _downgraded(self, exc: Exception, extra: dict) -> bool:
+        """True when `exc` is this route saying it cannot do strict schemas —
+        and `extra` has been rewritten to the plain JSON mode for the retry.
+
+        DeepSeek answers `400 This response_format type is unavailable now`;
+        its API documents `json_object` and not `json_schema` for a normal
+        reply. Measured live on 2026-09-13: the strict form fails every time,
+        the plain form parses. Left unhandled it cost her every promise she
+        ever made — 69 rejected calls, and REFLECT filed no goal at all."""
+        fmt = extra.get("response_format")
+        if self._plain_json_only or not isinstance(fmt, dict):
+            return False
+        if fmt.get("type") != "json_schema":
+            return False
+        text = str(exc).lower()
+        if "response_format" not in text:
+            return False
+        log.warning("%s will not take a strict json_schema (%s); using plain "
+                    "JSON mode from here on", self.model, str(exc)[:120])
+        self._plain_json_only = True
+        extra["response_format"] = _plain_json(fmt)
+        return True
 
     async def complete(self, messages: list[dict], **params) -> str:
         text, _meta = await self.complete_detailed(messages, **params)
@@ -222,19 +266,34 @@ class LiteLLMUtilityModel:
             extra["timeout"] = params["timeout"]
         if params.get("response_format") is not None:
             # OpenAI-compatible local servers, including LM Studio, enforce
-            # JSON Schema as a top-level completion parameter.
-            extra["response_format"] = params["response_format"]
+            # JSON Schema as a top-level completion parameter. A hosted route
+            # may not take the strict form at all — see `_downgraded` below.
+            extra["response_format"] = _plain_json(params["response_format"])                 if self._plain_json_only else params["response_format"]
         async with inference_admission():
-            response = await litellm.acompletion(
-                model=self.model,
-                messages=messages,
-                api_key=self.api_key,
-                api_base=self.api_base,
-                temperature=params.get("temperature", 0.2),
-                max_tokens=params.get("max_tokens", self.max_tokens),
-                **_attribution(self.model),
-                **extra,
-            )
+            try:
+                response = await litellm.acompletion(
+                    model=self.model,
+                    messages=messages,
+                    api_key=self.api_key,
+                    api_base=self.api_base,
+                    temperature=params.get("temperature", 0.2),
+                    max_tokens=params.get("max_tokens", self.max_tokens),
+                    **_attribution(self.model),
+                    **extra,
+                )
+            except Exception as exc:  # noqa: BLE001 — re-raised unless it is THE one
+                if not self._downgraded(exc, extra):
+                    raise
+                response = await litellm.acompletion(
+                    model=self.model,
+                    messages=messages,
+                    api_key=self.api_key,
+                    api_base=self.api_base,
+                    temperature=params.get("temperature", 0.2),
+                    max_tokens=params.get("max_tokens", self.max_tokens),
+                    **_attribution(self.model),
+                    **extra,
+                )
             choice = response.choices[0]
             usage = getattr(response, "usage", None)
             details = getattr(usage, "completion_tokens_details", None)

@@ -272,6 +272,17 @@ hosted are a one-line change with no code change:
 | `ollama/<model>` | local Ollama | — |
 | `lm_studio/<model>` | local LM Studio (OpenAI-compatible) | `LMSTUDIO_BASE_URL` |
 
+**A structured answer is a request, not a guarantee.** A caller that needs JSON asks for it with
+`response_format`, and the routes differ on what they accept: local OpenAI-compatible servers take
+a strict `json_schema`, llama.cpp takes its own grammar shape, and a hosted route **MAY** refuse
+the strict form outright. The seam **MUST** carry that difference rather than the caller — on a
+refusal naming `response_format` it **MUST** retry once in plain JSON mode and remember the route's
+answer, so the cost is one rejected call per process. The guarantee then rests where it always
+also rested: every such caller spells its object out in the prompt and refuses a reply that does
+not parse. Left to the caller this is silent — DeepSeek's `400 This response_format type is
+unavailable now` cost 69 promise reviews and every reach-out that would have followed them
+(2026-09-10 to 2026-09-13).
+
 **Attribution.** Every *billed* OpenRouter request — the chat/utility models here, her camera
 in §7.6 — **MUST** carry the app-attribution headers from `yurios/attribution.py`
 (`HTTP-Referer`, `X-OpenRouter-Title`, and its legacy `X-Title` spelling, which overrides the
