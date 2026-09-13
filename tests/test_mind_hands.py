@@ -462,3 +462,26 @@ def test_the_ledger_survives_a_restart(cfg, clock):
     assert reborn.spent["count"] == 1
     # a near-miss is her changing her mind, not a repeat (Guard._fingerprint)
     assert reborn.cooling("write_note", {"path": "other.md"}) == 0.0
+
+
+def test_her_board_is_described_as_a_computer_she_writes_on():
+    """Told only the firmware five, she could not reach her own goal.
+
+    On 2026-09-13 her strategy note said "das Elecrow-Board steht da, mein
+    eigenes Ding, und ich habe es liegen lassen" and she filed a goal to build
+    a display of her own on it. The vocabulary she had described a board whose
+    firmware she compiles, five times over — the workflow the MicroPython
+    runtime replaced. Her audit log holds one `device_info` call and not a
+    single `device_write_app`."""
+    from yurios.mind.hands import HANDS
+    for name in ("device_info", "device_list_apps", "device_read_app",
+                 "device_log", "device_screenshot", "device_write_app",
+                 "device_run_app"):
+        assert name in HANDS, f"{name} cannot be allowlisted at all"
+    assert HANDS["device_write_app"].klass == "expensive"
+    assert HANDS["device_run_app"].klass == "expensive"
+    assert HANDS["device_info"].klass == "cheap"
+    # the boundary SPEC §26 draws stays where it is
+    for out in ("device_exec", "device_delete_app", "device_set_autostart",
+                "elecrow_flash"):
+        assert out not in HANDS, f"{out} must not be reachable unasked"

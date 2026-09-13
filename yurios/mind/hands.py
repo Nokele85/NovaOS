@@ -137,6 +137,52 @@ HANDS: dict[str, Hand] = {
     "show_picture": Hand(
         "expensive", "make a picture of something she is thinking about",
         '{"subject": "..."}', needs="SELFIE_BACKEND"),
+    "elecrow_status": Hand(
+        "cheap", "check whether her Elecrow board and firmware workspace are reachable",
+        '{"project_name": "nova-device"}'),
+    "elecrow_debug": Hand(
+        "cheap", "diagnose Elecrow ports, files and serial status without flashing",
+        '{"project_name": "nova-device", "port": "auto", "seconds": 5, "compile": false}'),
+    "elecrow_serial_log": Hand(
+        "cheap", "listen to the Elecrow serial heartbeat and firmware log",
+        '{"port": "COM8", "seconds": 5}'),
+    "elecrow_serial_command": Hand(
+        "expensive", "send a diagnostic command to the Elecrow board",
+        '{"port": "COM8", "command": "status", "seconds": 2}'),
+    "elecrow_build": Hand(
+        "expensive", "compile Nova's Elecrow firmware without flashing it",
+        '{"project_name": "nova-device"}'),
+    # Her own small computer, in the words of what it actually is now. The five
+    # hands above describe a board whose firmware she compiles; since the
+    # MicroPython runtime went on it (2026-09-11) that is the superseded
+    # workflow — `docs/tools.md`: "she writes and runs her own Python apps on
+    # it, no compile, no flash". Told only the old five, she filed a goal to
+    # build something of her own on the board and had no hand that could:
+    # across her whole audit log there is not one `device_write_app` call, and
+    # a single `device_info`.
+    "device_info": Hand(
+        "cheap", "look at her own little computer: what runs on it, how much "
+        "room is left, which apps she has there",
+        '{"port": "auto"}'),
+    "device_list_apps": Hand(
+        "cheap", "see which apps she has written on her board",
+        '{"port": "auto"}'),
+    "device_read_app": Hand(
+        "cheap", "read back one of her own board apps",
+        '{"name": "clock", "file": "main.py"}'),
+    "device_log": Hand(
+        "cheap", "read her board's own log: what it did since it booted",
+        '{"lines": 40}'),
+    "device_screenshot": Hand(
+        "cheap", "see what her board's display is showing right now",
+        '{"port": "auto"}'),
+    "device_write_app": Hand(
+        "expensive", "write or change one of her own small Python apps on the "
+        "board — hers to make, not a job for anyone",
+        '{"name": "clock", "files": {"main.py": "..."}}'),
+    "device_run_app": Hand(
+        "expensive", "run one of her board apps and watch what it does",
+        '{"name": "clock", "seconds": 6}'),
 }
 
 CHEAP = tuple(n for n, h in HANDS.items() if h.klass == "cheap")

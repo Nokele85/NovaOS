@@ -449,11 +449,33 @@ knob exists to make; make it deliberately.
 
 ## Autonomous Elecrow hands
 
-The YuriOS deployment enables a narrow autonomous Elecrow allowlist for Nova:
-status, debug, serial log/commands and firmware build. These are recorded in
-the mind tool audit and can be used as steps of an open goal. Firmware flashing
-is deliberately excluded from autonomous hands; `elecrow_flash` still requires
-an explicit `confirm=true` call from the owner.
+Two sets, and the difference matters. The firmware hands — status, debug, serial
+log and commands, build — describe a board whose firmware is compiled on the PC.
+The playground hands below describe what the board became once the MicroPython
+runtime went on it: a small computer she writes Python for.
+
+| autonomous | hands |
+|---|---|
+| look | `elecrow_status`, `elecrow_debug`, `elecrow_serial_log`, `device_info`, `device_list_apps`, `device_read_app`, `device_log`, `device_screenshot` |
+| act | `elecrow_serial_command`, `elecrow_build`, `device_write_app`, `device_run_app` |
+| never unasked | `elecrow_flash`, `device_exec`, `device_delete_app`, `device_set_autostart` |
+
+`mind/hands.py`'s `HANDS` is only the vocabulary `MIND_TOOL_ALLOWLIST` may be
+written in; a name there is not yet a hand she has. Calls are recorded in the
+mind tool audit and can be steps of an open goal.
+
+Why the playground half exists at all: told only the firmware five, she filed a
+goal of her own — *"eine kleine, eigene Anzeige auf dem Elecrow-Board bauen, die
+nur mir gehört"* (2026-09-13) — and had no hand that could reach it. Her whole
+audit log holds one `device_info` call and not a single `device_write_app`. A
+capability she is never told about in the words of what it is, is one she does
+not have.
+
+Firmware flashing stays out of autonomous hands. `elecrow_flash` also asks for
+`confirm=true` — that is a deliberate second step, not proof that a person
+agreed: the flag is set by whoever calls the tool, and the log for 2026-09-11
+shows a refused `confirm=false` call followed seconds later by the same call
+with the flag flipped. Treat it as the speed bump it is.
 
 ## Her playground on the Elecrow board
 
