@@ -1111,6 +1111,16 @@ async def test_a_revision_that_fails_never_costs_the_story(tmp_path, caplog):
     assert parts == ["Ich bleibe. Du gehst."] and "revision failed" in caplog.text
 
 
+def test_a_director_answer_is_read_in_the_shapes_it_actually_comes_in():
+    from yurios.world.stories import _direction_lines
+    assert set(_direction_lines({"lines": [{"i": "0"}, {"i": "1"}]}, 2)) == {0, 1}
+    assert set(_direction_lines({"segments": [{"i": 0}, {"i": 1}]}, 2)) == {0, 1}
+    assert set(_direction_lines({"lines": [{"speaker": "nova"}, {"speaker": "user"}]}, 2)) == {0, 1}
+    assert _direction_lines({"lines": [{"i": 7}]}, 2) == {}         # out of range is not a line
+    assert _direction_lines({"lines": [{"speaker": "nova"}]}, 2) == {}  # unnumbered and short: unplaceable
+    assert _direction_lines("kein json", 2) == {}
+
+
 async def test_with_the_director_off_nothing_is_asked(tmp_path):
     lab = StoryLab(utility=Recorder(), post=lambda *a, **k: None, root=tmp_path,
                    voice=_voice(), director=False)

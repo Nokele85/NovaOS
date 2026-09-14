@@ -239,6 +239,31 @@ ACCENT_NOTES = {"ryan": " Clear standard German pronunciation, no English accent
 _REDE = re.compile(r"[„\"]([^„“”\"]*)[“”\"]")
 
 
+def _direction_lines(daten, anzahl: int) -> dict[int, dict]:
+    """The director's lines by segment number, read leniently.
+
+    Three of eight first attempts in the first live run came back "covered 0
+    of n". Taken as the likely shapes of a good answer the parse did not
+    accept: a number written as a string ("i": "0"), the list under another
+    name, or lines without numbers that are exactly one per segment."""
+    if not isinstance(daten, dict):
+        return {}
+    lines: list = next((daten[k] for k in ("lines", "segments", "zeilen", "segmente")
+                  if isinstance(daten.get(k), list)), [])
+    zeilen: dict[int, dict] = {}
+    for z in lines:
+        if not isinstance(z, dict):
+            continue
+        i = z.get("i", z.get("index"))
+        if isinstance(i, str) and i.strip().isdigit():
+            i = int(i.strip())
+        if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < anzahl:
+            zeilen[i] = z
+    if not zeilen and len(lines) == anzahl and all(isinstance(z, dict) for z in lines):
+        zeilen = dict(enumerate(lines))
+    return zeilen
+
+
 def _segments(text: str) -> list[tuple[str, bool]]:
     """Split a scene into narration and speech, in order, without the model.
 
@@ -958,14 +983,15 @@ class StoryLab:
                 daten = json.loads(found.group(0)) if found else {}
             except ValueError:
                 daten = {}
-            lines = daten.get("lines") if isinstance(daten, dict) else None
-            zeilen = {z["i"]: z for z in (lines or [])
-                      if isinstance(z, dict) and isinstance(z.get("i"), int)}
+            zeilen = _direction_lines(daten, anzahl)
             if len(zeilen) >= 0.8 * anzahl:
-                analyse = daten.get("analyse")
+                analyse = daten.get("analyse") if isinstance(daten, dict) else None
                 return zeilen, analyse if isinstance(analyse, dict) else {}
+            # The answer itself, briefly: the first live run lost three first
+            # attempts to "covered 0" and the log could not say why.
             log.warning("story %s scene %d: direction attempt %d covered %d of "
-                        "%d segments", story_id, nr + 1, versuch, len(zeilen), anzahl)
+                        "%d segments (%d characters: %r)", story_id, nr + 1, versuch,
+                        len(zeilen), anzahl, len(antwort or ""), (antwort or "")[:200])
         log.warning("story %s scene %d: no direction; spoken in her own voice "
                     "and scene mood", story_id, nr + 1)
         return None, {}
