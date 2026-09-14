@@ -163,8 +163,9 @@ def build_server(*, max_minutes: float | None = None,
                        scene_moods: list[str] | None = None,
                        scene_lengths: list[str] | None = None,
                        scene_talk: list[str] | None = None,
-                       characters: str = "", avoid: str = "") -> dict:
-            """Start an asynchronous complete story job; the finished German
+                       characters: str = "", avoid: str = "",
+                       form: str = "") -> dict:
+            """Start an asynchronous complete story job (SPEC §7.8); the finished German
             story is checked for a real ending, voiced and sent to Telegram.
 
             You are the only one in this chain who was in the conversation, so
@@ -216,6 +217,9 @@ def build_server(*, max_minutes: float | None = None,
               they take ("Benni: er/ihm"): a story that changes his pronouns
               halfway through stops being about him.
             `avoid` — what this story must not do.
+            `form` — who tells it and in which tense, for the whole story:
+              "Ich-Erzählerin Nova, Benni ist du, Präsens". Set here, it holds
+              from the first sentence; left empty, the house form applies.
             """
             if length_minutes < 10 or length_minutes > 60:
                 raise ValueError("length_minutes must be between 10 and 60")
@@ -226,7 +230,7 @@ def build_server(*, max_minutes: float | None = None,
                     "scene_moods": [str(m) for m in (scene_moods or [])],
                     "scene_lengths": [str(x) for x in (scene_lengths or [])],
                     "scene_talk": [str(x) for x in (scene_talk or [])],
-                    "characters": characters, "avoid": avoid}
+                    "characters": characters, "avoid": avoid, "form": form}
 
     @mcp.tool()
     def set_timer(minutes: float, label: str = "") -> dict:

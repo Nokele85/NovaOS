@@ -247,69 +247,63 @@ neither is advertised at all.
 
 ### tell_story
 
-`tell_story` is a long-running host-side job, not a text-generation shortcut. The MCP server
-validates the request and returns immediately with `{"status":"started","story_id":"…"}`.
-The host then performs the work off-turn, following the same **start-don't-await** contract as
-`research` and the camera:
+`tell_story` is a long-running host-side job (SPEC §7.8), not a text shortcut. The MCP server
+validates the request and answers at once with `{"status":"started","story_id":"…"}`;
+`yurios/world/stories.py` does the work off-turn, one story at a time.
 
-1. create an outline with a title, characters, scene purposes and a planned ending;
-2. write the scenes sequentially, carrying forward the current story state;
-3. require a beginning, escalation, turning point and resolved ending;
-4. persist `outline.json` and `story.md` below the character's Vault story directory;
-5. add a compact episodic memory containing title, participants, plot arc,
-   opening and ending to `vault/memory/episodic/` and the embedding index;
-6. synthesize the finished text through the Rook Qwen TTS bridge;
-7. add a short PCM silence between paragraphs and write the final audio artifact;
-8. publish one assistant message with the audio path on the EventHub.
+**The brief is hers.** An explicit request in a text turn ("erzähl mir eine Geschichte …") is caught
+before the model can answer it with a paragraph, and she writes the brief from the conversation:
+`title`, `theme`, `mood`, `register` (how explicit — it outranks the writer's style rules), `form`
+(who narrates, in which tense), `characters` (with pronouns), `avoid`, and per scene `scenes`,
+`scene_lengths` (kurz / normal / lang), `scene_talk` and `scene_moods` (how the scene should sound).
+When she brings scenes, no planner re-plans them.
 
-The Telegram channel handles that event with `sendAudio`. A WAV may be kept as the lossless
-local artifact, but Telegram delivery uses a compressed MP3 when necessary to stay below the
-Bot API upload limit. If TTS or delivery fails, the job keeps the written artifacts and posts a
-failure message; it must not pretend that an audio delivery succeeded.
+How a story is made:
 
-The host enforces `STORY_MIN_WORDS` before writing `story.md`, creating the audio artifact or
-publishing the success event. It may request a bounded continuation from the utility model; if
-the minimum still cannot be reached, the job fails visibly and does not claim a completed story.
+1. The form is fixed before the first word — hers, or the house form: Nova narrates in the first
+   person, the user is "du", present tense.
+2. Each scene is written with the whole story so far, told where it belongs and which scene comes
+   next, so it continues instead of setting up again.
+3. A cheap check after each scene repairs one fault only: a scene that skipped its own opening.
+4. Below `STORY_MIN_WORDS`, bounded extension scenes are added, and only then a separate finale;
+   otherwise the last scene is the ending.
+5. One editor reading, in the order a German fiction editor works — plot, characters, transitions,
+   perspective, tense, language, direct speech. Corrections inside one sentence are applied under
+   guards; a sentence is struck only if it repeats one just before it; a perspective finding is
+   logged, never patched a sentence at a time.
+6. `outline.json` and `story.md` land in `vault/stories/<story_id>/`, and a compact entry goes into
+   the journal and the story index. Story prose never becomes a fact about the user — not after the
+   turn, and not at night (SPEC §21).
+7. The voice reads each scene with its own instruction; the WAV is compressed to MP3 and delivered
+   to the channel it was asked from and to Telegram.
 
-On boot, existing `vault/stories/<story_id>/` artifacts are backfilled once into
-the story-memory index. This lets Nova recognize a previous story when the user
-asks about its title, plot, characters, beginning or ending. The full text and
-audio remain in the story directory; story prose is not fed into `USER.md` as a
-personal fact.
-
-The default target is at least ten minutes of spoken German (normally at least 1,500 words).
-`length_minutes` is accepted from 10 through 60. “Kurz” in a user request does not lower that
-contract; it means a concise style within the minimum duration. The writing prompt emphasizes
-concrete action, dialogue and scene changes, limits repetitive lamenting, and keeps a short
-pause between paragraphs in the audio.
+Measured on the same story, the editor replaced three earlier passes: 10 calls and 5.34 cents became
+one call and about 2–3 cents. A whole story costs about 4 cents on DeepSeek V4.1-Flash.
 
 ```ini
 STORY_ENABLED=true
 TOOL_RATE_STORY=1
 STORY_TTS_URL=http://192.168.0.104:8091
 STORY_TTS_SUPERVISOR_URL=http://192.168.0.104:8092
-STORY_TTS_REF_AUDIO=file:///srv/voices/her/reference.wav
-STORY_TTS_REF_TEXT=Die exakte Abschrift dieser Aufnahme.
+STORY_TTS_SPEAKER=sohee
+STORY_TTS_LANGUAGE=German
 STORY_MIN_WORDS=1500
 STORY_SCENES=8
 ```
 
-The voice is Qwen3-TTS, cloned from one reference clip, and it is asked for whole
-passages rather than slices: the model plans prosody across a request, so a
-paragraph read in one call sounds like one breath while ninety-word slices sound
-like a list. Passages are split between sentences only, never inside one.
+The voice is Qwen3-TTS **CustomVoice** — one of the model's own speakers — because that variant
+honours a per-request instruction; the Base cloning model ignores instructions and read a 23-minute
+story in one register. Passages are split between sentences only, never inside one and never after
+an abbreviation such as "Dr.".
 
-The second service is the point of the pair. Narration takes minutes on a card
-the camera shares, so the voice is loaded before the first passage (`POST /an`,
-about 110 s) and unloaded in a `finally` when the last one is done (`POST /aus`,
-which gave back 7340 MiB when measured). Both live inside the LAN GPU lock, so a
-selfie waits for the voice instead of starving beside it.
+The second service is the point of the pair. The voice is loaded before the first passage
+(`POST /an`, about 110 s) and unloaded in a `finally` (`POST /aus`, which gave back 7 336 MiB when
+measured), both inside the LAN GPU lock, so a selfie waits for the voice instead of starving beside
+it. Shutdown unloads it as well, because a killed job never reaches its own `finally`.
 
-The tool is still a conversational hand: the always-on mind does not initiate it by itself.
-The normal path is a user turn, a discovered `tell_story` schema in `## TOOLS`, a
-`[[tell_story {...}]]` marker, Guard validation, immediate `started` response, and later
-EventHub delivery. Its actual invocation is recorded in the character's
-`tool-logs/calls.jsonl`, and its durable output lives under `vault/stories/<story_id>/`.
+If the voice or the delivery fails, the written artifacts stay and she says the recording did not
+happen; she never claims a delivery that did not occur. The always-on mind does not start stories:
+`tell_story` is not one of her autonomous hands.
 
 ## How a tool call actually happens
 

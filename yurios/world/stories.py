@@ -1,4 +1,4 @@
-"""Asynchronous long-form story production: outline -> scenes -> TTS -> Telegram."""
+"""Asynchronous long-form story production (SPEC §7.8): brief -> scenes -> editor -> TTS -> Telegram."""
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import httpx
 
-from .qwenvoice import QwenVoice, passages
+from .qwenvoice import QwenVoice, passages, rejoin_abbreviations
 from .vram import remote_gpu_lock
 
 log = logging.getLogger("world.stories")
@@ -42,7 +42,7 @@ SCENE_WORDS = "350 bis 450"
 SCENE_LENGTHS = {"kurz": "180 bis 250", "normal": SCENE_WORDS,
                  "lang": "600 bis 800"}
 
-# The review is the one call that thinks, and on this route `max_tokens` bounds
+# The editor is the one call that thinks, and on this route `max_tokens` bounds
 # the thinking as well as the answer: fill it and the content comes back empty.
 # A 4300-word story needed 24 913 reasoning tokens, so this is roughly double —
 # and a ceiling is free, since only what is generated is billed.
@@ -66,6 +66,52 @@ REVIEW_MAX_TOKENS = 48_000
 # does not trade gradually, it tips, so it stays where the story is best.
 WRITING_TEMPERATURE = 0.75
 SCENE_MAX_TOKENS = 1600
+
+#: The form a story is told in when her brief names none. It used to be read
+#: off scene 1 afterwards, which left it to chance: in the A/B run of
+#: 2026-09-14 scene 1 happened to tell the story from Benni's side with Nova in
+#: the third person, and an editor asked to hold it to "Ich-Erzählerin Nova"
+#: then patched six sentences and left every passage mixed. A form is set
+#: before the first word, or it is not a rule.
+DEFAULT_FORM = ("ERZÄHLPERSON: Ich-Erzählerin ist Nova. ANREDE: {user} wird "
+                "durchgehend mit „du“ angesprochen, alle anderen Figuren in der "
+                "dritten Person. ZEITFORM: Präsens.")
+
+#: One reading by a German fiction editor, in the order an editor works:
+#: from the large to the small (lektorat.ai, textorat.net), with one
+#: perspective figure per scene (storyanalyse.de) and direct speech punctuated
+#: after Duden. It replaced three passes — review, straighten, dialogue — that
+#: were allowed to report four kinds of fault and nothing else, which is why
+#: a story with an unintroduced character, a vanished threat and three endings
+#: came back "straightened 0 of 0". Measured on the same text: 10 calls and
+#: 5.34 cents before, 1 call and 1.90 cents here.
+LEKTOR_PROMPT = """Du bist Lektorin für deutschsprachige Belletristik. Vor dir liegt das Manuskript eines Hörspiels, Satz für Satz nummeriert; [Absatz n] markiert den Beginn einer neuen Szene.
+
+Verbindliche Form: {form}
+Register (gewollt, niemals abschwächen): {register}
+
+Arbeite wie im Lektorat vom Großen zum Kleinen, in dieser Reihenfolge:
+1. handlung — Logiklücken, Widersprüche, unmotivierte Zufälle, zeitliche Unstimmigkeiten, verlorene Fäden (etwas wird angekündigt oder droht und ist danach verschwunden).
+2. figuren — eine Figur taucht auf oder wird erwähnt, ohne eingeführt zu sein; eine Figur weiß oder tut etwas, das nicht zu ihr passt; ein Gegenstand wechselt ohne Grund (erst ein Beil, dann eine Axt).
+3. uebergang — eine Szene erzählt noch einmal, was am Ende der vorigen schon passiert ist; ein Satz wiederholt fast wörtlich einen Satz kurz davor; ein Sprung ohne Übergang; mehr als ein Ende.
+4. perspektive — Abweichung von der verbindlichen Form, Perspektivbruch (die Erzählstimme weiß, was sie nicht wissen kann), Head-Hopping.
+5. tempus — die Erzählzeit wechselt ohne Grund.
+6. sprache — Wortwiederholungen und wiederkehrende Formulierungen oder Bilder auf engem Raum, Stilbrüche, Füllwörter.
+7. rede — unklarer Sprecher, gehäufte Redebegleitsätze, Zeichensetzung der wörtlichen Rede nicht nach Duden („…“, sagte sie. / Sie sagte: „…“).
+{verdacht}
+Was du NICHT tust: die Handlung ändern, Deutliches abschwächen, Szenen kürzen, nach Geschmack umformulieren.
+
+Für jeden Fund:
+- "satz": die Nummer des Satzes,
+- "kategorie": eine der sieben oben,
+- "befund": kurz, was falsch ist,
+- "korrektur": der korrigierte Satz, NUR wenn sich der Fehler innerhalb genau dieses einen Satzes beheben lässt; "STREICHEN", wenn der Satz fast wörtlich wiederholt, was in den Sätzen unmittelbar davor schon steht; sonst "".
+Eine Abweichung der Perspektive meldest du immer mit leerer Korrektur — sie betrifft mehr als einen Satz und wird nicht Satz für Satz umgebaut.
+
+Höchstens 60 Funde, die wichtigsten zuerst. Antworte als json: {{"funde": [{{"satz": 1, "kategorie": "...", "befund": "...", "korrektur": "..."}}]}}
+
+Manuskript:
+{text}"""
 
 # The shape of a story, for when no outline survives. Five distinct beats beat
 # one repeated purpose: the failure mode being guarded against is a story that
@@ -117,7 +163,7 @@ def _sentences(text: str) -> list[str]:
     rest = text[ende:].strip()
     if rest:
         out.append(rest)
-    return out or [text]
+    return rejoin_abbreviations(out) or [text]
 
 
 def _dialogue_share(text: str) -> float:
@@ -173,6 +219,37 @@ def _echoes(parts: list[str], hoechstens: int = 14) -> list[str]:
             for folge, w in sorted(verdacht)[:hoechstens]]
 
 
+def _findings(antwort: str) -> list | None:
+    """The editor's findings, or None when the answer holds none.
+
+    An empty list is an answer ("nothing to fix"); a missing one is not."""
+    found = re.search(r"\{.*\}", antwort or "", re.S)
+    if not found:
+        return None
+    try:
+        daten = json.loads(found.group(0))
+    except ValueError:
+        return None
+    if not isinstance(daten, dict):
+        return None
+    funde = daten.get("funde", daten.get("findings"))
+    return funde if isinstance(funde, list) else None
+
+
+def _repeats(satz: str, frueher: str) -> bool:
+    """Does `satz` say again what `frueher` already said?
+
+    The editor may strike a sentence only on this evidence: most of its
+    content words are already in one sentence just before it. "Yara sagte
+    eine Nummer ins Gerät, Datum, Uhrzeit, dann nichts mehr." after its
+    near-twin passes; a new sentence that shares a name does not."""
+    def inhalt(s: str) -> set[str]:
+        return {w.lower() for w in re.findall(r"\b[\wÄÖÜäöüß]{4,}\b", s)
+                if w.lower() not in _FUELLWOERTER}
+    neu, alt = inhalt(satz), inhalt(frueher)
+    return bool(neu) and len(neu & alt) / len(neu) >= 0.6
+
+
 def _mixed_address(saetze: list[str]) -> int:
     """How many sentences of a passage disagree with its own majority about
     whether the second figure is spoken to or spoken about.
@@ -186,18 +263,6 @@ def _mixed_address(saetze: list[str]) -> int:
     if len(modi) < 2:
         return 0
     return min(sum(modi), len(modi) - sum(modi))
-
-
-def _numbered(answer: str) -> list[tuple[int, str]]:
-    """The lines of a `<number>: <sentence>` answer. Anything else is skipped —
-    a preamble, an apology, "OK" — because a line we cannot read is a line we
-    must not apply."""
-    out: list[tuple[int, str]] = []
-    for line in (answer or "").splitlines():
-        m = re.match(r"\s*(\d{1,3})\s*[:.)]\s*(.+)", line)
-        if m and m.group(2).strip():
-            out.append((int(m.group(1)), m.group(2).strip()))
-    return out
 
 
 def _purpose_text(node) -> str:
@@ -327,7 +392,8 @@ class StoryLab:
 
     async def _complete(self, prompt: str, *, max_tokens: int = 900,
                         persona: bool = True, thinking: bool | None = None,
-                        temperature: float = 0.75) -> str:
+                        temperature: float = 0.75,
+                        response_format: dict | None = None) -> str:
         provider = self.utility() if callable(self.utility) else self.utility
         if persona and self.character_context is not None:
             soul = self.character_context() if callable(self.character_context) else self.character_context
@@ -339,7 +405,9 @@ class StoryLab:
                       "Lass diese Eigenschaften durch konkrete Entscheidungen, Dialoge und "
                       "Reaktionen sichtbar werden. Erzähle nicht über die Persona, spiele sie.\n\n"
                       + prompt)
-        extra = {} if thinking is None else {"thinking": thinking}
+        extra: dict = {} if thinking is None else {"thinking": thinking}
+        if response_format is not None:
+            extra["response_format"] = response_format
         return await provider.complete([{"role": "user", "content": prompt}],
                                        temperature=temperature, max_tokens=max_tokens,
                                        **extra)
@@ -376,33 +444,6 @@ class StoryLab:
                       story_id, e, len(plan_raw or ""))
             return {"title": theme, "characters": [],
                     "scenes": [{"purpose": p} for p in _BARE_ARC]}
-
-    async def _house_rules(self, opening: str) -> str:
-        """The two rules a story has to keep, read off its opening.
-
-        Deliberately only two. An earlier version asked for whatever the first
-        scene established and got incidental circumstances back as law — "the
-        figures have no names", "the weather is dry" — and then corrected the
-        story against its own plot, which is how a dawn scene ended up saying
-        "it is getting dark" (live, 2026-09-12). Weather, time of day, tense
-        and names are story, not rule.
-
-        The cast is not derived either. It is always Nova and him."""
-        rules = await self._complete(
-            "Lies den Anfang einer Geschichte und notiere in höchstens zwei "
-            "kurzen Zeilen, woran sich der Rest halten muss — nur das, sonst "
-            "nichts:\n"
-            "ERZÄHLPERSON: in welcher Person erzählt wird und wer mit \"du\" "
-            "beziehungsweise \"ich\" gemeint ist\n"
-            "ANREDE: ob die zweite Figur durchgehend angesprochen (\"du\") "
-            "oder über sie gesprochen wird (\"er\"/\"sie\")\n"
-            "ZEITFORM: Präsens oder Vergangenheit\n\n"
-            f"Die Hauptfiguren stehen fest: Nova und {self.user_name}. Leite "
-            "keine weiteren Regeln ab. Wetter, Tageszeit, Zeitform, Orte und "
-            "Namen gehören zur Handlung und sind keine Regeln.\n\n"
-            f"Anfang:\n{opening[:3000]}",
-            max_tokens=300, persona=False)
-        return self._clean(rules)
 
     async def _verify_scene(self, scene: str, davor: str, auftrag: str,
                             danach: str) -> tuple[str, str]:
@@ -445,7 +486,9 @@ class StoryLab:
                 "BEGINN: richtig / FALSCH <wo die Szene stattdessen "
                 "einsetzt> — FALSCH nur dann, wenn der Ort oder die "
                 "Lage, mit der ihr Auftrag anfängt, im Text überhaupt "
-                "nicht vorkommt und die Szene schon weiter ist.\n\n"
+                "nicht vorkommt und die Szene schon weiter ist. Endete "
+                "die vorige Szene schon an diesem Ort, ist es richtig, dort "
+                "direkt weiterzuerzählen, ohne ihn neu zu nennen.\n\n"
                 f"Szene:\n{scene[:5000]}",
                 max_tokens=300, persona=False, temperature=0.2)
         except Exception:
@@ -460,248 +503,111 @@ class StoryLab:
                 anfang = zeile.strip()
         return offen, anfang
 
-    async def _review(self, parts: list[str], rules: str) -> dict[int, dict[int, str]]:
-        """Read the whole story at once and name the sentences that break it.
+    async def _lektorat(self, parts: list[str], rules: str,
+                        register: str) -> tuple[int, int]:
+        """Read the finished story once as its editor, and apply only what is
+        safe to apply (SPEC §7.8).
 
-        This is the one call that thinks. Measured on a 4300-word story it
-        spent 24 913 reasoning tokens, took 110 s and cost 1.6 cents — and it
-        found every fault a careful reading had found plus one it had missed
-        (a belt opened for the second time). Three earlier attempts returned
-        nothing because `max_tokens` bounds the thinking as well as the answer
-        on this route: fill it and the content comes back empty with
-        `finish_reason: length`. The ceiling here is roughly double what the
-        measurement needed, and a ceiling costs nothing — only the tokens
-        actually generated are billed.
+        What is safe was measured on two copies of one story (2026-09-14). A
+        correction inside one sentence — an axe that should be the hatchet from
+        before, "sagte ich zu dir" when the one counting was Yara, a perfect
+        tense in a past-tense story — stays, under the guards the old passes
+        had. A deletion stays only if the sentence really repeats one just
+        before it: the writer does produce those back to back ("Yara sagte eine
+        Nummer ins Gerät …" twice), and a deletion that is not one is prose
+        lost. A perspective finding is never applied: patched a sentence at a
+        time it left every passage of that story half "ich" and half "Nova".
+        Everything not applied is logged as a note for a reader.
 
-        Why it earns its cost: these faults span the whole story. A clause
-        repeated five times and a shirt taken off twice are invisible to a
-        checker that only ever sees one passage, however carefully it looks."""
-        anteil = _dialogue_share("\n\n".join(parts)) * 100
+        Returns (sentences changed, notes left)."""
+        saetze = [_sentences(teil) for teil in parts]
+        karte: list[tuple[int, int]] = []
+        zeilen: list[str] = []
+        for pi, ss in enumerate(saetze):
+            zeilen.append(f"[Absatz {pi + 1}]")
+            for li, satz in enumerate(ss):
+                karte.append((pi, li))
+                zeilen.append(f"{len(karte)}: {satz}")
         verdacht = _echoes(parts)
-        karte: list[tuple[int, int]] = []
-        zeilen: list[str] = []
-        for pi, teil in enumerate(parts):
-            for li, satz in enumerate(_sentences(teil)):
-                karte.append((pi, li))
-                zeilen.append(f"{len(zeilen) + 1}: {satz}")
-        try:
+        auftrag = LEKTOR_PROMPT.format(
+            form=rules, register=register or "wie geschrieben",
+            verdacht=("\nDiese Dinge kommen in benachbarten Absätzen vor — "
+                      "prüfe, ob etwas doppelt erzählt wird oder ob es "
+                      "dorthin gehört:\n" + "\n".join(verdacht) + "\n")
+            if verdacht else "",
+            text="\n".join(zeilen))
+        funde = None
+        # Twice at most. DeepSeek documents that its JSON mode "may
+        # occasionally return empty content", and the first live run of this
+        # editor did exactly that on one of two stories (2026-09-14).
+        for versuch in (1, 2):
             antwort = await self._complete(
-                "Du bekommst eine Geschichte, Satz für Satz nummeriert.\n\n"
-                f"Verbindliche Form:\n{rules}\n\n"
-                "Finde NUR diese vier Fehlerarten:\n"
-                "1. Die Anrede weicht von der Form ab.\n"
-                "2. Etwas passiert zweimal, obwohl es nur einmal passieren kann "
-                "— Kleidung zweimal ausgezogen, ein Raum zweimal betreten, ein "
-                "Gürtel zweimal geöffnet.\n"
-                "3. Eine Formulierung wiederholt sich auffällig oft.\n"
-                "4. Ein Satz BERICHTET über etwas Gesagtes, statt es zu zeigen "
-                "(\"Ich sagte ihm, dass ich müde war\", \"wir redeten über den "
-                "Weg\") — er könnte gesprochene Rede sein.\n\n"
-                f"Gesprochen wird derzeit {anteil:.0f} % der Geschichte; ein "
-                "Drittel wäre richtig. Nenne unter Fehlerart 4 so viele Sätze, "
-                "dass das erreichbar wird — aber nur solche, in denen wirklich "
-                "jemand etwas sagt oder sagen könnte. Beschreibung, Handlung "
-                "und innere Sätze bleiben, was sie sind.\n\n"
-                + (("Diese Dinge kommen in benachbarten Absätzen zweimal vor. "
-                    "Prüfe jedes einzeln: ist es dasselbe Ereignis ein zweites "
-                    "Mal, oder gehört es dorthin? Nur das Erste ist ein Fehler.\n"
-                    + "\n".join(verdacht) + "\n\n") if verdacht else "")
-                + "Nenne nur die fehlerhaften Sätze, höchstens 40, je Zeile:\n"
-                "<Nummer>: <kurze Begründung>\n"
-                "Danach nichts weiter. Findest du nichts, antworte: OK\n\n"
-                + "\n".join(zeilen),
-                max_tokens=REVIEW_MAX_TOKENS, persona=False, thinking=True)
-        except Exception:
-            log.warning("the story review failed; nothing is corrected",
-                        exc_info=True)
-            return {}
-        funde: dict[int, dict[int, str]] = {}
-        for nummer, grund in _numbered(antwort):
-            if not 1 <= nummer <= len(karte):
+                auftrag, max_tokens=REVIEW_MAX_TOKENS, persona=False,
+                thinking=True, temperature=0.2,
+                response_format={"type": "json_object"})
+            funde = _findings(antwort)
+            if funde is not None:
+                break
+            log.warning("lektorat attempt %d returned no findings list "
+                        "(%d characters: %r)", versuch, len(antwort or ""),
+                        (antwort or "")[:160])
+        if funde is None:
+            raise ValueError("the editor returned no findings list")
+
+        geaendert = hinweise = 0
+        for fund in funde[:60]:
+            if not isinstance(fund, dict):
+                continue
+            nummer = fund.get("satz")
+            if not isinstance(nummer, int) or not 1 <= nummer <= len(karte):
                 continue
             pi, li = karte[nummer - 1]
-            # The opening is the law the rest is held against, not a defendant.
-            if pi > 0:
-                funde.setdefault(pi, {})[li] = grund
-        log.info("story review: %d sentences in %d of %d passages",
-                 sum(len(v) for v in funde.values()), len(funde), len(parts) - 1)
-        return funde
-
-    async def _dialogue_pass(self, parts: list[str], rules: str) -> int:
-        """A second thinking pass with one job: make them talk.
-
-        Six ways of asking the writer for more spoken words changed nothing —
-        a quota, a topic per scene, subtext, a sensory anchor, a radio-play
-        framing, and the temperature dial. The writer is holding twenty
-        constraints at once and dialogue loses to all of them. This pass holds
-        one.
-
-        It is the opposite contract to `_straighten`, which may add nothing: a
-        conversion from report to speech necessarily adds words. So it gets its
-        own guards — a replacement must actually contain spoken text, may not
-        be shorter than what it replaces, and may not balloon.
-
-        It must also not soften anything. An earlier experiment with subtext
-        raised nothing and cut the physical density from 20 to 13, because
-        advice for restrained prose reached scenes that must not be
-        restrained."""
-        vorher = _dialogue_share("\n\n".join(parts))
-        karte: list[tuple[int, int]] = []
-        zeilen: list[str] = []
-        for pi, teil in enumerate(parts):
-            for li, satz in enumerate(_sentences(teil)):
-                karte.append((pi, li))
-                zeilen.append(f"{len(zeilen) + 1}: {satz}")
-        try:
-            antwort = await self._complete(
-                "Du bekommst ein Hörstück, Satz für Satz nummeriert. Dein "
-                "einziger Auftrag: mehr gesprochene Rede.\n\n"
-                f"Verbindliche Form:\n{rules}\n\n"
-                f"Derzeit sind {vorher * 100:.0f} % des Textes gesprochen; ein "
-                "Drittel wäre richtig.\n\n"
-                "Suche Sätze, die BERICHTEN, was jemand gesagt hat oder sagen "
-                "könnte, und schreibe sie als Dialog aus. Aus einem Satz dürfen "
-                "dabei mehrere werden.\n\n"
-                "Sieh besonders dort nach, wo lange nichts gesagt wird — in "
-                "körperlichen und handlungsdichten Abschnitten fehlt die Rede am "
-                "häufigsten, und gerade dort wird in Wirklichkeit geredet.\n\n"
-                "Was sich NICHT ändern darf: die Handlung, wer was tut, der Ton "
-                "und die Deutlichkeit. Du machst nichts zurückhaltender, nichts "
-                "andeutender und nichts kürzer. Beschreibung und innere Sätze "
-                "lässt du in Ruhe — nicht jeder Satz will Rede sein.\n\n"
-                "Antworte je Zeile: <Nummer>: <der Satz als Dialog>\n"
-                "Nenne nur Sätze, die du wirklich umschreibst, höchstens 40.\n"
-                "Findest du keine, antworte: OK\n\n"
-                + "\n".join(zeilen),
-                max_tokens=REVIEW_MAX_TOKENS, persona=False, thinking=True)
-        except Exception:
-            log.warning("the dialogue pass failed; the story keeps its own "
-                        "share of spoken words", exc_info=True)
-            return 0
-        geaendert = 0
-        for nummer, satz in _numbered(antwort):
-            if not 1 <= nummer <= len(karte):
+            alt = saetze[pi][li]
+            if not alt:
+                continue                     # already struck by an earlier finding
+            kategorie = str(fund.get("kategorie") or "").strip().lower()
+            befund = str(fund.get("befund") or "").strip()
+            neu = str(fund.get("korrektur") or "").strip()
+            if not neu or neu.upper() in ("OK", "IO") or kategorie == "perspektive":
+                hinweise += 1
+                log.info("lektorat note [%s] sentence %d: %s", kategorie, nummer,
+                         befund[:160])
                 continue
-            pi, li = karte[nummer - 1]
-            if pi == 0:
+            if neu.upper() == "STREICHEN":
+                davor = [s for ss in saetze for s in ss][:nummer - 1]
+                davor = [s for s in davor if s][-3:]
+                noch_da = sum(1 for s in saetze[pi] if s)
+                if kategorie in ("uebergang", "sprache") and noch_da > 1 \
+                        and any(_repeats(alt, frueher) for frueher in davor):
+                    saetze[pi][li] = ""
+                    geaendert += 1
+                else:
+                    hinweise += 1
+                    log.info("lektorat wanted sentence %d struck, but it does "
+                             "not repeat one just before it; kept: %s",
+                             nummer, befund[:120])
                 continue
-            saetze = _sentences(parts[pi])
-            if li >= len(saetze):
+            if _META.search(neu) or (_BROKEN_VERB.search(neu)
+                                     and not _BROKEN_VERB.search(alt)):
+                log.warning("lektorat answered sentence %d with reasoning or a "
+                            "broken verb; kept it", nummer)
+                hinweise += 1
                 continue
-            alt_satz = saetze[li]
-            if _META.search(satz) or _BROKEN_VERB.search(satz):
+            if not 0.5 * _words(alt) <= _words(neu) <= 1.6 * _words(alt):
+                log.info("lektorat turned sentence %d from %d words into %d; "
+                         "kept it: %s", nummer, _words(alt), _words(neu),
+                         befund[:100])
+                hinweise += 1
                 continue
-            # A conversion to speech that contains no speech is not one.
-            if not re.search(r"[„\"»]", satz):
-                log.warning("dialogue pass returned sentence %d without any "
-                            "spoken words; kept it", nummer)
-                continue
-            if not _words(alt_satz) <= _words(satz) <= 3.5 * _words(alt_satz):
-                log.warning("dialogue pass turned %d words into %d for sentence "
-                            "%d; kept the original", _words(alt_satz),
-                            _words(satz), nummer)
-                continue
-            saetze[li] = satz
-            parts[pi] = " ".join(saetze)
+            saetze[pi][li] = neu
             geaendert += 1
-        nachher = _dialogue_share("\n\n".join(parts))
-        log.info("dialogue pass: %d sentences spoken out, share %.0f%% -> %.0f%%",
-                 geaendert, vorher * 100, nachher * 100)
-        return geaendert
-
-    async def _straighten(self, parts: list[str], rules: str,
-                          funde: dict[int, dict[int, str]]) -> tuple[int, int]:
-        """Hold the story against its own rules, sentence by sentence.
-
-        The whole passage used to go in and a whole passage came back, which
-        left the model free to rewrite everything it touched: 8 of 8 passages
-        "corrected" and the story 12% longer, twice. Now it sees numbered
-        sentences and may answer only with the numbers that break a rule.
-        Every sentence it does not name stays byte-for-byte as it was written
-        — not by instruction, but because we never replace it.
-
-        Each returned sentence is checked on its own: no reasoning about the
-        rules instead of prose, no pronoun swapped without its verb, and a
-        length near the original. A refused sentence costs that sentence, not
-        the passage."""
-        geaendert = gesamt = 0
-        for i in sorted(funde):
-            if not 0 < i < len(parts):
-                continue
-            saetze = _sentences(parts[i])
-            ziele = sorted(n + 1 for n in funde[i] if 0 <= n < len(saetze))
-            if not ziele:
-                continue
-            gesamt += len(ziele)
-            # Every sentence goes in, because a sentence is judged beside its
-            # neighbours — but only the named ones may come back. The pass used
-            # to be handed a whole passage and answered with 94% of it.
-            nummeriert = "\n".join(f"{n}: {s}" for n, s in enumerate(saetze, 1))
-            try:
-                answer = await self._complete(
-                    "Prüfe eine Geschichte Satz für Satz gegen ihre Regeln.\n\n"
-                    f"Regeln:\n{rules}\n\n"
-                    "Dein Auftrag sind Erzählperson, Anrede und Zeitform — "
-                    "und, wo ein Satz über etwas Gesagtes nur berichtet, ihn in "
-                    "gesprochene Rede verwandeln: aus \"Ich sagte ihm, dass ich "
-                    "müde war\" wird \"Ich bin müde\", sagte ich.\n"
-                    "Ändere alles, was dafür nötig ist — auch die Verbformen, "
-                    "die daraus folgen. Aus \"sagtest du\" wird \"sagte er\", "
-                    "nicht \"sagtest er\".\n\n"
-                    "Handlung, Bilder, Ton und Wortwahl sind NICHT dein "
-                    "Auftrag. Dass dir ein Satz nicht gefällt, ist kein Grund.\n\n"
-                    "Beurteile jeden Satz im Zusammenhang mit dem davor und "
-                    "danach, nicht für sich allein. Die Sätze sind ein "
-                    "fortlaufender Absatz, keine Liste.\n"
-                    "Wenn du einen Satz änderst, prüfe seine Nachbarn: passen "
-                    "sie danach nicht mehr, nenne sie mit. Am Ende muss der "
-                    "ganze Absatz einheitlich sein — Anrede und Zeitform dürfen "
-                    "innerhalb eines Absatzes nirgends wechseln.\n\n"
-                    f"Zu korrigieren sind AUSSCHLIESSLICH die Sätze "
-                    f"{', '.join(str(z) for z in ziele)}. Jeder andere Satz "
-                    "bleibt, wie er ist, und wird nicht genannt.\n\n"
-                    "Antworte NUR mit den Nummern dieser Sätze, je Zeile eine:\n"
-                    "<Nummer>: <der angeglichene Satz>\n\n"
-                    "Verstößt kein Satz, antworte mit genau: OK\n\n"
-                    f"Sätze:\n{nummeriert}",
-                    max_tokens=SCENE_MAX_TOKENS, persona=False)
-            except Exception:
-                log.warning("straightening passage %d failed; left as written",
-                            i + 1, exc_info=True)
-                continue
-            for nummer, satz in _numbered(answer):
-                if nummer not in ziele:
-                    # It was not asked about this one, so it does not get to
-                    # decide about it.
-                    continue
-                alt = saetze[nummer - 1]
-                # "12: OK" means "this one is fine", not "replace it with the
-                # word OK" — and against a one-word sentence the length window
-                # lets that through. It reached a published story (live,
-                # 2026-09-12) and would have been read out loud.
-                if satz.strip().strip(".!—-").upper() in ("OK", "IO", ""):
-                    continue
-                if _META.search(satz):
-                    log.warning("passage %d sentence %d answered with reasoning "
-                                "instead of prose; kept it", i + 1, nummer)
-                    continue
-                if _BROKEN_VERB.search(satz) and not _BROKEN_VERB.search(alt):
-                    log.warning("passage %d sentence %d swapped a pronoun "
-                                "without its verb; kept it", i + 1, nummer)
-                    continue
-                if not 0.5 * _words(alt) <= _words(satz) <= 1.6 * _words(alt):
-                    log.warning("passage %d sentence %d went from %d words to "
-                                "%d; kept it", i + 1, nummer, _words(alt),
-                                _words(satz))
-                    continue
-                saetze[nummer - 1] = satz
-                geaendert += 1
-            parts[i] = " ".join(saetze)
-            gemischt = _mixed_address(saetze)
+        for pi, ss in enumerate(saetze):
+            parts[pi] = " ".join(s for s in ss if s)
+            gemischt = _mixed_address([s for s in ss if s])
             if gemischt:
-                log.info("passage %d still mixes forms of address in %d of %d "
-                         "sentences", i + 1, gemischt, len(saetze))
-        return geaendert, gesamt
+                log.info("passage %d still mixes forms of address in %d "
+                         "sentences", pi + 1, gemischt)
+        return geaendert, hinweise
 
     async def _state_update(self, state: str, scene: str) -> str:
         """Carry the story's *state* forward, not its last 1200 characters.
@@ -795,13 +701,12 @@ class StoryLab:
             purposes = [s for s in (plan.get("scenes") or []) if s]
             if not purposes:
                 purposes = [{"purpose": "Erzähle die Geschichte weiter."}] * self.scenes
-            # The form scene 1 sets, carried to every scene after it. Derived
-            # once and passed verbatim rather than travelling in the state
-            # note, because the note is written by a model each time and the
-            # form is not negotiable. Repairing this afterwards was measured
-            # over five runs and never beat not breaking it: the address
-            # drifted because every scene decided again.
-            rules = ""
+            # The form, set before the first word and carried verbatim to every
+            # scene (SPEC §7.8). Hers when her brief names one; the house form otherwise.
+            # Repairing a form afterwards was measured over five runs and never
+            # beat not breaking it, and reading it off scene 1 left it to chance.
+            rules = str(contract.get("form") or "").strip() \
+                or DEFAULT_FORM.format(user=self.user_name)
             parts: list[str] = []
             # Aligned with `parts`: each text carries the instruction it is to
             # be spoken with ("" = her plain narrating register).
@@ -819,6 +724,7 @@ class StoryLab:
                 gespraech = her_talk[i] if i < len(her_talk) else ""
                 anfang = _opening(_purpose_text(purpose))
                 naht = _last_sentences(parts[-1]) if parts else ""
+                bisher = "\n\n".join(parts)
                 umfang = SCENE_LENGTHS.get(
                     her_lengths[i] if i < len(her_lengths) else "", SCENE_WORDS)
                 szenen_prompt = (
@@ -829,29 +735,45 @@ class StoryLab:
                     "wissen, wo sie sind und was geschieht. "
                     f"Szene {i+1}/{len(purposes)}; {relationship} Thema: {theme}; "
                     f"Stimmung: {mood}. "
-                    + (f"Verbindliche Form, die Szene 1 gesetzt hat und die in "
-                       f"jedem Satz gilt: {rules} " if rules else "")
+                    + (f"Verbindliche Form, die in jedem Satz gilt: {rules} "
+                       "Es gibt genau eine Erzählstimme: Sie weiß nur, was sie "
+                       "selbst sieht, hört oder erschließen kann. "
+                       if rules else "")
                     + (f"Figuren und gemeinsame Vorgeschichte: {characters_brief}. "
                        if characters_brief else "")
                     + f"Planabsicht: {_purpose_text(purpose)} "
-                    + f"Bisheriger Zustand: {state} "
-                    # This used to read "the setting is introduced, do not
-                    # start over" and nothing else. It was aimed at scene 1
-                    # being retold, but read as "do not start at the start":
-                    # five of eight scenes opened on a later beat of their own
-                    # brief — on the pavement while he was already unlocking,
-                    # in bed before the scene that leads there. Naming the
-                    # ground the scene opens on costs one sentence and is the
-                    # thing three rounds of after-the-fact repair could not do.
-                    + (f"Diese Szene setzt hier ein: {anfang}. Der erste "
-                       "Absatz spielt dort und noch nicht weiter. "
+                    + f"Bisheriger Zustand, vor allem was noch offen ist: {state} "
+                    # The whole story so far, not a summary of it. Each scene
+                    # used to see a 120-word state note and the last two
+                    # sentences, and what a summary drops the next scene
+                    # invents: in 325edf7838 a character nobody had introduced
+                    # was "still screaming" in scene 4, a threat closing in at
+                    # the end of scene 6 was gone by scene 7, and scenes cut to
+                    # their next milestone without the way there. Eight scenes
+                    # are about 3 600 words, which one scene call carries.
+                    + (f"Die Geschichte bis hierher, vollständig:\n<<<\n{bisher}\n>>>\n"
+                       if bisher else "")
+                    # Where the scene belongs, not where it must arrive again.
+                    # "The scene starts here, the first paragraph plays there"
+                    # cured scenes that skipped their own opening, and forced a
+                    # second arrival wherever the scene before had already
+                    # arrived: 325edf7838 ended scene 5 at a supermarket car
+                    # park and opened scene 6 describing the same car park.
+                    + ((f"Diese Szene gehört an diesen Ort: {anfang}. "
+                        + ("Endet die Geschichte bis hierher schon dort, "
+                           "erzählst du dort direkt weiter und beschreibst den "
+                           "Ort nicht noch einmal; sonst beginnt der erste "
+                           "Absatz dort. " if bisher
+                           else "Der erste Absatz spielt dort. "))
                        if anfang else "")
-                    + (f"Unmittelbar davor endete die Erzählung so: „{naht}“ "
-                       "Knüpfe dort an, ohne den Moment noch einmal zu "
-                       "erzählen. " if naht else "")
-                    + "Die Szenerie ist bereits eingeführt; führe sie nicht "
-                    "neu ein und erzähle nichts noch einmal, was schon dasteht. "
-                    "Zeige überwiegend konkrete Handlung, Dialog und eine sichtbare Veränderung. "
+                    + ("Schreibe unmittelbar nach dem letzten Satz der "
+                       "Geschichte weiter. Was dort schon steht, wird nicht "
+                       "noch einmal erzählt — keine Ankunft, keine "
+                       "Beschreibung, keine Handlung zweimal. Wer eingeführt "
+                       "ist, bleibt eingeführt; wer neu dazukommt, wird "
+                       "eingeführt. Was offen ist, wird nicht vergessen. "
+                       if bisher else "")
+                    + "Zeige überwiegend konkrete Handlung, Dialog und eine sichtbare Veränderung. "
                     + (f"In dieser Szene sprechen die beiden über: {gespraech} "
                        "Schreib das als gesprochene Rede aus, nicht als Bericht "
                        "darüber. " if gespraech else "")
@@ -894,8 +816,10 @@ class StoryLab:
                 # else is the ground the next one builds on, and by the
                 # end of the story that is no longer repairable — the
                 # end review read past exactly this twice.
+                davor = state + (f" Die vorige Szene endete so: {naht}"
+                                 if naht else "")
                 offen, anfang = await self._verify_scene(
-                    scene, state, _purpose_text(purpose), naechste or "keine")
+                    scene, davor, _purpose_text(purpose), naechste or "keine")
                 if offen:
                     # Logged, not repaired. Her outline lines pack four or five
                     # elements into a sentence, so this asks "did you tick every
@@ -921,7 +845,7 @@ class StoryLab:
                     # the brief and loses half the scene is not one.
                     if _words(zweiter) >= 0.7 * _words(scene):
                         _, rest = await self._verify_scene(
-                            zweiter, state, _purpose_text(purpose),
+                            zweiter, davor, _purpose_text(purpose),
                             naechste or "keine")
                         if not rest:
                             log.info("story %s scene %d: repaired",
@@ -936,18 +860,6 @@ class StoryLab:
                                  i + 1, _words(zweiter), _words(scene))
                 parts.append(scene)
                 moods.append(her_moods[i] if i < len(her_moods) else "")
-                if not rules:
-                    # After the opening, not before: the first scene is what
-                    # decides the form, so there is nothing to state until it
-                    # exists.
-                    try:
-                        rules = await self._house_rules(scene)
-                        log.info("story %s writes to its own form: %s",
-                                 story_id, rules.replace(chr(10), " | ")[:160])
-                    except Exception:
-                        log.warning("story %s: could not read its own form from "
-                                    "scene 1; the later scenes decide for "
-                                    "themselves", story_id, exc_info=True)
                 state = await self._state_update(state, scene)
             story = "\n\n".join(parts)
             # Do not let a short model completion masquerade as the configured
@@ -978,9 +890,12 @@ class StoryLab:
                 parts.append(extra)
                 moods.append("")
                 story = "\n\n".join(parts)
-            # Always give the host model a dedicated finale pass. A syntactically
-            # complete last sentence is not the same thing as a resolved ending.
-            needs_finale = True
+            # A finale only after extension scenes (SPEC §7.8). The last planned scene is
+            # already told to close every thread, and it now sees the whole
+            # story to do it; a finale appended after it anyway gave every
+            # story two endings, and 325edf7838 three. Extension scenes are
+            # told to *prepare* the close, so they alone still need one.
+            needs_finale = extension_rounds > 0
             if needs_finale:
                 tail = story[-3200:]
                 # It is told to close every open thread, so it has to be able
@@ -1018,22 +933,14 @@ class StoryLab:
                              "diesen Abend zu Ende.")
                 moods.append("")
                 story = "\n\n".join(parts)
-            # The last word before the file exists: hold the whole story
-            # against the rules its own opening set. Costs one short "OK" per
-            # passage that is already fine.
+            # The last word before the file exists: one reading by its editor.
             try:
-                if rules:
-                    funde = await self._review(parts, rules)
-                    geaendert, gesamt = await self._straighten(parts, rules, funde)
-                    # Second: the one job the writer could never hold on to.
-                    # It runs after the repairs, so it works on the corrected
-                    # text and cannot undo them.
-                    await self._dialogue_pass(parts, rules)
-                    story = "\n\n".join(parts)
-                    log.info("story %s: straightened %d of %d sentences",
-                             story_id, geaendert, gesamt)
+                geaendert, hinweise = await self._lektorat(parts, rules, register)
+                story = "\n\n".join(parts)
+                log.info("story %s: lektorat changed %d sentences and left %d "
+                         "notes", story_id, geaendert, hinweise)
             except Exception:
-                log.warning("story %s: the rules pass failed; publishing as "
+                log.warning("story %s: the lektorat failed; publishing as "
                             "written", story_id, exc_info=True)
             log.info("story %s: %.0f%% of it is spoken aloud", story_id,
                      _dialogue_share(story) * 100)
@@ -1098,7 +1005,7 @@ class StoryLab:
                     if index < len(parts) - 1:
                         pcm.extend(b"\0\0" * int(rate * 0.35))
             finally:
-                # Always, not only after a load that answered: a load that
+                # Always (SPEC §7.8), not only after a load that answered: a load that
                 # timed out here kept loading on the server and held 7 GB
                 # nobody released (2026-09-11). Unloading is what gives the
                 # card back — 7336 MiB, measured — so it is not optional.

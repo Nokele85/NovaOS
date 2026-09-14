@@ -1,4 +1,4 @@
-"""Qwen3-TTS on the LAN card, with the card handed back when the voice is done.
+"""Qwen3-TTS on the LAN card, with the card handed back when the voice is done (SPEC §7.8).
 
 Two services, one machine, two jobs:
 
@@ -42,6 +42,39 @@ LOAD_TIMEOUT_S = 420.0
 LOAD_POLL_S = 3.0
 
 
+#: Words that end in a full stop without ending a sentence. Splitting after
+#: "Dr." made "Dr." one sentence and "Halbach sagte …" the next: ten of the
+#: thirty-six findings of the first Lektor run (2026-09-14) were that alone,
+#: and every numbered pass and every passage boundary inherited it.
+ABBREVIATIONS = frozenset({
+    "dr", "prof", "hr", "fr", "frl", "st", "nr", "str", "bzw", "usw", "ca",
+    "etc", "vgl", "evtl", "ggf", "inkl", "z", "b", "u", "a", "d", "h", "o",
+    "s", "jh", "ff", "mio", "mrd"})
+_ABBREVIATION_END = re.compile(
+    r"(?:^|[\s(„\"'»])(?:" + "|".join(sorted(ABBREVIATIONS)) + r")\.$", re.I)
+_ORDINAL_END = re.compile(r"(?:^|\s)\d{1,4}\.$")
+_MONTH = re.compile(r"^(?:Januar|Februar|März|April|Mai|Juni|Juli|August|"
+                    r"September|Oktober|November|Dezember)\b")
+
+
+def rejoin_abbreviations(pieces: list[str]) -> list[str]:
+    """Undo sentence splits that fell on an abbreviation or an ordinal.
+
+    An ordinal is only rejoined before a month or a lowercase word: "am 3. Mai"
+    is one sentence, while "Er zählte bis 43. Dann ging er." is two."""
+    out: list[str] = []
+    for piece in pieces:
+        if out:
+            prev = out[-1].rstrip()
+            if _ABBREVIATION_END.search(prev) or (
+                    _ORDINAL_END.search(prev)
+                    and (_MONTH.match(piece) or piece[:1].islower())):
+                out[-1] = f"{prev} {piece}"
+                continue
+        out.append(piece)
+    return out
+
+
 def passages(text: str, max_words: int = SPEAK_MAX_WORDS) -> list[str]:
     """Split a story into speakable passages at sentence boundaries.
 
@@ -57,7 +90,7 @@ def passages(text: str, max_words: int = SPEAK_MAX_WORDS) -> list[str]:
             out.append(paragraph)
             continue
         current: list[str] = []
-        for sentence in re.split(r"(?<=[.!?…])\s+", paragraph):
+        for sentence in rejoin_abbreviations(re.split(r"(?<=[.!?…])\s+", paragraph)):
             if not sentence.strip():
                 continue
             if current and len(" ".join(current + [sentence]).split()) > max_words:

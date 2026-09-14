@@ -55,6 +55,8 @@ _BRIEF_PROMPT = (
     "Notiz an dich selbst,\n"
     " \"theme\": string — worum es geht, seine eigenen Worte wo sie zählen,\n"
     " \"mood\": string — die Stimmung,\n"
+    " \"form\": string — Erzählperspektive und Zeitform, verbindlich für die "
+    "ganze Geschichte, etwa \"Ich-Erzählerin Nova, {who} ist du, Präsens\",\n"
     " \"register\": string — Ton und wie weit es geht, ausdrücklich. Wenn er "
     "deutlich oder explizit gebeten hat, schreib das hier hin und beschönige "
     "es nicht; dieses Feld hat Vorrang vor den Stilregeln des Schreibers.\n"
@@ -109,6 +111,7 @@ async def _story_brief(rt, text: str) -> dict:
         brief: dict = {"theme": str(data["theme"]), "length_minutes": 10,
                  "title": str(data.get("title") or ""),
                  "mood": str(data.get("mood") or fallback["mood"]),
+                 "form": str(data.get("form") or ""),
                  "register": str(data.get("register") or ""),
                  "characters": str(data.get("characters") or ""),
                  "avoid": str(data.get("avoid") or ""),
@@ -152,7 +155,7 @@ class TextTurns:
 
     @staticmethod
     def _story_intent(text: str) -> bool:
-        """Detect an explicit story request before the free-form model pass.
+        """Detect an explicit story request before the free-form model pass (SPEC §7.8).
 
         Image requests already have a reliable host-side handoff. Long stories
         need the same boundary: a model must not silently turn an expensive,

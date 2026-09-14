@@ -272,11 +272,13 @@ async def test_the_state_note_is_asked_without_her_persona(tmp_path):
 
 async def test_the_finale_is_shown_the_whole_arc_and_what_is_still_open(tmp_path):
     """It is told to close every open thread; before this it only ever saw the
-    last 3200 characters and could not know which threads those were."""
+    last 3200 characters and could not know which threads those were. It now
+    runs only after extension scenes, so this story is made too short."""
     akte = ("ORT: Dach\nFIGUREN: beide\nGESCHEHEN: sie steigen hoch\nOFFEN: sein Geständnis")
     util = Recorder("Szene eins.", akte, "Szene zwei.", akte)
-    await _run(_lab(util, tmp_path),
-               {"theme": "Dach", "scenes": ["Aufstieg aufs Dach.", "Das Geständnis."]})
+    lab = _lab(util, tmp_path)
+    lab.min_words = 20
+    await _run(lab, {"theme": "Dach", "scenes": ["Aufstieg aufs Dach.", "Das Geständnis."]})
     finale = [p for p in util.prompts if "abschließenden Abschnitt" in p]
     assert finale, "kein Finale-Durchgang"
     assert "Aufstieg aufs Dach." in finale[0]        # der geplante Bogen
@@ -350,118 +352,6 @@ async def test_without_a_title_the_theme_still_names_the_story(tmp_path):
 
 # -- the rules pass: narrow, and never destructive ------------------------
 
-async def test_the_pass_is_told_it_corrects_and_does_not_rewrite(tmp_path):
-    """It straightened 8 of 8 passages and grew the story by 12%, because the
-    instruction was polite instead of operational."""
-    util = Recorder("OK", "OK")
-    lab = _lab(util, tmp_path)
-    await lab._straighten(["Anfang.", "Zweiter."], "ERZÄHLPERSON: Ich-Form", {1: {0: "x"}})
-    p = util.prompts[-1]
-    # Sentence by sentence, and only the numbers it names come back.
-    assert "Satz für Satz" in p
-    assert "<Nummer>: <der angeglichene Satz>" in p
-    assert "NICHT dein" in p and "Auftrag" in p
-    assert "nicht gefällt, ist kein Grund" in p
-
-
-async def test_a_passage_that_obeys_is_left_exactly_as_written(tmp_path):
-    """Nothing the model does not name may change. Not by instruction — we
-    simply never replace a sentence it did not return."""
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Erster Absatz.", "Zweiter Absatz. Er ist völlig in Ordnung."]
-    lab._complete = lambda *a, **kw: _antwort("OK")
-    geaendert, gesamt = await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}})
-    assert (geaendert, gesamt) == (0, 2)
-    assert teile[1] == "Zweiter Absatz. Er ist völlig in Ordnung."
-
-
-async def test_only_the_named_sentence_changes_and_the_rest_is_untouched(tmp_path):
-    """The whole point of going sentence by sentence: a passage used to come
-    back whole, which let the model rewrite everything it touched — 8 of 8
-    passages and the story 12% longer, twice."""
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.",
-             "Du gingst voran. Der Wald war still. Du bliebst stehen."]
-    lab._complete = lambda *a, **kw: _antwort("1: Er ging voran.")
-    geaendert, gesamt = await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}})
-    assert (geaendert, gesamt) == (1, 2)      # zwei geprüft, einer geändert
-    assert teile[1] == "Er ging voran. Der Wald war still. Du bliebst stehen."
-
-
-async def test_a_refused_sentence_costs_that_sentence_and_not_the_passage(tmp_path):
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.", "Du gingst voran. Der Wald war still."]
-    # erster Satz kaputt (Pronomen ohne Verb), zweiter sauber
-    lab._complete = lambda *a, **kw: _antwort(
-        "1: Gingst er voran.\n2: Der Wald ist still.")
-    geaendert, _ = await lab._straighten(teile, "ZEITFORM: Präsens", {1: {0: "x", 1: "y"}})
-    assert geaendert == 1
-    assert teile[1] == "Du gingst voran. Der Wald ist still."
-
-
-async def test_a_sentence_answered_with_reasoning_is_kept_as_written(tmp_path):
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.", "Du gingst voran. Der Wald war still."]
-    lab._complete = lambda *a, **kw: _antwort(
-        "1: Verstöße: Anrede falsch. Korrigierter Abschnitt: Er ging voran.")
-    geaendert, _ = await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}})
-    assert geaendert == 0
-    assert teile[1] == "Du gingst voran. Der Wald war still."
-
-
-async def test_an_answer_that_is_not_numbered_changes_nothing(tmp_path):
-    """A line we cannot read is a line we must not apply."""
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.", "Du gingst voran. Der Wald war still."]
-    lab._complete = lambda *a, **kw: _antwort(
-        "Gerne! Hier ist die überarbeitete Fassung: Er ging voran, still.")
-    assert await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}}) == (0, 2)
-    assert teile[1] == "Du gingst voran. Der Wald war still."
-
-
-async def test_a_failing_rules_pass_never_costs_the_story(tmp_path):
-    """It runs after the story is finished. Nothing it does may lose it."""
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.", "Zweiter Absatz."]
-
-    async def kaputt(*a, **kw):
-        raise RuntimeError("provider weg")
-
-    lab._complete = kaputt
-    assert await lab._straighten(teile, "regeln", {1: {0: "x"}}) == (0, 1)
-    assert teile == ["Anfang.", "Zweiter Absatz."]
-
-
-async def test_the_rules_come_from_the_opening_not_from_a_template(tmp_path):
-    """Whatever scene 1 established is the law — so the pass cannot impose a
-    shape the story never had."""
-    util = Recorder()
-    lab = _lab(util, tmp_path)
-    await lab._house_rules("Du gingst durch den Wald, und Benni ging vor.")
-    assert any("Du gingst durch den Wald" in p for p in util.prompts)
-    assert any("ERZÄHLPERSON" in p for p in util.prompts)
-
-
-async def test_the_house_rules_name_address_and_tense(tmp_path):
-    util = Recorder()
-    lab = _lab(util, tmp_path)
-    await lab._house_rules("Du gingst durch den Wald.")
-    p = util.prompts[-1]
-    assert "ANREDE:" in p and "ZEITFORM:" in p
-
-
-async def test_the_rules_never_turn_the_plot_into_law(tmp_path):
-    """Weather, time of day, tense and names are story. Derived as rules they
-    made the checker correct a dawn scene into saying "es wird dunkel"."""
-    util = Recorder()
-    lab = _lab(util, tmp_path)
-    await lab._house_rules("Es war Abend und trocken, und Benni ging vor.")
-    p = util.prompts[-1]
-    assert "ERZÄHLPERSON" in p and "ANREDE" in p and "ZEITFORM" in p
-    assert "Die Hauptfiguren stehen fest: Nova und" in p
-    assert "keine weiteren Regeln ab" in p
-
-
 def test_sentences_never_lose_a_word():
     """Splitting is the pass's foundation: a sentence lost here is prose that
     disappears from the story."""
@@ -469,19 +359,6 @@ def test_sentences_never_lose_a_word():
     text = 'Sie blieb stehen. „Hörst du das?“ Ganz leise … Er nickte und ging'
     assert " ".join(_sentences(text)) == text
     assert len(_sentences(text)) == 4
-
-
-async def test_an_ok_for_a_single_sentence_is_not_a_correction(tmp_path):
-    """"12: OK" means that sentence is fine. Read as a correction it replaces
-    the sentence with the word OK, and against a one-word sentence the length
-    window lets it through — it reached a published story on 2026-09-12 and
-    would have been read out loud."""
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.", "Du gingst voran. Zusammen."]
-    lab._complete = lambda *a, **kw: _antwort("1: Er ging voran.\n2: OK")
-    geaendert, _ = await lab._straighten(teile, "ANREDE: er", {1: {0: "x", 1: "y"}})
-    assert geaendert == 1
-    assert teile[1] == "Er ging voran. Zusammen."
 
 
 def test_no_control_character_ever_hides_in_a_pattern():
@@ -512,39 +389,6 @@ def test_every_guard_actually_matches_what_it_is_for():
                            "Du lachtest."]) == 1
     assert _mixed_address(["Du gingst.", "Du bliebst, aber wieder.",
                            "Du lachtest."]) == 0
-
-
-async def test_every_scene_after_the_first_is_told_the_form_scene_one_set(tmp_path):
-    """Measured over five runs: no correction pass, however it was cut, beat
-    not breaking the form in the first place. Scene 1 decides it; every scene
-    after it is handed that decision verbatim."""
-    util = Recorder(
-        "Ich ging voran, und du bliebst dicht hinter mir.",      # Szene 1
-        "ERZÄHLPERSON: Ich-Form, ich ist Nova\nANREDE: du\nZEITFORM: Vergangenheit",
-        "Zweite Szene.")
-    await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
-    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
-    assert len(szenen) == 2
-    # The opening cannot be told a form that does not exist yet.
-    assert "Verbindliche Form" not in szenen[0]
-    assert "Verbindliche Form" in szenen[1]
-    assert "ANREDE: du" in szenen[1]
-    assert "ZEITFORM: Vergangenheit" in szenen[1]
-
-
-async def test_a_form_that_cannot_be_read_never_stops_the_story(tmp_path, caplog):
-    """It is a help, not a precondition. If scene 1 yields no form, the later
-    scenes simply decide for themselves, as they always did."""
-    class Bockig(Recorder):
-        async def complete(self, messages, **kwargs):
-            self.prompts.append(messages[-1]["content"])
-            if "woran sich der Rest halten muss" in messages[-1]["content"]:
-                raise RuntimeError("kein Modell")
-            return "Eine Szene, die weitergeht und endet."
-
-    with caplog.at_level("WARNING"):
-        await _run(_lab(Bockig(), tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
-    assert "could not read its own form" in caplog.text
 
 
 # -- the card is handed back even when the process is killed --------------
@@ -635,93 +479,6 @@ def test_the_spoken_share_is_measured_not_hoped_for():
 
 # -- one thinking pass finds, the cheap pass repairs ----------------------
 
-async def test_the_review_reads_the_whole_story_and_thinks(tmp_path):
-    """These faults span the story: a clause repeated five times and a shirt
-    taken off twice are invisible to a checker that only sees one passage.
-    Measured on a real story — 24 913 reasoning tokens, 110 s, 1.6 cents —
-    it found every fault a careful reading found, plus one it had missed."""
-    gesehen: dict = {}
-
-    class Denker(Recorder):
-        async def complete(self, messages, **kwargs):
-            gesehen.update(kwargs)
-            self.prompts.append(messages[-1]["content"])
-            return "3: Anrede weicht ab\n5: Formulierung wiederholt sich"
-
-    lab = _lab(Denker(), tmp_path)
-    funde = await lab._review(["Eins. Zwei.", "Drei. Vier.", "Fünf. Sechs."],
-                              "ANREDE: du")
-    assert gesehen.get("thinking") is True
-    assert gesehen.get("max_tokens") >= 32_000       # es denkt über 24k hinaus
-    # Satz 3 liegt in Absatz 1 an Stelle 0, Satz 5 in Absatz 2 an Stelle 0
-    assert funde == {1: {0: "Anrede weicht ab"},
-                     2: {0: "Formulierung wiederholt sich"}}
-
-
-async def test_the_opening_is_the_law_and_never_a_defendant(tmp_path):
-    """The form is read off scene 1, so correcting scene 1 against it would be
-    circular — and would move the ground everything else stands on."""
-    lab = _lab(Recorder("1: angeblich falsch\n2: auch"), tmp_path)
-    funde = await lab._review(["Eins. Zwei.", "Drei."], "ANREDE: du")
-    assert funde == {}
-
-
-async def test_a_failed_review_corrects_nothing_rather_than_everything(tmp_path):
-    class Kaputt(Recorder):
-        async def complete(self, messages, **kwargs):
-            raise RuntimeError("kein Modell")
-
-    lab = _lab(Kaputt(), tmp_path)
-    assert await lab._review(["Eins.", "Zwei."], "ANREDE: du") == {}
-
-
-async def test_only_the_reviewed_passages_are_touched_at_all(tmp_path):
-    """It used to send every passage and get 94% of the sentences back. A
-    passage nobody complained about is not sent, and costs nothing."""
-    util = Recorder("OK")
-    lab = _lab(util, tmp_path)
-    teile = ["Anfang.", "Zweiter Absatz.", "Dritter Absatz.", "Vierter Absatz."]
-    await lab._straighten(teile, "ANREDE: er", {2: {0: "Anrede"}})
-    assert len(util.prompts) == 1                     # nur ein Absatz, nicht drei
-    assert "Dritter Absatz." in util.prompts[0]
-    assert "Zweiter Absatz." not in util.prompts[0]
-
-
-async def test_a_sentence_nobody_asked_about_is_not_replaced(tmp_path):
-    """It sees the whole passage for context, so it may name a neighbour it
-    would rather fix. It does not get to decide that."""
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.", "Erster Satz. Zweiter Satz. Dritter Satz."]
-    lab._complete = lambda *a, **kw: _antwort("1: Ungefragt.\n2: Gefragt.")
-    geaendert, _ = await lab._straighten(teile, "ANREDE: er", {1: {1: "nur der"}})
-    assert geaendert == 1
-    assert teile[1] == "Erster Satz. Gefragt. Dritter Satz."
-
-
-async def test_the_review_is_told_how_little_is_spoken_and_asked_to_fix_it(tmp_path):
-    """"More dialogue" is not a fault you can point at — but "this sentence
-    reports what was said instead of showing it" is, and it is repairable one
-    sentence at a time. The share fell to 10% while the prompt was already
-    asking for a third."""
-    util = Recorder("OK")
-    lab = _lab(util, tmp_path)
-    await lab._review(["Er ging.", "Ich sagte ihm, dass ich müde war."], "ANREDE: du")
-    p = util.prompts[-1]
-    assert "BERICHTET über etwas Gesagtes" in p
-    assert "ein Drittel wäre richtig" in p
-    assert "% der Geschichte" in p          # der gemessene Ist-Wert steht drin
-    assert "Beschreibung, Handlung und innere Sätze bleiben" in p
-
-
-async def test_the_repair_may_turn_a_report_into_spoken_words(tmp_path):
-    util = Recorder("OK")
-    lab = _lab(util, tmp_path)
-    await lab._straighten(["Anfang.", "Zweiter."], "ANREDE: du", {1: {0: "Bericht"}})
-    p = util.prompts[-1]
-    assert "in gesprochene Rede verwandeln" in p
-    assert "Ich bin müde" in p              # das Beispiel, beim Namen genannt
-
-
 async def test_she_plans_what_they_talk_about_in_each_scene(tmp_path):
     """Turning reported speech around afterwards moved the spoken share from
     10% to 15% and stopped there. A story written with little speech in it
@@ -752,7 +509,7 @@ async def test_the_scenes_are_written_as_a_radio_play(tmp_path):
     written for the page and then read out."""
     util = Recorder()
     await _run(_lab(util, tmp_path), {"theme": "Heimweg", "scenes": ["A.", "B."]})
-    szenen = [p for p in util.prompts if "Hörspiels" in p]
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene eines Hörspiels" in p]
     assert len(szenen) == 2
     assert all("lebt von gesprochener Rede" in p for p in szenen)
     assert all("nur so viel, wie das Ohr braucht" in p for p in szenen)
@@ -786,63 +543,6 @@ async def test_scenes_are_written_at_the_temperature_writing_wants(tmp_path):
 
 # -- the second pass, whose only job is that they talk --------------------
 
-async def test_the_dialogue_pass_may_add_what_the_repair_pass_may_not(tmp_path):
-    """Opposite contract to `_straighten`: turning a report into speech
-    necessarily adds words, so this one is allowed to — and is therefore
-    guarded differently."""
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.", "Ich sagte ihm, dass ich müde war."]
-    lab._complete = lambda *a, **kw: _antwort(
-        '2: „Ich bin müde", sagte ich. „Dann setz dich", sagte er.')
-    assert await lab._dialogue_pass(teile, "ANREDE: du") == 1
-    assert teile[1].startswith("„Ich bin müde")
-
-
-async def test_a_conversion_without_any_spoken_words_is_not_one(tmp_path):
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.", "Ich sagte ihm, dass ich müde war."]
-    lab._complete = lambda *a, **kw: _antwort("2: Ich war sehr müde an diesem Abend.")
-    assert await lab._dialogue_pass(teile, "ANREDE: du") == 0
-    assert teile[1] == "Ich sagte ihm, dass ich müde war."
-
-
-async def test_the_dialogue_pass_may_not_shorten_or_balloon(tmp_path):
-    lab = _lab(Recorder(), tmp_path)
-    lang = "Ich sagte ihm sehr ausführlich, dass ich an diesem Abend müde war."
-    teile = ["Anfang.", lang]
-    lab._complete = lambda *a, **kw: _antwort('2: „Müde", sagte ich.')
-    assert await lab._dialogue_pass(teile, "ANREDE: du") == 0     # zu kurz
-    teile2 = ["Anfang.", "Wir redeten."]
-    lab._complete = lambda *a, **kw: _antwort(
-        '2: „' + " ".join(["Wort"] * 40) + '", sagte ich.')
-    assert await lab._dialogue_pass(teile2, "ANREDE: du") == 0     # zu lang
-
-
-async def test_the_dialogue_pass_is_told_not_to_soften_anything(tmp_path):
-    """The subtext experiment raised no dialogue and cut the physical density
-    from 20 to 13, because advice for restrained prose reached scenes that
-    must not be restrained."""
-    util = Recorder("OK")
-    lab = _lab(util, tmp_path)
-    await lab._dialogue_pass(["Anfang.", "Zweiter."], "ANREDE: du")
-    p = util.prompts[-1]
-    assert "einziger Auftrag: mehr gesprochene Rede" in p
-    assert "nichts zurückhaltender" in p and "Deutlichkeit" in p
-    assert "nicht jeder Satz will Rede sein" in p
-
-
-async def test_a_failing_dialogue_pass_costs_the_story_nothing(tmp_path):
-    lab = _lab(Recorder(), tmp_path)
-    teile = ["Anfang.", "Zweiter Absatz."]
-
-    async def kaputt(*a, **kw):
-        raise RuntimeError("kein Modell")
-
-    lab._complete = kaputt
-    assert await lab._dialogue_pass(teile, "regeln") == 0
-    assert teile == ["Anfang.", "Zweiter Absatz."]
-
-
 async def test_bodies_are_not_assumed_silent(tmp_path):
     """Measured on a finished story: the physical passages are 51% of the text
     and carry 15% speech, while the two conversational ones reach 32%. That
@@ -853,15 +553,6 @@ async def test_bodies_are_not_assumed_silent(tmp_path):
     szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
     assert all("Auch dabei wird gesprochen" in p for p in szenen)
     assert all("Stumme Körper sind unwahrscheinlicher" in p for p in szenen)
-
-
-async def test_the_dialogue_agent_is_pointed_at_the_quiet_stretches(tmp_path):
-    util = Recorder("OK")
-    lab = _lab(util, tmp_path)
-    await lab._dialogue_pass(["Anfang.", "Zweiter."], "ANREDE: du")
-    p = util.prompts[-1]
-    assert "wo lange nichts gesagt wird" in p
-    assert "körperlichen und handlungsdichten Abschnitten" in p
 
 
 # -- what a computer finds better than a reader ---------------------------
@@ -888,17 +579,6 @@ def test_a_thing_running_through_the_whole_story_is_a_motif_not_a_repeat():
     from yurios.world.stories import _echoes
     teile = [f"Seine Hand lag auf meiner Schulter, Absatz {i}." for i in range(1, 7)]
     assert _echoes(teile) == []
-
-
-async def test_the_reviewer_is_handed_the_suspects_but_not_a_verdict(tmp_path):
-    util = Recorder("OK")
-    lab = _lab(util, tmp_path)
-    await lab._review(["Anfang.",
-                       "Ich drehte den Schlüssel.",
-                       "Der Schlüssel drehte sich noch einmal."], "ANREDE: du")
-    p = util.prompts[-1]
-    assert "schlüssel in Absatz 2 und 3" in p
-    assert "ist es dasselbe Ereignis ein zweites Mal, oder gehört es dorthin" in p
 
 
 # -- a scene is checked before it counts ----------------------------------
@@ -992,3 +672,223 @@ def test_the_seam_is_the_last_words_the_listener_heard():
     naht = _last_sentences("Er sucht den Schlüssel. Sie friert. „Komm schon.“")
     assert naht == "Sie friert. „Komm schon.“"
     assert _last_sentences("") == ""
+
+
+# -- a story makes sense from one scene to the next ------------------------
+
+async def test_a_scene_is_written_with_the_whole_story_so_far(tmp_path):
+    """325edf7838: scenes saw a 120-word note and two sentences, so a figure
+    nobody had introduced was "still screaming" in scene 4 and a threat at the
+    end of scene 6 was gone in scene 7. The next scene sees the text itself."""
+    util = Recorder("Erste Szene mit einem Hund namens Micky.")
+    await _run(_lab(util, tmp_path), {"theme": "Park", "scenes": ["Im Park.", "Am Teich."]})
+    zweite = [p for p in util.prompts if "Szene 2/2" in p]
+    assert zweite, "keine zweite Szene geschrieben"
+    assert "Die Geschichte bis hierher, vollständig" in zweite[0]
+    assert "Erste Szene mit einem Hund namens Micky." in zweite[0]
+
+
+async def test_a_scene_is_not_made_to_arrive_where_the_last_one_already_did(tmp_path):
+    """325edf7838 ended scene 5 at a car park and scene 6 described the same car
+    park again, because it was told the first paragraph must play there."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path), {"theme": "x", "scenes": [
+        "Parkplatz, beide, sie steigen aus.", "Supermarkt, beide, sie kaufen ein."]})
+    erste = [p for p in util.prompts if "Szene 1/2" in p][0]
+    zweite = [p for p in util.prompts if "Szene 2/2" in p][0]
+    assert "Der erste Absatz spielt dort." in erste
+    assert "gehört an diesen Ort: Supermarkt" in zweite
+    assert "beschreibst den Ort nicht noch einmal" in zweite
+    assert "setzt hier ein" not in zweite
+
+
+async def test_a_story_that_ends_in_its_last_scene_gets_no_second_ending(tmp_path):
+    """The last scene is told to close every thread; a finale after it anyway
+    gave every story two endings and 325edf7838 three."""
+    util = Recorder("Szene eins.", "ORT: a", "Szene zwei.", "ORT: b")
+    await _run(_lab(util, tmp_path), {"theme": "Dach", "scenes": ["A.", "B."]})
+    assert not [p for p in util.prompts if "abschließenden Abschnitt" in p]
+    letzte = [p for p in util.prompts if "Szene 2/2" in p]
+    assert letzte and "Diese Szene ist die letzte" in letzte[0]
+
+
+# -- the form is set before the first word ----------------------------------
+
+async def test_the_form_is_set_before_the_first_word(tmp_path):
+    """Read off scene 1, the form was left to chance: in the A/B run of
+    2026-09-14 scene 1 told the story from Benni's side with Nova in the third
+    person, and every correction afterwards made it worse."""
+    util = Recorder()
+    await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert len(szenen) == 2
+    assert all("Verbindliche Form, die in jedem Satz gilt" in p for p in szenen)
+    assert all("Ich-Erzählerin ist Nova" in p for p in szenen)
+    assert all("Benni wird durchgehend mit „du“ angesprochen" in p for p in szenen)
+    assert all("genau eine Erzählstimme" in p for p in szenen)
+
+
+async def test_her_own_form_wins_over_the_house_form(tmp_path):
+    util = Recorder()
+    await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."],
+                                      "form": "Personaler Erzähler aus Bennis Sicht, Präteritum"})
+    szenen = [p for p in util.prompts if "Schreibe die nächste Szene" in p]
+    assert all("Personaler Erzähler aus Bennis Sicht, Präteritum" in p for p in szenen)
+    assert not any("Ich-Erzählerin ist Nova" in p for p in szenen)
+
+
+async def test_she_names_the_form_in_her_brief():
+    util = Recorder(json.dumps({"theme": "x", "scenes": ["a"],
+                                "form": "Ich-Erzählerin Nova, Benni ist du, Präsens"}))
+    brief = await turns_mod._story_brief(_rt(util), "Erzähl mir eine Geschichte")
+    assert brief["form"] == "Ich-Erzählerin Nova, Benni ist du, Präsens"
+    assert "\"form\"" in util.prompts[0]
+
+
+# -- one reading by an editor ------------------------------------------------
+
+def _lektor_antwort(*funde):
+    return json.dumps({"funde": [
+        {"satz": s, "kategorie": k, "befund": "b", "korrektur": c} for s, k, c in funde]})
+
+
+async def _lektorat(tmp_path, parts, *funde, rules="FORM", register="REGISTER"):
+    lab = _lab(Recorder(), tmp_path)
+    gesehen: dict = {}
+
+    async def fake(prompt, **kwargs):
+        gesehen["prompt"], gesehen["kwargs"] = prompt, kwargs
+        return _lektor_antwort(*funde)
+
+    lab._complete = fake
+    ergebnis = await lab._lektorat(parts, rules, register)
+    return parts, ergebnis, gesehen
+
+
+async def test_the_editor_reads_the_whole_story_once_and_thinks(tmp_path):
+    parts = ["Eins. Zwei.", "Drei."]
+    _, _, gesehen = await _lektorat(tmp_path, parts)
+    p, kw = gesehen["prompt"], gesehen["kwargs"]
+    assert "[Absatz 1]" in p and "[Absatz 2]" in p
+    assert "1: Eins." in p and "3: Drei." in p
+    assert "Verbindliche Form: FORM" in p and "REGISTER" in p
+    assert "Deutliches abschwächen" in p
+    assert kw["thinking"] is True
+    assert kw["response_format"] == {"type": "json_object"}
+
+
+async def test_a_correction_inside_one_sentence_is_applied_and_nothing_else_moves(tmp_path):
+    """An axe that should be the hatchet from before — measured, and right."""
+    parts = ["Ich nahm das Beil. Dann ging ich.", "Ich hielt die Axt auf den Knien. Es regnete."]
+    parts, (geaendert, _), _ = await _lektorat(
+        tmp_path, parts, (3, "figuren", "Ich hielt das Beil auf den Knien."))
+    assert geaendert == 1
+    assert parts[0] == "Ich nahm das Beil. Dann ging ich."
+    assert parts[1] == "Ich hielt das Beil auf den Knien. Es regnete."
+
+
+async def test_a_perspective_finding_is_never_patched_a_sentence_at_a_time(tmp_path):
+    """Applied sentence by sentence it left every passage half "ich", half "Nova"."""
+    parts = ["Nova wischte sich die Stirn. Du sahst zu."]
+    parts, (geaendert, hinweise), _ = await _lektorat(
+        tmp_path, parts, (1, "perspektive", "Ich wischte mir die Stirn."))
+    assert geaendert == 0 and hinweise == 1
+    assert parts[0] == "Nova wischte sich die Stirn. Du sahst zu."
+
+
+async def test_a_sentence_is_struck_only_if_it_really_repeats_one_before_it(tmp_path):
+    parts = ["Yara sagte eine Nummer ins Gerät, Datum, Uhrzeit. "
+             "Yara sagte die Nummer ins Gerät, Datum und Uhrzeit. "
+             "Dann klingelte das Telefon im Wagen."]
+    parts, (geaendert, hinweise), _ = await _lektorat(
+        tmp_path, parts, (2, "uebergang", "STREICHEN"), (3, "uebergang", "STREICHEN"))
+    assert geaendert == 1 and hinweise == 1
+    assert parts[0] == ("Yara sagte eine Nummer ins Gerät, Datum, Uhrzeit. "
+                        "Dann klingelte das Telefon im Wagen.")
+
+
+async def test_a_correction_that_balloons_or_argues_keeps_the_sentence(tmp_path):
+    parts = ["Er ging. Sie blieb."]
+    lang = "Er ging langsam und zögernd durch den dunklen, feuchten, endlos langen Flur hinaus."
+    parts, (geaendert, hinweise), _ = await _lektorat(
+        tmp_path, parts, (1, "sprache", lang),
+        (2, "rede", "Korrigierter Abschnitt: Sie blieb."))
+    assert geaendert == 0 and hinweise == 2
+    assert parts[0] == "Er ging. Sie blieb."
+
+
+async def test_the_editor_is_handed_the_suspects(tmp_path):
+    parts = ["Ich drehte den Schlüssel.", "Der Schlüssel drehte sich noch einmal."]
+    _, _, gesehen = await _lektorat(tmp_path, parts)
+    assert "schlüssel in Absatz 1 und 2" in gesehen["prompt"]
+
+
+async def test_a_story_is_edited_once_and_never_by_the_old_passes(tmp_path):
+    class MitLektor(Recorder):
+        async def complete(self, messages, **kwargs):
+            if "Du bist Lektorin" in messages[-1]["content"]:
+                self.prompts.append(messages[-1]["content"])
+                return '{"funde": []}'
+            return await super().complete(messages, **kwargs)
+
+    util = MitLektor()
+    await _run(_lab(util, tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
+    assert sum("Du bist Lektorin" in p for p in util.prompts) == 1
+    assert not any("Satz für Satz nummeriert.\n\nVerbindliche Form" in p and "Lektorin" not in p
+                   for p in util.prompts)
+    assert not any("mehr gesprochene Rede" in p for p in util.prompts)
+
+
+async def test_a_failing_editor_never_costs_the_story(tmp_path, caplog):
+    """Recorder answers the editor with prose, not JSON — the story still ships."""
+    with caplog.at_level("WARNING"):
+        await _run(_lab(Recorder(), tmp_path), {"theme": "Wald", "scenes": ["A.", "B."]})
+    assert "the lektorat failed; publishing as written" in caplog.text
+
+
+# -- a full stop is not always the end of a sentence ------------------------
+
+def test_an_abbreviation_does_not_end_a_sentence():
+    """Ten of thirty-six findings of the first Lektor run were "Dr." split off
+    from "Halbach"."""
+    from yurios.world.stories import _sentences
+    assert _sentences("Dr. Halbach kam. Sie sagte: „Ja.“") == ["Dr. Halbach kam.", "Sie sagte: „Ja.“"]
+    assert _sentences("Das ist z. B. ein Beil. Und dann?") == ["Das ist z. B. ein Beil.", "Und dann?"]
+
+
+def test_an_ordinal_joins_its_month_but_a_number_can_still_end_a_sentence():
+    from yurios.world.stories import _sentences
+    assert _sentences("Am 3. Mai kam er. Dann ging er.") == ["Am 3. Mai kam er.", "Dann ging er."]
+    assert _sentences("Er zählte bis 43. Dann ging er.") == ["Er zählte bis 43.", "Dann ging er."]
+
+
+def test_a_spoken_passage_is_not_split_after_an_abbreviation():
+    from yurios.world.qwenvoice import rejoin_abbreviations
+    assert rejoin_abbreviations(["Da stand Dr.", "Halbach im Regen."]) == ["Da stand Dr. Halbach im Regen."]
+
+
+async def test_an_editor_that_answers_empty_is_asked_once_more(tmp_path):
+    """DeepSeek's JSON mode "may occasionally return empty content"; the first
+    live run of the editor hit it on one of two stories."""
+    lab = _lab(Recorder(), tmp_path)
+    antworten = ["", _lektor_antwort((1, "sprache", "Er ging schnell."))]
+    aufrufe = []
+
+    async def fake(prompt, **kwargs):
+        aufrufe.append(prompt)
+        return antworten.pop(0)
+
+    lab._complete = fake
+    parts = ["Er ging eben schnell."]
+    geaendert, _ = await lab._lektorat(parts, "FORM", "REGISTER")
+    assert len(aufrufe) == 2
+    assert geaendert == 1 and parts == ["Er ging schnell."]
+
+
+def test_an_empty_findings_list_is_an_answer_and_a_missing_one_is_not():
+    from yurios.world.stories import _findings
+    assert _findings('{"funde": []}') == []
+    assert _findings('{"findings": [{"satz": 1}]}') == [{"satz": 1}]
+    assert _findings("") is None
+    assert _findings('{"notes": "nichts"}') is None
+    assert _findings("kein json") is None

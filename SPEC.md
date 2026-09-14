@@ -593,10 +593,12 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   | `web_search` | `query`, `k?` (≤ `SEARCH_RESULTS`) | `{query, results:[{title, url, snippet}]}` | none (§7.7) |
   | `read_page` | `url` | `{url, title, gist, chars, text, status:"read"}` | host shelves the full text as knowledge (§7.7, §20) |
   | `research` | `topic`, `depth?` (≤ `RESEARCH_MAX_PAGES`) | `{id, topic, depth, kind:"research", status:"started"}` | host searches, reads and shelves off-turn, posts what it found (§7.7) |
+  | `tell_story` | `theme`, `mood?`, `length_minutes?` (10–60), `title?`, `register?`, `form?`, `characters?`, `avoid?`, `scenes?`, `scene_moods?`, `scene_lengths?`, `scene_talk?` | `{status:"started", story_id, …the brief}` | host writes, edits and voices the story off-turn, delivers the recording (§7.8) |
 
   The surface **MUST NOT** grow a shell — the heavy, sandboxed hands are a named later rung
   (§26). With `SELFIE_BACKEND=off` neither camera tool **MUST** be advertised: no hand, not a
-  dead one; with `SEARCH_BACKEND=off` the three web tools **MUST NOT** be advertised either.
+  dead one; with `SEARCH_BACKEND=off` the three web tools **MUST NOT** be advertised either; with
+  `STORY_ENABLED=false` neither **MUST** `tell_story` be.
 - §7.2 **A genuine MCP client, and more than one server.** The brain side **MUST** connect over MCP
   (`yurios/world/tools/client.py`, stdio, spawning `yurios.world.tools.server`), discover tools
   with `list_tools`, and build the §7.4 directive from the discovered schemas. If the SDK or
@@ -834,6 +836,45 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   to the originating channel and offering one spoken line through the ambient seam (§9). A page that
   won't open **MUST** be skipped rather than failing the run, and a run where nothing opens **MUST**
   still end in words.
+- §7.8 **Her stories: `tell_story`, written, edited and voiced off-turn.** A story is minutes of model
+  work and minutes of audio, so `tell_story` **MUST** follow §7.6's start-don't-await rule: the server
+  validates `length_minutes` and answers `{status:"started"}`, and `yurios/world/stories.py` does the
+  work, one story at a time — a second request queues, because two jobs share one voice server and the
+  first job's unload would pull the model out from under the second.
+
+  **The brief is hers.** An explicit request for a new story in a text turn **MUST** reach
+  `tell_story` without the model first answering it as an ordinary paragraph, and the brief — title,
+  theme, register, form, characters, what to avoid, and per scene the outline, its length, what is
+  said in it and how it sounds — **MUST** be written by her from the conversation, since she is the
+  only part of the chain that was in it. A brief that cannot be written **MUST** still leave a story
+  startable. When she brings an outline, no planner **MAY** re-plan it.
+
+  **The form is fixed before the first word.** Who narrates, how the second figure is addressed and
+  the tense **MUST** be set before scene 1 — hers when the brief names one, the house form otherwise
+  (Nova narrates in the first person, the user is "du", present tense) — and handed verbatim to every
+  scene. It **MUST NOT** be read off the first scene: measured, that left it to chance, and no
+  correction afterwards beat not breaking it. Each scene **MUST** be written with the whole story so
+  far, told the next scene it must not tell, and told where it belongs without being made to arrive
+  there a second time. A separate finale **MUST** only follow extension scenes, so a story has one
+  ending.
+
+  **One editor.** The finished story **MUST** get a single editorial reading in the order a German
+  fiction editor works — plot, characters, transitions, perspective, tense, language, direct speech —
+  instead of passes that may each report one kind of fault. Only corrections inside one sentence
+  **MAY** be applied, and only under the guards: no reasoning in place of prose, no pronoun swapped
+  without its verb, a length near the original. A sentence **MAY** be struck only when it repeats one
+  just before it. A perspective finding **MUST NOT** be applied — patched a sentence at a time it left
+  a story half in one voice and half in another — and is logged instead. Sentence boundaries **MUST
+  NOT** fall on abbreviations or ordinals. An editor that fails **MUST NOT** cost the story.
+
+  **Fiction is not fact.** Story prose **MUST NOT** be taken for facts about the user by the turn
+  extractor (§6) nor consolidated at night (§21).
+
+  **The voice.** The recording is spoken by the LAN voice, each scene with its own instruction; the
+  voice **MUST** be loaded inside the LAN GPU lock (§7.6a) and unloaded in a `finally`, and again on
+  shutdown, because a killed job never reaches its own. The finished recording **MUST** be delivered to
+  the channel it was asked from and to Telegram whatever that channel was; a job that fails **MUST**
+  say so and **MUST NOT** claim a delivery that did not happen.
 
 ## §8 — Ambient life is the mind's, not a scripted machine
 
