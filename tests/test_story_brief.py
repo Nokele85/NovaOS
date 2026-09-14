@@ -999,6 +999,105 @@ async def test_a_director_that_hangs_is_given_up_on(tmp_path, monkeypatch):
     assert gesprochen == [(SZENE, "gedämpft", "")]
 
 
+def test_speech_is_found_whether_it_closes_german_or_straight():
+    """15f1e38754 closed 66 of 67 quotes with a straight mark: „Siehst du das?", flüstere ich."""
+    from yurios.world.stories import _segments
+    assert _segments('„Siehst du das?", flüstere ich. „Ja“, sagst du.') == [
+        ("Siehst du das?", True), (", flüstere ich.", False),
+        ("Ja", True), (", sagst du.", False)]
+
+
+# -- the author revises on the editor's notes, and the editor checks --------
+
+def _pruefer(*antworten):
+    """A `_complete` stand-in: scripted answers in order, prompts recorded."""
+    gesehen: list[tuple[str, dict]] = []
+    rest = list(antworten)
+
+    async def fake(prompt, **kwargs):
+        gesehen.append((prompt, kwargs))
+        return rest.pop(0)
+    return fake, gesehen
+
+
+async def test_a_plot_note_is_handed_on_with_the_sentences_it_concerns(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    lab._complete = lambda prompt, **kw: _antwort(json.dumps({"funde": [
+        {"satz": 1, "kategorie": "handlung", "befund": "Angekündigt, aber Satz 3 löst es nicht ein.",
+         "korrektur": ""},
+        {"satz": 2, "kategorie": "perspektive", "befund": "Head-Hopping.", "korrektur": ""}]}))
+    offen: list = []
+    await lab._lektorat(["Ich nehme dich gleich von hinten. Du lachst. Dann setze ich mich auf dich."],
+                        "FORM", "REG", offen)
+    assert len(offen) == 1                                   # perspective is never revised
+    assert offen[0]["saetze"] == ["Ich nehme dich gleich von hinten.", "Dann setze ich mich auf dich."]
+
+
+async def test_a_revision_the_editor_confirms_is_kept(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    fake, gesehen = _pruefer(
+        json.dumps({"ersetzungen": [{"satz": 1, "neu": "Ich setze mich gleich auf dich."}]}),
+        "BEHOBEN: ja, passt jetzt\nNEUER FEHLER: nein")
+    lab._complete = fake
+    parts = ["Ich nehme dich gleich von hinten. Du lachst. Dann setze ich mich auf dich."]
+    offen = [{"kategorie": "handlung", "befund": "Ankündigung verpufft.",
+              "saetze": ["Ich nehme dich gleich von hinten."], "streichen": False}]
+    assert await lab._revise("s", parts, offen, "FORM", "REG") == (1, 0)
+    assert parts == ["Ich setze mich gleich auf dich. Du lachst. Dann setze ich mich auf dich."]
+    autorin, pruefung = gesehen
+    assert "Du bist die Autorin" in autorin[0] and "NUR diese Sätze ändern: 1, 2" in autorin[0]
+    assert autorin[1]["reasoning_effort"] == "low" and autorin[1].get("persona", True)
+    assert "Du bist Lektorin" in pruefung[0] and pruefung[1]["persona"] is False
+
+
+async def test_a_revision_the_editor_refuses_leaves_the_text_and_the_note(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    lab._complete, _ = _pruefer(
+        json.dumps({"ersetzungen": [{"satz": 1, "neu": "Ich gehe."}]}),
+        "BEHOBEN: ja\nNEUER FEHLER: ja, jetzt fehlt der Grund")
+    parts = ["Ich bleibe. Du gehst."]
+    offen = [{"kategorie": "handlung", "befund": "x", "saetze": ["Ich bleibe."], "streichen": False}]
+    assert await lab._revise("s", parts, offen, "F", "R") == (0, 1)
+    assert parts == ["Ich bleibe. Du gehst."]
+
+
+async def test_a_revision_may_only_touch_the_sentences_of_its_note(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    lab._complete, gesehen = _pruefer(
+        json.dumps({"ersetzungen": [{"satz": 5, "neu": "Ganz woanders."}]}))
+    parts = ["Eins. Zwei. Drei. Vier. Fünf."]
+    offen = [{"kategorie": "handlung", "befund": "x", "saetze": ["Eins."], "streichen": False}]
+    assert await lab._revise("s", parts, offen, "F", "R") == (0, 1)
+    assert parts == ["Eins. Zwei. Drei. Vier. Fünf."] and len(gesehen) == 1   # no check needed
+
+
+async def test_a_far_repeat_may_be_struck_but_nothing_else_may_vanish(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    satz = "Yara sagte eine Nummer ins Gerät, Datum, Uhrzeit."
+    lab._complete, _ = _pruefer(
+        json.dumps({"ersetzungen": [{"satz": 4, "neu": ""}]}),
+        "BEHOBEN: ja\nNEUER FEHLER: nein")
+    parts = [f"{satz} Es regnete. Wir fuhren los.", "Yara sagte die Nummer ins Gerät, Datum und Uhrzeit. Dann hielt der Wagen."]
+    offen = [{"kategorie": "uebergang", "befund": "Wiederholt Satz 1.",
+              "saetze": ["Yara sagte die Nummer ins Gerät, Datum und Uhrzeit.", satz], "streichen": True}]
+    assert await lab._revise("s", parts, offen, "F", "R") == (1, 0)
+    assert parts[1] == "Dann hielt der Wagen."
+
+
+async def test_a_revision_that_fails_never_costs_the_story(tmp_path, caplog):
+    lab = _lab(Recorder(), tmp_path)
+
+    async def kaputt(prompt, **kwargs):
+        raise RuntimeError("route down")
+
+    lab._complete = kaputt
+    parts = ["Ich bleibe. Du gehst."]
+    offen = [{"kategorie": "handlung", "befund": "x", "saetze": ["Ich bleibe."], "streichen": False}]
+    with caplog.at_level("WARNING"):
+        assert await lab._revise("s", parts, offen, "F", "R") == (0, 1)
+    assert parts == ["Ich bleibe. Du gehst."] and "revision failed" in caplog.text
+
+
 async def test_with_the_director_off_nothing_is_asked(tmp_path):
     lab = StoryLab(utility=Recorder(), post=lambda *a, **k: None, root=tmp_path,
                    voice=_voice(), director=False)

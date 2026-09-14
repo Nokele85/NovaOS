@@ -271,6 +271,11 @@ How a story is made:
    perspective, tense, language, direct speech. Corrections inside one sentence are applied under
    guards; a sentence is struck only if it repeats one just before it; a perspective finding is
    logged, never patched a sentence at a time.
+   Then the author revises, as in a publishing house: for each plot, character or transition note
+   (and each repeat too far back to strike) the writing model in her persona may change only the
+   sentences the note names and their neighbours, and the editor checks the result. A revision is
+   kept only if the note is fixed and nothing new broke; otherwise the text stays and the note stays
+   in the log. At most eight notes per story, about 1 cent each.
 6. `outline.json` and `story.md` land in `vault/stories/<story_id>/`, and a compact entry goes into
    the journal and the story index. Story prose never becomes a fact about the user — not after the
    turn, and not at night (SPEC §21).

@@ -867,12 +867,21 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   a story half in one voice and half in another — and is logged instead. Sentence boundaries **MUST
   NOT** fall on abbreviations or ordinals. An editor that fails **MUST NOT** cost the story.
 
+  **The author revises.** What the editor marks but may not patch — plot, characters, transitions,
+  and a repeat too far back to strike — **MUST NOT** end as a line in a log. As in a publishing
+  house, the author rewrites it: per note, the writing model in her persona sees the whole story and
+  **MAY** change only the sentences the note concerns and their neighbours, with the smallest change
+  and under the editor's guards; a sentence **MAY** be struck only as a repeat of one the note names.
+  The editor **MUST** then check the revision, and it **MUST** be kept only when the editor finds the
+  note fixed and nothing new broken — otherwise the text stays as it was and the note stays a note.
+  A perspective finding is not revised this way. A revision that fails **MUST NOT** cost the story.
+
   **Fiction is not fact.** Story prose **MUST NOT** be taken for facts about the user by the turn
   extractor (§6) nor consolidated at night (§21).
 
-  **A director.** After the editor, and unless `STORY_DIRECTOR=false`, every scene **MUST** be cast
+  **A director.** After the revision, and unless `STORY_DIRECTOR=false`, every scene **MUST** be cast
   and directed before it is voiced. The split into narration and quoted speech **MUST** be made by
-  rule, not by a model, so the recording says exactly what `story.md` says. The director sees the
+  rule, not by a model (a quote may close with “, ” or a straight "), so the recording says exactly what `story.md` says. The director sees the
   whole story and **MUST** write down its understanding of the scene — the situation, the tension,
   what each character feels, the physical circumstances — before it gives each segment a speaker and
   an instruction derived from that understanding. Instructions **MUST** be English and describe only

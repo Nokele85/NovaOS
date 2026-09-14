@@ -48,4 +48,4 @@ a section are folded into it.
 | **§35** — Pictures you send her | — | — |
 | **§36** — Command-line control | — | — |
 
-*724 citation sites over 107 sections.*
+*726 citation sites over 107 sections.*

@@ -113,6 +113,53 @@ Höchstens 60 Funde, die wichtigsten zuerst. Antworte als json: {{"funde": [{{"s
 Manuskript:
 {text}"""
 
+#: The editor's findings an author can act on. A perspective finding is not
+#: among them: it spans a whole passage and is never patched (see `_lektorat`).
+REVISABLE = frozenset({"handlung", "figuren", "uebergang"})
+
+#: The author's revision on an editor's note (SPEC §7.8). As in a publishing
+#: house, the editor marks what does not hold and the author rewrites it: the
+#: editor sees the story from outside, and a plot patched in the editor's voice
+#: is how a story ended up half "ich" and half "Nova". Measured on a copy of
+#: 'Was unten liegt' (2026-09-14): narrow repairs with a check afterwards fixed
+#: three of four logic errors, and the check refused every repair that broke
+#: something else.
+REVISION_PROMPT = """Du bist die Autorin dieses Hörspiels und überarbeitest es nach EINEM Hinweis deiner Lektorin — mit dem kleinstmöglichen Eingriff.
+Verbindliche Form: {form}
+Register (gewollt, niemals abschwächen): {register}
+
+Der Hinweis der Lektorin: {befund}
+
+Du darfst NUR diese Sätze ändern: {erlaubt}. Ändere so wenige davon wie möglich — meist genügt eine Seite eines Widerspruchs: eine Ankündigung, die nicht eingelöst wird, lässt sich oft leichter an der Ankündigung beheben.
+Handlung, Reihenfolge der Ereignisse, Perspektive, Zeitform und Deutlichkeit bleiben. Ein ersetzter Satz darf einen kurzen Nebensatz dazubekommen, aber nicht zu einem Absatz werden. Wiederholt ein Satz fast wörtlich einen früheren, darfst du ihn mit "neu": "" streichen.
+
+Antworte als json: {{"ersetzungen": [{{"satz": 12, "neu": "der ganze neue Satz"}}], "begruendung": "..."}}
+
+Das ganze Manuskript:
+{text}"""
+
+#: The editor's second look at one revision: fixed, and nothing new broken.
+REVISION_CHECK_PROMPT = """Du bist Lektorin und prüfst eine Überarbeitung in einem Hörspiel.
+Dein Hinweis war: {befund}
+
+Vorher:
+{vorher}
+
+Nachher:
+{nachher}
+
+Antworte in genau zwei Zeilen:
+BEHOBEN: ja / nein <kurz warum>
+NEUER FEHLER: nein / ja <welcher — auch im Zusammenhang mit dem Rest der Geschichte>
+
+Die ganze Geschichte nach der Überarbeitung:
+{text}"""
+
+#: At most this many notes are revised per story: each is two calls on the
+#: whole story, measured at about 1.1 cents a note with a short reasoning pass.
+REVISION_MAX_NOTES = 8
+REVISION_TIMEOUT_S = 300.0
+
 #: The director (SPEC §7.8): who says each line and how it sounds. Built on
 #: MultiActor-Audiobook (arXiv 2505.13082) — the whole story in view, one
 #: instruction per line with a deliberate transition — and on what Qwen3-TTS
@@ -184,9 +231,12 @@ DIRECTOR_TIMEOUT_S = 300.0
 ACCENT_NOTES = {"ryan": " Clear standard German pronunciation, no English accent.",
                 "aiden": " Clear standard German pronunciation, no English accent."}
 
-#: Quoted speech, German style. What sits between the marks is spoken by a
-#: character; everything around it is narration.
-_REDE = re.compile(r"„([^“]*)“")
+#: Quoted speech. What sits between the marks is spoken by a character;
+#: everything around it is narration. The closing mark is not always the German
+#: “: the first live directed story (15f1e38754, 2026-09-15) opened with „ and
+#: closed with a straight " in 66 of 67 quotes, and a pattern that knew only
+#: „…“ found three segments in a scene of thirty-five.
+_REDE = re.compile(r"[„\"]([^„“”\"]*)[“”\"]")
 
 
 def _segments(text: str) -> list[tuple[str, bool]]:
@@ -496,7 +546,8 @@ class StoryLab:
     async def _complete(self, prompt: str, *, max_tokens: int = 900,
                         persona: bool = True, thinking: bool | None = None,
                         temperature: float = 0.75,
-                        response_format: dict | None = None) -> str:
+                        response_format: dict | None = None,
+                        reasoning_effort: str = "") -> str:
         provider = self.utility() if callable(self.utility) else self.utility
         if persona and self.character_context is not None:
             soul = self.character_context() if callable(self.character_context) else self.character_context
@@ -511,6 +562,8 @@ class StoryLab:
         extra: dict = {} if thinking is None else {"thinking": thinking}
         if response_format is not None:
             extra["response_format"] = response_format
+        if reasoning_effort:
+            extra["reasoning_effort"] = reasoning_effort
         return await provider.complete([{"role": "user", "content": prompt}],
                                        temperature=temperature, max_tokens=max_tokens,
                                        **extra)
@@ -606,8 +659,8 @@ class StoryLab:
                 anfang = zeile.strip()
         return offen, anfang
 
-    async def _lektorat(self, parts: list[str], rules: str,
-                        register: str) -> tuple[int, int]:
+    async def _lektorat(self, parts: list[str], rules: str, register: str,
+                        offen: list[dict] | None = None) -> tuple[int, int]:
         """Read the finished story once as its editor, and apply only what is
         safe to apply (SPEC §7.8).
 
@@ -620,9 +673,20 @@ class StoryLab:
         Nummer ins Gerät …" twice), and a deletion that is not one is prose
         lost. A perspective finding is never applied: patched a sentence at a
         time it left every passage of that story half "ich" and half "Nova".
-        Everything not applied is logged as a note for a reader.
+        Everything not applied is logged as a note for a reader; the notes a
+        revision can act on are also appended to `offen`, each with the text of
+        the sentences it concerns (numbers shift once a sentence is struck).
 
         Returns (sentences changed, notes left)."""
+        def notiere(kategorie: str, befund: str, nummer: int, streichen: bool = False) -> None:
+            if offen is None or not (kategorie in REVISABLE or streichen):
+                return
+            nummern = [nummer] + [int(n) for n in re.findall(r"Satz\s+(\d+)", befund)]
+            texte = [saetze[karte[n - 1][0]][karte[n - 1][1]]
+                     for n in dict.fromkeys(nummern) if 1 <= n <= len(karte)]
+            offen.append({"kategorie": kategorie, "befund": befund,
+                          "saetze": [t for t in texte if t][:4], "streichen": streichen})
+
         saetze = [_sentences(teil) for teil in parts]
         karte: list[tuple[int, int]] = []
         zeilen: list[str] = []
@@ -675,6 +739,7 @@ class StoryLab:
                 hinweise += 1
                 log.info("lektorat note [%s] sentence %d: %s", kategorie, nummer,
                          befund[:160])
+                notiere(kategorie, befund, nummer)
                 continue
             if neu.upper() == "STREICHEN":
                 davor = [s for ss in saetze for s in ss][:nummer - 1]
@@ -689,6 +754,7 @@ class StoryLab:
                     log.info("lektorat wanted sentence %d struck, but it does "
                              "not repeat one just before it; kept: %s",
                              nummer, befund[:120])
+                    notiere(kategorie, befund, nummer, streichen=True)
                 continue
             if _META.search(neu) or (_BROKEN_VERB.search(neu)
                                      and not _BROKEN_VERB.search(alt)):
@@ -701,6 +767,7 @@ class StoryLab:
                          "kept it: %s", nummer, _words(alt), _words(neu),
                          befund[:100])
                 hinweise += 1
+                notiere(kategorie, befund, nummer)
                 continue
             saetze[pi][li] = neu
             geaendert += 1
@@ -711,6 +778,102 @@ class StoryLab:
                 log.info("passage %d still mixes forms of address in %d "
                          "sentences", pi + 1, gemischt)
         return geaendert, hinweise
+
+    async def _revise(self, story_id: str, parts: list[str], offen: list[dict],
+                      rules: str, register: str) -> tuple[int, int]:
+        """The author revises on the editor's notes; the editor checks each
+        revision (SPEC §7.8).
+
+        Per note only the sentences it concerns and their neighbours may change,
+        the author gives the smallest change, and the editor must confirm it
+        fixed the note and broke nothing else — or the text stays as it was and
+        the note stays a note. Never raises.
+
+        Returns (notes fixed, notes left)."""
+        behoben = uebrig = 0
+        for hinweis in offen[:REVISION_MAX_NOTES]:
+            saetze = [_sentences(teil) for teil in parts]
+            flach = [(pi, li) for pi, ss in enumerate(saetze) for li in range(len(ss))]
+            texte = [saetze[pi][li] for pi, li in flach]
+            anker = [texte.index(t) for t in hinweis["saetze"] if t in texte]
+            if not anker:
+                uebrig += 1
+                log.info("revision: the sentences of a note are gone; left: %s",
+                         hinweis["befund"][:100])
+                continue
+            erlaubt = sorted({m for a in anker for m in (a - 1, a, a + 1)
+                              if 0 <= m < len(texte)})
+            nummeriert = "\n".join(f"{i + 1}: {t}" for i, t in enumerate(texte))
+            try:
+                antwort = await asyncio.wait_for(self._complete(
+                    REVISION_PROMPT.format(
+                        form=rules, register=register or "wie geschrieben",
+                        befund=hinweis["befund"],
+                        erlaubt=", ".join(str(m + 1) for m in erlaubt), text=nummeriert),
+                    max_tokens=REVIEW_MAX_TOKENS // 2, thinking=True,
+                    reasoning_effort="low", temperature=0.3,
+                    response_format={"type": "json_object"}), REVISION_TIMEOUT_S)
+                found = re.search(r"\{.*\}", antwort or "", re.S)
+                daten = json.loads(found.group(0)) if found else {}
+            except Exception as e:  # noqa: BLE001 — a failed revision leaves the note
+                log.warning("revision failed (%s); left: %s", type(e).__name__,
+                            hinweis["befund"][:100])
+                uebrig += 1
+                continue
+            neu_texte = list(texte)
+            geaendert: list[int] = []
+            for ersetzung in (daten.get("ersetzungen") or []) if isinstance(daten, dict) else []:
+                if not isinstance(ersetzung, dict) or not isinstance(ersetzung.get("satz"), int):
+                    continue
+                m = ersetzung["satz"] - 1
+                if m not in erlaubt or m in geaendert:
+                    continue
+                alt, neu = texte[m], str(ersetzung.get("neu") or "").strip()
+                if not neu:
+                    # A strike only for a real repeat of a sentence the note names.
+                    if not any(_repeats(alt, texte[a]) for a in anker if a != m):
+                        continue
+                elif (_META.search(neu)
+                      or (_BROKEN_VERB.search(neu) and not _BROKEN_VERB.search(alt))
+                      or not 0.3 * _words(alt) <= _words(neu) <= 2.5 * _words(alt) + 6):
+                    continue
+                neu_texte[m] = neu
+                geaendert.append(m)
+            if not geaendert:
+                uebrig += 1
+                log.info("revision offered nothing usable; left: %s", hinweis["befund"][:100])
+                continue
+            try:
+                probe = await asyncio.wait_for(self._complete(
+                    REVISION_CHECK_PROMPT.format(
+                        befund=hinweis["befund"],
+                        vorher="\n".join(f"{m + 1}: {texte[m]}" for m in geaendert),
+                        nachher="\n".join(f"{m + 1}: {neu_texte[m] or '(gestrichen)'}"
+                                          for m in geaendert),
+                        text="\n".join(f"{i + 1}: {t}" for i, t in enumerate(neu_texte) if t)),
+                    max_tokens=300, persona=False, thinking=False, temperature=0.1),
+                    REVISION_TIMEOUT_S)
+            except Exception as e:  # noqa: BLE001
+                log.warning("revision check failed (%s); kept the text", type(e).__name__)
+                uebrig += 1
+                continue
+            if re.search(r"BEHOBEN:\s*ja", probe or "", re.I) and \
+                    not re.search(r"NEUER FEHLER:\s*ja", probe or "", re.I):
+                for m in geaendert:
+                    pi, li = flach[m]
+                    saetze[pi][li] = neu_texte[m]
+                for pi, ss in enumerate(saetze):
+                    parts[pi] = " ".join(s for s in ss if s)
+                behoben += 1
+                log.info("story %s: revised %d sentences for: %s", story_id,
+                         len(geaendert), hinweis["befund"][:120])
+            else:
+                uebrig += 1
+                log.info("story %s: revision refused by the editor (%s); left: %s",
+                         story_id, (probe or "").strip().replace("\n", " | ")[:120],
+                         hinweis["befund"][:100])
+        uebrig += max(0, len(offen) - REVISION_MAX_NOTES)
+        return behoben, uebrig
 
     async def _direct(self, story_id: str, parts: list[str], moods: list[str],
                       rules: str, characters_brief: str,
@@ -1122,14 +1285,20 @@ class StoryLab:
                 moods.append("")
                 story = "\n\n".join(parts)
             # The last word before the file exists: one reading by its editor.
+            notizen: list[dict] = []
             try:
-                geaendert, hinweise = await self._lektorat(parts, rules, register)
+                geaendert, hinweise = await self._lektorat(parts, rules, register, notizen)
                 story = "\n\n".join(parts)
                 log.info("story %s: lektorat changed %d sentences and left %d "
                          "notes", story_id, geaendert, hinweise)
             except Exception:
                 log.warning("story %s: the lektorat failed; publishing as "
                             "written", story_id, exc_info=True)
+            if notizen:
+                behoben, uebrig = await self._revise(story_id, parts, notizen, rules, register)
+                story = "\n\n".join(parts)
+                log.info("story %s: the author revised %d of %d notes (%d left)",
+                         story_id, behoben, len(notizen), uebrig)
             log.info("story %s: %.0f%% of it is spoken aloud", story_id,
                      _dialogue_share(story) * 100)
             story_path = folder / "story.md"
