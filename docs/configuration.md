@@ -256,7 +256,9 @@ Backend-specific keys (`QWEN_*`, `SOVITS_*`) are in [Voice](voice.md).
 | `TOOL_RATE_TIMER` / `_MUSIC` / `_SELFIE` / `_PICTURE` / `_DESK` | `6` / `6` / `2` / `2` / `20` | calls per minute |
 | `STORY_ENABLED` / `TOOL_RATE_STORY` | `false` / `1` | advertises `tell_story` (SPEC §7.8); calls per minute |
 | `STORY_TTS_URL` / `STORY_TTS_SUPERVISOR_URL` | `…:8091` / `…:8092` | Qwen3-TTS: the service that speaks, and the one that loads and unloads it |
-| `STORY_TTS_SPEAKER` | `sohee` | one of the CustomVoice model's own speakers — the variant that takes a per-scene instruction |
+| `STORY_TTS_SPEAKER` | `sohee` | one of the CustomVoice model's own speakers — the variant that takes a per-line instruction; narration and her own lines |
+| `STORY_DIRECTOR` | `true` | cast and direct every line before it is voiced (SPEC §7.8); `false` reads each scene in her voice and scene mood |
+| `STORY_VOICE_USER` / `STORY_VOICE_MAN` / `STORY_VOICE_WOMAN` | `dylan` / `ryan` / `serena` | the speakers for the user's lines and for any other male or female character; `ryan` and `aiden` get an accent note appended by code |
 | `STORY_TTS_LANGUAGE` / `STORY_TTS_TOKEN` | `German` / — | synthesis language; the supervisor's token, if it sets one |
 | `STORY_MIN_WORDS` / `STORY_SCENES` | `1500` / `8` | minimum text target and sequential scene count |
 | `TIMER_MAX_MINUTES` | `180` | |

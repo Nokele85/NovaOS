@@ -1,4 +1,4 @@
-"""Asynchronous long-form story production (SPEC §7.8): brief -> scenes -> editor -> TTS -> Telegram."""
+"""Asynchronous long-form story production (SPEC §7.8): brief -> scenes -> editor -> director -> TTS -> Telegram."""
 from __future__ import annotations
 
 import asyncio
@@ -112,6 +112,103 @@ Höchstens 60 Funde, die wichtigsten zuerst. Antworte als json: {{"funde": [{{"s
 
 Manuskript:
 {text}"""
+
+#: The director (SPEC §7.8): who says each line and how it sounds. Built on
+#: MultiActor-Audiobook (arXiv 2505.13082) — the whole story in view, one
+#: instruction per line with a deliberate transition — and on what Qwen3-TTS
+#: actually follows: English instructions (Alibaba documents instruction text in
+#: Chinese and English only), audible features rather than roles (CustomVoice
+#: follows acoustic descriptions at 77 %, role-play at 64 % — Qwen3-TTS
+#: Technical Report, InstructTTSEval), shifts inside a line as "starts …, then …"
+#: (the official "Gradual Control" samples). Understanding comes first, in
+#: writing: in the A/B/C hearing test of 2026-09-14 the version that analysed
+#: the situation before directing caught what shapes a voice — a guide heard
+#: through stone, breath after a squeeze — which the role-describing prototype
+#: never did, for 0.62 cents a scene.
+DIRECTOR_PROMPT = """You are the director of a German audio drama. You first UNDERSTAND the story, then DIRECT the voices. Return json only.
+
+Form of the story: {form}
+{figuren}
+Speaker ids: "narrator" (the narrating voice), "nova" (Nova speaking aloud), "user" ({user} speaking aloud), "man" (any other male character), "woman" (any other female character).
+
+The whole story, so you know what came before and what comes after:
+<<<
+{story}
+>>>
+
+The scene you direct now (scene {nr} of {von}):
+<<<
+{szene}
+>>>
+
+Its numbered segments (quoted speech without its quotation marks; everything else is narration):
+{liste}
+
+STEP 1 — UNDERSTAND. Write in German, into "analyse":
+- "lage": where they are, what is happening, what happened just before this scene.
+- "spannung": what is at stake, and how the tension moves through the scene — where it rises, breaks or releases, by segment number.
+- "figuren": for every character present: what they feel at this moment, what they show and what they hide, how they stand towards the others right now.
+- "koerper": the physical circumstances that shape a voice: must they be quiet, are they out of breath, cold, in pain, straining, far apart or very close, is there echo, fear or desire in the body.
+- "grundton": the narrator's voice for this scene in audible features, and at which segments it has to change.
+
+STEP 2 — DIRECT. For EVERY segment:
+- "speaker": one of the speaker ids. Narration is always narrator. For speech use the attribution around it ("sage ich" = the narrator's character speaking, "sagst du" = the one addressed as du, "sagt Marek" = that character); where it is missing, use turn-taking and content.
+- "warum": a few German words tying this line to your analysis.
+- "instruction": how it is spoken, in English, derived from that moment of your analysis. Rules taken from the voice model's own documentation and benchmarks:
+  * Describe ONLY what is audible: pitch, speed, volume, emotion, tone, texture (breathy, hushed, trembling, strained, clipped, warm ...). One or two short sentences, concrete words.
+  * Never name places, objects, events or characters, never quote the text, never mention accent, gender or age — the voice already is who it is, and the model follows acoustic descriptions far better than role or scene descriptions.
+  * Every instruction stands alone: the voice never sees your analysis, so never write "baseline", "as before" or "same" — spell the features out each time.
+  * No contradictions: never "whispered" together with "loud".
+  * Narration keeps its tone and changes only where the moment really changes; do not invent variety.
+  * A shift inside one segment is written as "starts ..., then ...".
+  * Prefer clear contrasts to subtle nuance — subtle nuance is often lost.
+  * The body wins: someone who must not be heard whispers, someone exhausted is out of breath.
+  * Transitions are deliberate: a jump only where the story jumps.
+
+Answer as json: {{"analyse": {{"lage": "...", "spannung": "...", "figuren": "...", "koerper": "...", "grundton": "..."}}, "lines": [{{"i": 0, "speaker": "...", "warum": "...", "instruction": "..."}}]}} with one entry per segment, in order."""
+
+#: What the director is allowed to think with. Measured on a 447-word scene of
+#: 62 segments: 7 822 tokens out, 3 899 of them thinking; a scene three times
+#: that size still fits, and only what is generated is billed.
+DIRECTOR_MAX_TOKENS = 24_000
+
+#: A hard wall clock per scene. On 2026-09-14 (21:40-23:28) the hosted route
+#: queued requests without ever starting them, answering only with keep-alive
+#: lines — which reset every per-read timeout, so a call hung for 900 s.
+DIRECTOR_TIMEOUT_S = 300.0
+
+#: Appended by code, never left to the director, which is told not to mention
+#: accents at all: ryan read German with an American accent that this sentence
+#: softened to acceptable (by ear, 2026-09-14). aiden shares ryan's native
+#: language and is assumed, not heard, to need the same.
+ACCENT_NOTES = {"ryan": " Clear standard German pronunciation, no English accent.",
+                "aiden": " Clear standard German pronunciation, no English accent."}
+
+#: Quoted speech, German style. What sits between the marks is spoken by a
+#: character; everything around it is narration.
+_REDE = re.compile(r"„([^“]*)“")
+
+
+def _segments(text: str) -> list[tuple[str, bool]]:
+    """Split a scene into narration and speech, in order, without the model.
+
+    The director decides who speaks and how; it never touches a letter, so
+    the recording says exactly what `story.md` says. Returns (text, is_speech)."""
+    teile: list[tuple[str, bool]] = []
+    pos = 0
+    for m in _REDE.finditer(text):
+        vor = text[pos:m.start()].strip()
+        if vor:
+            teile.append((vor, False))
+        rede = m.group(1).strip()
+        if rede:
+            teile.append((rede, True))
+        pos = m.end()
+    rest = text[pos:].strip()
+    if rest:
+        teile.append((rest, False))
+    return teile
+
 
 # The shape of a story, for when no outline survives. Five distinct beats beat
 # one repeated purpose: the failure mode being guarded against is a story that
@@ -332,9 +429,15 @@ class StoryLab:
 
     def __init__(self, *, utility, post, root: Path, voice: QwenVoice,
                  remember=None, character_context=None, user_name: str = "Benni",
-                 min_words: int = 1500,
+                 min_words: int = 1500, director: bool = True,
+                 voices: dict[str, str] | None = None,
                  scenes: int = 8, gpu_lock: asyncio.Lock | None = None):
         self.utility = utility
+        self.director = director
+        #: speaker id -> one of the voice model's speakers; narration and
+        #: Nova's own lines are always the voice's own speaker
+        self.voices = {"user": "dylan", "man": "ryan", "woman": "serena",
+                       **(voices or {})}
         # the LAN GPU's lock; None = the process-wide one (world/vram.py)
         self.gpu_lock = gpu_lock
         self.character_context = character_context
@@ -608,6 +711,91 @@ class StoryLab:
                 log.info("passage %d still mixes forms of address in %d "
                          "sentences", pi + 1, gemischt)
         return geaendert, hinweise
+
+    async def _direct(self, story_id: str, parts: list[str], moods: list[str],
+                      rules: str, characters_brief: str,
+                      folder: Path | None = None) -> list[tuple[str, str, str]]:
+        """Cast and direct every line of the finished story (SPEC §7.8).
+
+        One call per scene, each seeing the whole story: it writes down what it
+        understands of the situation first and derives a spoken instruction for
+        every segment from that. Returns (text, instruction, speaker) in story
+        order; speaker "" is the voice's own.
+
+        Never raises. A scene whose direction fails, times out or does not cover
+        its segments is spoken the way stories were before the director — in
+        her voice, with her scene mood — and says so in the log."""
+        stimme = self.voice.speaker
+        besetzung = {"narrator": "", "nova": "", **self.voices}
+        figuren = (f"Characters and shared history (German): {characters_brief}\n"
+                   if characters_brief else "")
+        story = "\n\n".join(parts)
+        gesprochen: list[tuple[str, str, str]] = []
+        skripte: list[dict] = []
+        for nr, teil in enumerate(parts):
+            mood = moods[nr] if nr < len(moods) else ""
+            segmente = _segments(teil)
+            zeilen = None
+            if self.director and segmente:
+                auftrag = DIRECTOR_PROMPT.format(
+                    form=rules, figuren=figuren, user=self.user_name, story=story,
+                    nr=nr + 1, von=len(parts), szene=teil,
+                    liste="\n".join(f"[{i}] {s}" for i, (s, _) in enumerate(segmente)))
+                zeilen, analyse = await self._direction(story_id, nr, auftrag,
+                                                        len(segmente))
+                if zeilen is not None:
+                    skripte.append({"szene": nr + 1, "analyse": analyse,
+                                    "lines": zeilen})
+            if zeilen is None:
+                gesprochen.append((teil, mood, ""))
+                continue
+            for i, (text, rede) in enumerate(segmente):
+                z = zeilen.get(i) or {}
+                sprecher = str(z.get("speaker") or "")
+                if not rede:
+                    # Narration is never recast: a narrated sentence given to a
+                    # character would put words in their mouth.
+                    sprecher = "narrator"
+                elif sprecher not in besetzung or sprecher == "narrator":
+                    sprecher = "nova"          # speech nobody could place: her voice
+                name = besetzung[sprecher]
+                anweisung = str(z.get("instruction") or "").strip() or mood
+                anweisung = (anweisung + ACCENT_NOTES.get(name or stimme, "")).strip()
+                gesprochen.append((text, anweisung, name))
+        if folder is not None and skripte:
+            (folder / "regie.json").write_text(
+                json.dumps(skripte, ensure_ascii=False, indent=1), encoding="utf-8")
+        return gesprochen
+
+    async def _direction(self, story_id: str, nr: int, auftrag: str,
+                         anzahl: int) -> tuple[dict[int, dict] | None, dict]:
+        """One scene's direction, or (None, {}) when it cannot be had."""
+        for versuch in (1, 2):
+            try:
+                antwort = await asyncio.wait_for(self._complete(
+                    auftrag, max_tokens=DIRECTOR_MAX_TOKENS, persona=False,
+                    thinking=True, temperature=0.4,
+                    response_format={"type": "json_object"}), DIRECTOR_TIMEOUT_S)
+            except Exception as e:  # noqa: BLE001 — a failed direction costs a voice, not the story
+                log.warning("story %s scene %d: direction attempt %d failed (%s)",
+                            story_id, nr + 1, versuch, type(e).__name__)
+                continue
+            found = re.search(r"\{.*\}", antwort or "", re.S)
+            try:
+                daten = json.loads(found.group(0)) if found else {}
+            except ValueError:
+                daten = {}
+            lines = daten.get("lines") if isinstance(daten, dict) else None
+            zeilen = {z["i"]: z for z in (lines or [])
+                      if isinstance(z, dict) and isinstance(z.get("i"), int)}
+            if len(zeilen) >= 0.8 * anzahl:
+                analyse = daten.get("analyse")
+                return zeilen, analyse if isinstance(analyse, dict) else {}
+            log.warning("story %s scene %d: direction attempt %d covered %d of "
+                        "%d segments", story_id, nr + 1, versuch, len(zeilen), anzahl)
+        log.warning("story %s scene %d: no direction; spoken in her own voice "
+                    "and scene mood", story_id, nr + 1)
+        return None, {}
 
     async def _state_update(self, state: str, scene: str) -> str:
         """Carry the story's *state* forward, not its last 1200 characters.
@@ -958,8 +1146,9 @@ class StoryLab:
                            f"Anfang: {story[:900]}\nEnde: {story[-900:]}")
                 await self.remember(story_id, title, theme, summary,
                                     str(story_path))
-            audio_path = await self._tts(list(zip(parts, moods)),
-                                         folder / "story.wav")
+            gesprochen = await self._direct(story_id, parts, moods, rules,
+                                            characters_brief, folder)
+            audio_path = await self._tts(gesprochen, folder / "story.wav")
             audio_path = await self._telegram_audio(audio_path)
             self.post("assistant", f"Deine Geschichte „{plan.get('title', theme)}“ ist fertig und vertont.",
                       audio_path=str(audio_path), proactive=True,
@@ -971,7 +1160,7 @@ class StoryLab:
                       proactive=True, channel=contract.get("_channel"),
                       corr_id=contract.get("_corr_id"))
 
-    async def _tts(self, sections: list[tuple[str, str]], target: Path) -> Path:
+    async def _tts(self, sections: list[tuple[str, str, str]], target: Path) -> Path:
         # The TTS server renders on the gaming PC's card, which the ComfyUI
         # camera shares: the whole load -> speak -> unload holds that card's
         # lock, so a photo waits for the voice instead of starving it.
@@ -981,25 +1170,26 @@ class StoryLab:
         async with lock:
             return await self._tts_on_card(sections, target)
 
-    async def _tts_on_card(self, sections: list[tuple[str, str]],
+    async def _tts_on_card(self, sections: list[tuple[str, str, str]],
                            target: Path) -> Path:
         pcm = bytearray()
         rate = self.voice.sample_rate
-        # One (passage, instruction) pair per request. A scene may be longer
-        # than one request may carry, so it becomes several passages — all
-        # spoken in that scene's register, which is what makes the tense scene
-        # sound tense and the one after it not.
-        parts: list[tuple[str, str]] = [
-            (passage, instruct)
-            for text, instruct in sections
+        # One (passage, instruction, speaker) per request. A directed line is
+        # usually far shorter than one request may carry; undirected narration
+        # may not be, so it becomes several passages — all spoken with the same
+        # instruction and in the same voice.
+        parts: list[tuple[str, str, str]] = [
+            (passage, instruct, speaker)
+            for text, instruct, speaker in sections
             for passage in passages(text)]
         timeout = httpx.Timeout(connect=15, read=600, write=30, pool=30)
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             try:
                 await self.voice.power_on(client)
                 self._voice_on = True
-                for index, (passage, instruct) in enumerate(parts):
-                    pcm.extend(await self.voice.speak(client, passage, instruct))
+                for index, (passage, instruct, speaker) in enumerate(parts):
+                    pcm.extend(await self.voice.speak(client, passage, instruct,
+                                                      speaker))
                     # A short natural breath between passages. PCM is 16-bit
                     # mono, so this is silent audio, not a blocking sleep.
                     if index < len(parts) - 1:
@@ -1011,8 +1201,9 @@ class StoryLab:
                 # card back — 7336 MiB, measured — so it is not optional.
                 await self.voice.power_off(client)
                 self._voice_on = False
-        log.info("story audio: %d passages (%d with a register), %.1f s",
-                 len(parts), sum(1 for _, i in parts if i), len(pcm) / 2 / rate)
+        log.info("story audio: %d passages (%d with a register, %d in another "
+                 "voice), %.1f s", len(parts), sum(1 for _, i, _ in parts if i),
+                 sum(1 for _, _, s in parts if s), len(pcm) / 2 / rate)
         with wave.open(str(target), "wb") as out:
             out.setnchannels(1); out.setsampwidth(2); out.setframerate(rate)
             out.writeframes(bytes(pcm))

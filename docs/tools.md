@@ -274,11 +274,27 @@ How a story is made:
 6. `outline.json` and `story.md` land in `vault/stories/<story_id>/`, and a compact entry goes into
    the journal and the story index. Story prose never becomes a fact about the user — not after the
    turn, and not at night (SPEC §21).
-7. The voice reads each scene with its own instruction; the WAV is compressed to MP3 and delivered
-   to the channel it was asked from and to Telegram.
+7. A director casts and directs every scene. Narration and quoted speech are split by rule, so not a
+   letter changes; the director reads the whole story, writes down what it understands of the scene
+   (situation, tension, what each character feels, the physical circumstances) and derives one
+   English instruction per line from it — only what is audible: pitch, speed, volume, emotion,
+   tone, texture. Narration and Nova's lines are her voice, the user's lines `STORY_VOICE_USER`,
+   anyone else `STORY_VOICE_MAN` or `STORY_VOICE_WOMAN`. The direction is saved as `regie.json`; a
+   scene whose direction fails or runs past five minutes is read the old way, in her voice and scene
+   mood.
+8. The voice reads every line with its own speaker and instruction; the WAV is compressed to MP3 and
+   delivered to the channel it was asked from and to Telegram.
 
 Measured on the same story, the editor replaced three earlier passes: 10 calls and 5.34 cents became
-one call and about 2–3 cents. A whole story costs about 4 cents on DeepSeek V4.1-Flash.
+one call and about 2–3 cents. The director costs about 0.3–0.6 cents a scene (one call with a short
+reasoning pass); a whole story costs roughly 6–8 cents on DeepSeek V4.1-Flash.
+
+Why the director is built this way, from the hearing test of 2026-09-14 on one scene: a prototype that
+described roles ("Marek: gruff and wary") wrote studio talk like "off-mic" that the voice cannot use;
+a director that first analysed the situation noticed that the guide calls through stone and that the
+two of them have just squeezed through a gap, and turned both into audible instructions. That
+matches the Qwen3-TTS Technical Report (InstructTTSEval: CustomVoice follows acoustic descriptions at
+77 %, role-play at 64 %) and MultiActor-Audiobook (arXiv 2505.13082).
 
 ```ini
 STORY_ENABLED=true
@@ -286,6 +302,10 @@ TOOL_RATE_STORY=1
 STORY_TTS_URL=http://192.168.0.104:8091
 STORY_TTS_SUPERVISOR_URL=http://192.168.0.104:8092
 STORY_TTS_SPEAKER=sohee
+STORY_DIRECTOR=true
+STORY_VOICE_USER=dylan
+STORY_VOICE_MAN=ryan
+STORY_VOICE_WOMAN=serena
 STORY_TTS_LANGUAGE=German
 STORY_MIN_WORDS=1500
 STORY_SCENES=8

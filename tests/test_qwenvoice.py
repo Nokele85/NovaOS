@@ -128,3 +128,11 @@ def test_the_speaker_rides_on_every_call_and_the_register_only_when_given():
     tense = _voice()._body("Ein Satz.", "gedämpft und spannungsvoll")
     assert tense["instructions"] == "gedämpft und spannungsvoll"
     assert tense["voice"] == "sohee"
+
+
+def test_a_line_of_dialogue_may_name_another_of_the_model_s_speakers():
+    """The director casts a line; the loaded model already holds every voice."""
+    line = _voice()._body("Rein.", "low and firm", "dylan")
+    assert line["voice"] == "dylan"
+    assert line["instructions"] == "low and firm"
+    assert _voice()._body("Rein.", "", "")["voice"] == "sohee"

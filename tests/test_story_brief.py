@@ -196,7 +196,7 @@ async def test_each_scene_is_spoken_with_its_own_register(tmp_path):
     lab = _lab(util, tmp_path)
 
     async def fake_on_card(sections, target):
-        for text, instruct in sections:
+        for text, instruct, _speaker in sections:
             gesagt.append((text[:20], instruct))
         target.write_bytes(b"")
         return target
@@ -221,7 +221,7 @@ async def test_a_story_without_scene_moods_speaks_plainly_throughout(tmp_path):
     lab = _lab(Recorder(), tmp_path)
 
     async def fake_on_card(sections, target):
-        gesagt.extend(i for _, i in sections)
+        gesagt.extend(i for _, i, _ in sections)
         target.write_bytes(b"")
         return target
 
@@ -892,3 +892,119 @@ def test_an_empty_findings_list_is_an_answer_and_a_missing_one_is_not():
     assert _findings("") is None
     assert _findings('{"notes": "nichts"}') is None
     assert _findings("kein json") is None
+
+
+# -- the director casts every line, and never touches a letter ---------------
+
+SZENE = ("Marek steht am Spalt. „Neu“, sagt er. „Keiner war drin.“ "
+         "„Beruhigend“, sage ich. „Rein“, sagst du.")
+
+
+def _regie(*zeilen, analyse=None) -> str:
+    return json.dumps({"analyse": analyse or {"lage": "Am Höhleneingang."},
+                       "lines": [{"i": i, "speaker": s, "warum": "…", "instruction": a}
+                                 for i, (s, a) in enumerate(zeilen)]})
+
+
+def test_a_scene_is_split_into_narration_and_speech_without_losing_a_word():
+    from yurios.world.stories import _segments
+    teile = _segments(SZENE)
+    assert teile == [("Marek steht am Spalt.", False), ("Neu", True), (", sagt er.", False),
+                     ("Keiner war drin.", True), ("Beruhigend", True), (", sage ich.", False),
+                     ("Rein", True), (", sagst du.", False)]
+    # what is spoken is exactly what the story says, minus the quotation marks
+    assert "".join(t for t, _ in teile).replace(" ", "") == \
+        SZENE.replace("„", "").replace("“", "").replace(" ", "")
+
+
+async def test_the_director_sees_the_whole_story_and_understands_before_it_directs(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+    gesehen: dict = {}
+
+    async def fake(prompt, **kwargs):
+        gesehen["prompt"], gesehen["kwargs"] = prompt, kwargs
+        return _regie(*[("narrator", "low")] * 8)
+
+    lab._complete = fake
+    await lab._direct("s", ["Davor war Wald.", SZENE], ["", ""], "FORM", "Marek, Bergführer")
+    p, kw = gesehen["prompt"], gesehen["kwargs"]
+    assert "Davor war Wald." in p and "Form of the story: FORM" in p
+    assert "Marek, Bergführer" in p and "STEP 1 — UNDERSTAND" in p
+    assert "[1] Neu" in p and "never mention accent" in p
+    assert kw["thinking"] is True and kw["response_format"] == {"type": "json_object"}
+
+
+async def test_every_line_is_spoken_by_its_cast_voice_with_its_own_instruction(tmp_path):
+    """Nova and the narration in her voice, the user in his, anyone else by gender."""
+    lab = StoryLab(utility=Recorder(), post=lambda *a, **k: None, root=tmp_path,
+                   voice=_voice(), voices={"user": "dylan", "man": "ryan"})
+
+    async def fake(prompt, **kwargs):
+        return _regie(("narrator", "low, even"), ("man", "flat, clipped"),
+                      ("narrator", "quick"), ("man", "deadpan"), ("nova", "dry, sardonic"),
+                      ("narrator", "quick"), ("user", "low and firm"), ("narrator", "soft"))
+
+    lab._complete = fake
+    gesprochen = await lab._direct("s", [SZENE], ["gedämpft"], "FORM", "", tmp_path)
+    assert gesprochen[0] == ("Marek steht am Spalt.", "low, even", "")
+    assert gesprochen[1][2] == "ryan"
+    # the accent note is the code's, never the director's
+    assert gesprochen[1][1] == "flat, clipped Clear standard German pronunciation, no English accent."
+    assert gesprochen[4] == ("Beruhigend", "dry, sardonic", "")
+    assert gesprochen[6] == ("Rein", "low and firm", "dylan")
+    assert json.loads((tmp_path / "regie.json").read_text(encoding="utf-8"))[0]["analyse"]
+
+
+async def test_narration_is_never_given_to_a_character(tmp_path):
+    lab = _lab(Recorder(), tmp_path)
+
+    async def fake(prompt, **kwargs):
+        return _regie(*[("man", "loud")] * 8)
+
+    lab._complete = fake
+    gesprochen = await lab._direct("s", [SZENE], [""], "FORM", "")
+    assert gesprochen[0][2] == "" and gesprochen[2][2] == ""      # narration: her voice
+    assert gesprochen[1][2] == "ryan"                             # speech: as cast
+
+
+async def test_a_scene_without_direction_is_spoken_as_before_and_the_story_ships(tmp_path, caplog):
+    """Recorder answers the director with prose — the scene keeps her voice and mood."""
+    gesagt: list = []
+    lab = _lab(Recorder(), tmp_path)
+
+    async def fake_on_card(sections, target):
+        gesagt.extend(sections)
+        target.write_bytes(b"")
+        return target
+
+    lab._tts_on_card = fake_on_card
+    lab._tts = StoryLab._tts.__get__(lab)
+    with caplog.at_level("WARNING"):
+        await _run(lab, {"theme": "Wald", "scenes": ["A."], "scene_moods": ["leise"]})
+    assert "no direction; spoken in her own voice" in caplog.text
+    assert gesagt[0][1:] == ("leise", "")
+
+
+async def test_a_director_that_hangs_is_given_up_on(tmp_path, monkeypatch):
+    """2026-09-14: queued requests got keep-alives for 900 s and never started."""
+    import yurios.world.stories as stories
+    monkeypatch.setattr(stories, "DIRECTOR_TIMEOUT_S", 0.01)
+    lab = _lab(Recorder(), tmp_path)
+
+    async def haengt(prompt, **kwargs):
+        await asyncio.sleep(10)
+
+    lab._complete = haengt
+    gesprochen = await lab._direct("s", [SZENE], ["gedämpft"], "FORM", "")
+    assert gesprochen == [(SZENE, "gedämpft", "")]
+
+
+async def test_with_the_director_off_nothing_is_asked(tmp_path):
+    lab = StoryLab(utility=Recorder(), post=lambda *a, **k: None, root=tmp_path,
+                   voice=_voice(), director=False)
+
+    async def nie(prompt, **kwargs):
+        raise AssertionError("the director was asked")
+
+    lab._complete = nie
+    assert await lab._direct("s", [SZENE], ["x"], "FORM", "") == [(SZENE, "x", "")]

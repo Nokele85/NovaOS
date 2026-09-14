@@ -51,6 +51,14 @@ class Config(VoiceConfig):
     # Base cloning model ignores instructions entirely and narrates 23 minutes
     # in one register (measured 2026-09-12).
     story_tts_speaker: str = "sohee"
+    # The director (SPEC §7.8) casts every line of a finished story: narration
+    # and her own lines in the speaker above, the user's in his, anyone else by
+    # gender. Chosen by ear on 2026-09-14 — dylan reads German cleanly; ryan
+    # carries an American accent that an appended instruction softens enough.
+    story_director: bool = True
+    story_voice_user: str = "dylan"
+    story_voice_man: str = "ryan"
+    story_voice_woman: str = "serena"
     story_tts_language: str = "German"
     story_tts_token: str = ""                   # supervisor token, if it sets one
     story_min_words: int = 1500

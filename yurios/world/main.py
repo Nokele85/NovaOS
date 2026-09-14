@@ -184,6 +184,9 @@ class Runtime:
                             speaker=cfg.story_tts_speaker,
                             language=cfg.story_tts_language,
                             token=cfg.story_tts_token),
+            director=cfg.story_director,
+            voices={"user": cfg.story_voice_user, "man": cfg.story_voice_man,
+                    "woman": cfg.story_voice_woman},
             min_words=cfg.story_min_words, scenes=cfg.story_scenes)
         if hasattr(self.brain, "stories"):
             self.brain.stories = self.stories

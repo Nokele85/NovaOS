@@ -870,7 +870,23 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   **Fiction is not fact.** Story prose **MUST NOT** be taken for facts about the user by the turn
   extractor (§6) nor consolidated at night (§21).
 
-  **The voice.** The recording is spoken by the LAN voice, each scene with its own instruction; the
+  **A director.** After the editor, and unless `STORY_DIRECTOR=false`, every scene **MUST** be cast
+  and directed before it is voiced. The split into narration and quoted speech **MUST** be made by
+  rule, not by a model, so the recording says exactly what `story.md` says. The director sees the
+  whole story and **MUST** write down its understanding of the scene — the situation, the tension,
+  what each character feels, the physical circumstances — before it gives each segment a speaker and
+  an instruction derived from that understanding. Instructions **MUST** be English and describe only
+  what is audible (pitch, speed, volume, emotion, tone, texture): the voice follows acoustic
+  descriptions markedly better than role descriptions, and documents instruction text in Chinese and
+  English only. Narration **MUST NOT** be given to a character. Narration and her own lines are spoken
+  in her voice, the user's lines and any other character's in the voice configured for them
+  (`STORY_VOICE_USER`, `_MAN`, `_WOMAN`); an accent correction a voice needs **MUST** be appended by
+  code, not left to the director. Each scene's direction **MUST** carry a hard deadline, and a scene
+  whose direction fails **MUST** be spoken as it was before the director — her voice, her scene
+  mood — so a director that fails never costs the recording. The direction is kept beside the story
+  (`regie.json`).
+
+  **The voice.** The recording is spoken by the LAN voice, each directed line with its own instruction; the
   voice **MUST** be loaded inside the LAN GPU lock (§7.6a) and unloaded in a `finally`, and again on
   shutdown, because a killed job never reaches its own. The finished recording **MUST** be delivered to
   the channel it was asked from and to Telegram whatever that channel was; a job that fails **MUST**

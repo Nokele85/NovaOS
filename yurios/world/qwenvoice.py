@@ -159,7 +159,8 @@ class QwenVoice:
 
     # -- speaking ----------------------------------------------------------
 
-    def _body(self, text: str, instruct: str = "") -> dict[str, Any]:
+    def _body(self, text: str, instruct: str = "",
+              speaker: str = "") -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": "qwen3-tts",
             "input": text,
@@ -169,7 +170,9 @@ class QwenVoice:
             # clones a reference clip and ignores `instructions` entirely, so
             # every passage of a 23-minute story came out in one flat register.
             "task_type": "CustomVoice",
-            "voice": self.speaker,
+            # One loaded model holds all nine speakers, so a line of dialogue
+            # may name another one without loading anything (SPEC §7.8).
+            "voice": speaker or self.speaker,
             "response_format": "pcm",
         }
         if instruct:
@@ -177,8 +180,8 @@ class QwenVoice:
         return body
 
     async def speak(self, client: httpx.AsyncClient, text: str,
-                    instruct: str = "") -> bytes:
+                    instruct: str = "", speaker: str = "") -> bytes:
         r = await client.post(f"{self.speech_url}/v1/audio/speech",
-                              json=self._body(text, instruct))
+                              json=self._body(text, instruct, speaker))
         r.raise_for_status()
         return r.content
