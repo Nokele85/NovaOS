@@ -804,25 +804,35 @@ class StoryLab:
             erlaubt = sorted({m for a in anker for m in (a - 1, a, a + 1)
                               if 0 <= m < len(texte)})
             nummeriert = "\n".join(f"{i + 1}: {t}" for i, t in enumerate(texte))
-            try:
-                antwort = await asyncio.wait_for(self._complete(
-                    REVISION_PROMPT.format(
-                        form=rules, register=register or "wie geschrieben",
-                        befund=hinweis["befund"],
-                        erlaubt=", ".join(str(m + 1) for m in erlaubt), text=nummeriert),
-                    max_tokens=REVIEW_MAX_TOKENS // 2, thinking=True,
-                    reasoning_effort="low", temperature=0.3,
-                    response_format={"type": "json_object"}), REVISION_TIMEOUT_S)
-                found = re.search(r"\{.*\}", antwort or "", re.S)
-                daten = json.loads(found.group(0)) if found else {}
-            except Exception as e:  # noqa: BLE001 — a failed revision leaves the note
-                log.warning("revision failed (%s); left: %s", type(e).__name__,
-                            hinweis["befund"][:100])
+            daten: dict = {}
+            # Twice at most, like the editor: the first live revision run
+            # (2026-09-15) lost one of eight notes to an answer that was not
+            # valid JSON.
+            for versuch in (1, 2):
+                try:
+                    antwort = await asyncio.wait_for(self._complete(
+                        REVISION_PROMPT.format(
+                            form=rules, register=register or "wie geschrieben",
+                            befund=hinweis["befund"],
+                            erlaubt=", ".join(str(m + 1) for m in erlaubt), text=nummeriert),
+                        max_tokens=REVIEW_MAX_TOKENS // 2, thinking=True,
+                        reasoning_effort="low", temperature=0.3,
+                        response_format={"type": "json_object"}), REVISION_TIMEOUT_S)
+                    found = re.search(r"\{.*\}", antwort or "", re.S)
+                    geladen = json.loads(found.group(0)) if found else None
+                    if isinstance(geladen, dict) and isinstance(geladen.get("ersetzungen"), list):
+                        daten = geladen
+                        break
+                    log.warning("revision attempt %d returned no list of changes", versuch)
+                except Exception as e:  # noqa: BLE001 — a failed revision leaves the note
+                    log.warning("revision attempt %d failed (%s)", versuch, type(e).__name__)
+            if not daten:
+                log.warning("revision failed; left: %s", hinweis["befund"][:100])
                 uebrig += 1
                 continue
             neu_texte = list(texte)
             geaendert: list[int] = []
-            for ersetzung in (daten.get("ersetzungen") or []) if isinstance(daten, dict) else []:
+            for ersetzung in daten["ersetzungen"]:
                 if not isinstance(ersetzung, dict) or not isinstance(ersetzung.get("satz"), int):
                     continue
                 m = ersetzung["satz"] - 1

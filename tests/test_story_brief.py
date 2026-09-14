@@ -1084,6 +1084,19 @@ async def test_a_far_repeat_may_be_struck_but_nothing_else_may_vanish(tmp_path):
     assert parts[1] == "Dann hielt der Wagen."
 
 
+async def test_a_revision_that_answers_broken_json_is_asked_once_more(tmp_path):
+    """The first live run lost one of eight notes to invalid JSON."""
+    lab = _lab(Recorder(), tmp_path)
+    lab._complete, gesehen = _pruefer(
+        '{"ersetzungen": [{"satz": 1, "neu": "Ich gehe.",}',
+        json.dumps({"ersetzungen": [{"satz": 1, "neu": "Ich gehe jetzt."}]}),
+        "BEHOBEN: ja\nNEUER FEHLER: nein")
+    parts = ["Ich bleibe. Du gehst."]
+    offen = [{"kategorie": "handlung", "befund": "x", "saetze": ["Ich bleibe."], "streichen": False}]
+    assert await lab._revise("s", parts, offen, "F", "R") == (1, 0)
+    assert len(gesehen) == 3 and parts == ["Ich gehe jetzt. Du gehst."]
+
+
 async def test_a_revision_that_fails_never_costs_the_story(tmp_path, caplog):
     lab = _lab(Recorder(), tmp_path)
 
