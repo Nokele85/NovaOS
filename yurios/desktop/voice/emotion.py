@@ -16,7 +16,9 @@ module does three jobs, all on the hot path:
      spoken text. This is a *voice* conversation: only the words she says aloud
      should reach TTS, never the roleplay stage directions a chat model emits by
      habit. Prompting (SPOKEN_STYLE_DIRECTIVE) asks the model not to narrate;
-     this is the belt-and-suspenders that catches what leaks anyway.
+     this is the belt-and-suspenders that catches what leaks anyway. A short
+     span *inside* a sentence (`dass es *mich* sieht`) is emphasis, not a stage
+     direction: its words stay and only the asterisks go.
 
     3b. A reasoning model may ignore its no-think setting and emit a
       `<think>…</think>` block. This is private model work, never speech, so it
@@ -53,6 +55,12 @@ from dataclasses import dataclass, field
 # and in a spoken exchange that must be dropped, never spoken. The margin over 9
 # leaves room for a stray space/casing without swallowing multi-word directions.
 _MAX_TAG_LEN = 14
+# `*…*` inside a sentence and this short is emphasis, not a stage direction
+# (see EmotionParser._open_narration); the rest of the rule is where it opens.
+_MAX_EMPHASIS_WORDS = 3
+_SENTENCE_EDGE = ".!?…:;\"'“”„»«)]"
+#: a span opening with one of these is somebody describing her, not emphasis
+_THIRD_PERSON = ("sie", "er", "she", "he", "they", "ihre", "seine", "her", "his")
 _REASONING_TAG = re.compile(
     r"<\s*(?P<close>/)?\s*(?P<name>think|thought|thinking|reasoning|scratchpad)\s*>",
     re.IGNORECASE,
@@ -124,6 +132,8 @@ class EmotionParser:
     _buf: str = ""                                   # open-tag buffer (after '[')
     _in_tag: bool = False
     _in_narr: bool = False                           # inside a *…* narration span
+    _narr_buf: str = ""                              # …what it holds so far
+    _narr_mid: bool = False                          # …opened mid-sentence
     _drop_bracket: bool = False                      # inside an over-long […] span
     _angle_buf: str = ""                             # a possible reasoning tag
     _reasoning_tag: str = ""                         # tag whose contents are private
@@ -147,10 +157,12 @@ class EmotionParser:
             elif ch == "<":
                 self._angle_buf = ch
             elif self._in_narr:
-                # inside *…* narration — drop every char until the closing '*'.
-                # Nothing here reaches self.clean, so it is never spoken (job 3).
+                # inside *…* — held until the closing '*' decides what it was:
+                # narration is dropped (job 3), emphasis keeps its words.
                 if ch == "*":
-                    self._in_narr = False
+                    self._close_narration()
+                else:
+                    self._narr_buf += ch
             elif self._drop_bracket:
                 # inside an over-long […] span already ruled a stage direction —
                 # drop every char until the closing ']', exactly like *…* above.
@@ -174,10 +186,36 @@ class EmotionParser:
             elif ch == "[":
                 self._in_tag, self._buf = True, ""
             elif ch == "*":
-                self._in_narr = True                # open a narration span, drop it
+                self._open_narration()
             else:
                 self.clean += ch
         return self.clean[start:]
+
+    def _open_narration(self) -> None:
+        """A `*` opens a span; note whether it opened inside a sentence.
+
+        Stage directions sit between sentences (`There you are. *she leans in*`)
+        and run long; emphasis sits inside one (`dass es *mich* sieht`) and is a
+        word or three. Measured on her own replies (2026-09-11): 9 of 9 short
+        mid-sentence spans were emphasis, 19 of 19 others narration — and
+        dropping the emphasis took the one word the sentence was about."""
+        before = self.clean.rstrip()
+        gap = self.clean[len(before):]
+        self._in_narr, self._narr_buf = True, ""
+        self._narr_mid = bool(before) and "\n" not in gap and \
+            before[-1] not in _SENTENCE_EDGE
+
+    def _close_narration(self) -> None:
+        text, mid = self._narr_buf, self._narr_mid
+        self._in_narr, self._narr_buf, self._narr_mid = False, "", False
+        words = text.split()
+        # "*sie lächelt*" mid-sentence is still narration: a span that opens
+        # with a pronoun and says something about her describes her from the
+        # outside, whatever it happens to sit next to.
+        narrating = len(words) > 1 and words[0].strip(",").lower() in _THIRD_PERSON
+        if mid and text.strip() and "\n" not in text and not narrating and \
+                len(words) <= _MAX_EMPHASIS_WORDS:
+            self.clean += text                      # emphasis: the words, no stars
 
     def _push_reasoning(self, ch: str) -> None:
         """Discard a reasoning block until its matching closing tag arrives."""
@@ -287,7 +325,7 @@ class EmotionParser:
             self._angle_buf = ""
             self.clean += tail
             return tail
-        self._in_narr = False                       # drop any unclosed *…* narration
+        self._in_narr, self._narr_buf = False, ""   # drop any unclosed *…* narration
         self._drop_bracket = False                  # drop any unclosed […] narration
         return ""
 
