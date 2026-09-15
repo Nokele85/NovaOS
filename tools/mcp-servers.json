@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "elecrow": {
+      "command": "python",
+      "args": ["D:/AI Projekte/YuriOS/tools/elecrow_mcp_server.py"],
+      "env": {
+        "ELECROW_WORKSPACE": "D:/AI Projekte/YuriOS/elecrow-firmware"
+      },
+      "rate": 4
+    }
+  }
+}

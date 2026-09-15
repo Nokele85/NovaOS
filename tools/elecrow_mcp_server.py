@@ -1,0 +1,639 @@
+"""Local MCP workshop for the Elecrow ESP CAM AI board.
+
+This server is intentionally local to the machine that owns the USB cable.
+It creates and builds only inside ELECROW_WORKSPACE and never flashes unless
+the caller explicitly passes ``confirm=True``.  The first firmware is a safe
+ESP32-S3 heartbeat/serial probe; display, camera, audio and touch pins are
+added only after the exact board pinout has been verified.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import shlex
+from pathlib import Path
+
+# elecrow_device.py sits beside this file; the server is started by path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from mcp.server.fastmcp import FastMCP
+
+
+DEFAULT_PROJECT = "nova-device"
+DEFAULT_ROOT = Path(os.environ.get(
+    "ELECROW_WORKSPACE",
+    str(Path.cwd() / "elecrow-firmware")))
+
+
+def _root() -> Path:
+    root = DEFAULT_ROOT.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _project(name: str) -> Path:
+    clean = (name or DEFAULT_PROJECT).strip()
+    if not clean or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for c in clean.lower()):
+        raise ValueError("project_name may contain only letters, numbers, '-' and '_'")
+    target = (_root() / clean).resolve()
+    if target.parent != _root():
+        raise ValueError("project must stay inside ELECROW_WORKSPACE")
+    return target
+
+
+def _run(args: list[str], cwd: Path, timeout: int = 180,
+         output_limit: int = 6000) -> dict:
+    started = time.monotonic()
+    command = " ".join(shlex.quote(str(arg)) for arg in args)
+    try:
+        proc = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
+                              timeout=timeout, check=False)
+    except FileNotFoundError:
+        return {"ok": False, "error": f"tool not installed: {args[0]}",
+                "status": "tool_missing", "command": args,
+                "command_text": command,
+                "duration_seconds": round(time.monotonic() - started, 3)}
+    except subprocess.TimeoutExpired as exc:
+        return {"ok": False, "error": f"command timed out after {timeout}s",
+                "stdout": (exc.stdout or "")[-output_limit:],
+                "stderr": (exc.stderr or "")[-output_limit:], "status": "timeout",
+                "output_truncated": True,
+                "command": args, "command_text": command,
+                "duration_seconds": round(time.monotonic() - started, 3)}
+    return {"ok": proc.returncode == 0, "returncode": proc.returncode,
+            "stdout": proc.stdout[-output_limit:], "stderr": proc.stderr[-output_limit:],
+            "output_truncated": len(proc.stdout) > output_limit or len(proc.stderr) > output_limit,
+            "command": args, "command_text": command,
+            "duration_seconds": round(time.monotonic() - started, 3)}
+
+
+def _open_serial(port: str):
+    """Open the board's port WITHOUT resetting it.
+
+    pyserial asserts DTR and RTS on open, and the board's CH340 auto-reset
+    circuit turns that into a reboot - measured 2026-09-11: every default open
+    restarted the heartbeat probe (uptime back to 2000 ms), every open with
+    both lines released left it running. So a "read the log" call used to
+    reboot the board it was reading."""
+    import serial
+    stream = serial.Serial()
+    stream.port, stream.baudrate, stream.timeout = port, 115200, 0.25
+    stream.dtr = False
+    stream.rts = False
+    stream.open()
+    return stream
+
+
+def _serial_preflight(port: str) -> dict:
+    """Check whether the selected port can be opened before upload starts."""
+    try:
+        with _open_serial(port):
+            pass
+        return {"ok": True, "port": port, "status": "port_openable"}
+    except ImportError:
+        return {"ok": False, "port": port, "status": "pyserial_missing",
+                "error": "pyserial is not installed; port ownership was not checked"}
+    except Exception as exc:
+        return {"ok": False, "port": port, "status": "port_unavailable",
+                "error": str(exc), "error_type": type(exc).__name__}
+
+
+def _upload_diagnosis(result: dict) -> dict:
+    """Turn PlatformIO output into explicit, non-speculative diagnostics."""
+    text = "\n".join(str(result.get(k, "")) for k in ("stdout", "stderr")).lower()
+    if result.get("status") == "timeout":
+        reason = "PlatformIO timed out during upload."
+        category = "timeout"
+    elif "access is denied" in text or "permissionerror" in text:
+        reason = "Windows denied access to the selected serial port."
+        category = "port_permission"
+    elif "could not open port" in text or "port is already open" in text:
+        reason = "The selected serial port could not be opened; it may be in use."
+        category = "port_busy_or_unavailable"
+    elif "failed to connect" in text or "no serial data received" in text:
+        reason = "The uploader could not put the board into bootloader mode."
+        category = "bootloader_handshake"
+    elif "error" in text or result.get("returncode", 0) != 0:
+        reason = "PlatformIO reported an upload failure; see the captured output."
+        category = "platformio_upload_error"
+    else:
+        reason = "Upload failed without a recognizable PlatformIO diagnostic."
+        category = "unknown_upload_error"
+    return {"category": category, "reason": reason,
+            "evidence": {"returncode": result.get("returncode"),
+                         "stderr": result.get("stderr", ""),
+                         "stdout": result.get("stdout", "")}}
+
+
+def _ports() -> list[dict]:
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return []
+    return [{"device": p.device, "description": p.description,
+             "vid": p.vid, "pid": p.pid, "serial_number": p.serial_number}
+            for p in list_ports.comports()]
+
+
+FIRMWARE = r'''#include <Arduino.h>
+
+// Safe first probe: no board-specific camera/display pins are touched.
+// The PC can use this serial heartbeat to verify USB + firmware deployment.
+static constexpr uint32_t BAUD = 115200;
+static constexpr uint32_t HEARTBEAT_MS = 2000;
+uint32_t last_heartbeat = 0;
+
+void setup() {
+  Serial.begin(BAUD);
+  delay(300);
+  Serial.println("NOVA_ELECROW_BOOT");
+  Serial.println("board=ESP32-S3R8");
+  Serial.println("probe=safe-serial-heartbeat");
+  Serial.println("camera/display/audio=not-yet-enabled");
+}
+
+void loop() {
+  if (millis() - last_heartbeat >= HEARTBEAT_MS) {
+    last_heartbeat = millis();
+    Serial.printf("NOVA_HEARTBEAT uptime_ms=%lu\n", (unsigned long)millis());
+  }
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command == "ping") Serial.println("NOVA_PONG");
+    else if (command == "status") Serial.println("NOVA_STATUS safe-probe-ready");
+    else Serial.println("NOVA_UNKNOWN_COMMAND");
+  }
+}
+'''
+
+
+PLATFORMIO = """[env:esp32-s3-devkitc-1]\nplatform = espressif32\nboard = esp32-s3-devkitc-1\nframework = arduino\nmonitor_speed = 115200\nupload_speed = 460800\n"""
+
+
+def build_server(http_host: str | None = None) -> FastMCP:
+    transport_security = None
+    if http_host:
+        from mcp.server.transport_security import TransportSecuritySettings
+        transport_security = TransportSecuritySettings(
+            allowed_hosts=[f"{http_host}:8769", "192.168.0.104:8769",
+                           "127.0.0.1:8769", "localhost:8769"]
+        )
+    mcp = FastMCP(
+        "elecrow-firmware-workshop",
+        instructions=(
+            "This is Nova's Elecrow firmware hand. Use elecrow_status first. "
+            "Use elecrow_scaffold only when the project is missing, then "
+            "elecrow_build to compile, elecrow_serial_log or "
+            "elecrow_serial_command to verify the connected board, and "
+            "elecrow_flash only after explicit user confirmation because it "
+            "overwrites the firmware. The current probe is serial-only; do "
+            "not claim camera, display, touch, or audio support until the "
+            "exact board pin map has been verified and implemented."
+        ),
+        transport_security=transport_security,
+    )
+
+    @mcp.tool()
+    def elecrow_status(project_name: str = DEFAULT_PROJECT) -> dict:
+        """Use first: inspect USB ports, toolchain and Elecrow project state."""
+        project = _project(project_name)
+        pio = shutil.which("pio") or shutil.which("platformio")
+        esptool = shutil.which("esptool") or shutil.which("esptool.py")
+        return {"workspace": str(_root()), "project": str(project),
+                "project_exists": project.is_dir(), "ports": _ports(),
+                "platformio": pio, "esptool": esptool,
+                "firmware": str(project / "src" / "main.cpp")
+                if (project / "src" / "main.cpp").exists() else None}
+
+    @mcp.tool()
+    def elecrow_debug(project_name: str = DEFAULT_PROJECT, port: str = "auto",
+                      seconds: int = 5, compile: bool = False) -> dict:
+        """Diagnose the board without flashing: ports, files, serial and optional build."""
+        if not 1 <= seconds <= 15:
+            raise ValueError("seconds must be between 1 and 15")
+        project = _project(project_name)
+        pio = shutil.which("pio") or shutil.which("platformio")
+        ports = _ports()
+        candidates = [p["device"] for p in ports if p.get("device")]
+        selected = candidates[0] if port == "auto" and len(candidates) == 1 else port
+        serial_result = {"ok": False, "status": "not_run"}
+        if selected != "auto":
+            try:
+                with _open_serial(selected) as stream:
+                    stream.reset_input_buffer()
+                    stream.write(b"status\n")
+                    stream.flush()
+                    end = time.monotonic() + seconds
+                    lines = []
+                    while time.monotonic() < end:
+                        line = stream.readline().decode(errors="replace").strip()
+                        if line:
+                            lines.append(line)
+                serial_result = {"ok": True, "port": selected, "lines": lines}
+            except Exception as exc:
+                serial_result = {"ok": False, "port": selected, "error": str(exc)}
+        build = {"status": "not_requested"}
+        if compile:
+            if not pio:
+                build = {"ok": False, "error": "PlatformIO is not installed"}
+            elif not (project / "platformio.ini").is_file():
+                build = {"ok": False, "error": "project not scaffolded"}
+            else:
+                build = _run([pio, "run"], project, timeout=240)
+        return {
+            "ok": bool(project.is_dir() and pio),
+            "project": str(project), "ports": ports,
+            "selected_port": selected, "platformio": pio,
+            "files": {
+                "platformio_ini": (project / "platformio.ini").is_file(),
+                "main_cpp": (project / "src" / "main.cpp").is_file(),
+                "board_notes": (project / "BOARD_NOTES.md").is_file(),
+            },
+            "serial": serial_result, "build": build,
+            "next": "inspect serial/build output; flash requires separate elecrow_flash confirmation",
+        }
+
+    @mcp.tool()
+    def elecrow_scaffold(project_name: str = DEFAULT_PROJECT) -> dict:
+        """Create Nova's safe ESP32-S3 serial-heartbeat firmware project if missing."""
+        project = _project(project_name)
+        (project / "src").mkdir(parents=True, exist_ok=True)
+        (project / "src" / "main.cpp").write_text(FIRMWARE, encoding="utf-8")
+        (project / "platformio.ini").write_text(PLATFORMIO, encoding="utf-8")
+        (project / "BOARD_NOTES.md").write_text(
+            "# Elecrow ESP CAM AI — Nova probe\n\n"
+            "This first image touches serial only. Verify the exact Elecrow "
+            "SAD00006D pin map before enabling GC2145, LCD, touch, MEMS or speaker.\n",
+            encoding="utf-8")
+        return {"ok": True, "project": str(project),
+                "files": ["platformio.ini", "src/main.cpp", "BOARD_NOTES.md"],
+                "next": "build with elecrow_build, then flash with explicit confirm=true"}
+
+    @mcp.tool()
+    def elecrow_build(project_name: str = DEFAULT_PROJECT) -> dict:
+        """Compile the firmware with PlatformIO; this never touches the board."""
+        project = _project(project_name)
+        if not (project / "platformio.ini").is_file():
+            raise ValueError("project not scaffolded; call elecrow_scaffold first")
+        pio = shutil.which("pio") or shutil.which("platformio")
+        if not pio:
+            return {"ok": False, "error": "PlatformIO is not installed on this PC",
+                    "install": "python -m pip install platformio"}
+        return _run([pio, "run"], project)
+
+    @mcp.tool()
+    def elecrow_flash(project_name: str = DEFAULT_PROJECT, port: str = "auto",
+                      confirm: bool = False) -> dict:
+        """Flash compiled firmware; explicit confirm=true is mandatory because this overwrites the board."""
+        if not confirm:
+            return {"ok": False, "status": "confirmation_required",
+                    "message": "Flashing overwrites the board. Call again with confirm=true after checking the port."}
+        project = _project(project_name)
+        pio = shutil.which("pio") or shutil.which("platformio")
+        if not pio:
+            return {"ok": False, "error": "PlatformIO is not installed on this PC"}
+        if port == "auto":
+            found = _ports()
+            candidates = [p["device"] for p in found if p["device"]]
+            if len(candidates) != 1:
+                return {"ok": False, "status": "port_ambiguous",
+                        "ports": found, "message": "Pass the exact Elecrow COM port."}
+            port = candidates[0]
+        preflight = _serial_preflight(port)
+        if not preflight["ok"]:
+            return {
+                "ok": False, "status": "preflight_failed", "port": port,
+                "project": str(project), "preflight": preflight,
+                "message": "Upload was not started because the serial port preflight failed.",
+                "next": "Close serial monitors and retry after checking the exact COM port.",
+            }
+        # Keep the remote MCP response compact. PlatformIO's verbose upload log
+        # can otherwise be dropped by the remote tool channel even when the
+        # upload itself succeeds. The tail still contains SUCCESS/hash/error data.
+        result = _run([pio, "run", "-t", "upload", "--upload-port", port], project,
+                      timeout=240, output_limit=1800)
+        result.update({"port": port, "project": str(project),
+                       "preflight": preflight})
+        if result.get("ok"):
+            result.update({"status": "uploaded",
+                           "message": "PlatformIO completed the upload. Verify with elecrow_serial_log."})
+        else:
+            result.update({"status": "upload_failed",
+                           "message": "Upload failed; no success is claimed. Full diagnostics are included.",
+                           "diagnosis": _upload_diagnosis(result),
+                           "next": "Inspect diagnosis, close any serial monitor, then retry only after the cause is clear."})
+        return result
+
+    @mcp.tool()
+    def elecrow_serial_log(port: str, seconds: int = 5) -> dict:
+        """Read a short serial window for NOVA_BOOT/heartbeat verification."""
+        if not 1 <= seconds <= 30:
+            raise ValueError("seconds must be between 1 and 30")
+        try:
+            with _open_serial(port) as stream:
+                end = time.monotonic() + seconds
+                lines = []
+                while time.monotonic() < end:
+                    line = stream.readline().decode(errors="replace").strip()
+                    if line:
+                        lines.append(line)
+            return {"ok": True, "port": port, "lines": lines}
+        except ImportError:
+            return {"ok": False, "error": "pyserial is not installed"}
+        except Exception as exc:
+            return {"ok": False, "port": port, "error": str(exc)}
+
+    @mcp.tool()
+    def elecrow_serial_command(port: str, command: str, seconds: int = 2) -> dict:
+        """Send one newline-terminated command and collect the device response."""
+        if not command.strip():
+            raise ValueError("command must not be empty")
+        if not 1 <= seconds <= 15:
+            raise ValueError("seconds must be between 1 and 15")
+        try:
+            with _open_serial(port) as stream:
+                stream.reset_input_buffer()
+                # a real line feed: the firmware reads a command up to '\n'
+                stream.write((command.strip() + "\n").encode("utf-8"))
+                stream.flush()
+                end = time.monotonic() + seconds
+                lines = []
+                while time.monotonic() < end:
+                    line = stream.readline().decode(errors="replace").strip()
+                    if line:
+                        lines.append(line)
+            return {"ok": True, "port": port, "command": command.strip(),
+                    "lines": lines}
+        except ImportError:
+            return {"ok": False, "error": "pyserial is not installed"}
+        except Exception as exc:
+            return {"ok": False, "port": port, "command": command.strip(),
+                    "error": str(exc)}
+
+    _device_tools(mcp)
+    return mcp
+
+
+# ---- Nova's playground: the MicroPython runtime on the board ----------------
+#
+# Everything below talks to elecrow-firmware/nova-runtime over the raw REPL
+# (tools/elecrow_device.py). Nova may write, run and delete her own apps
+# freely; the runtime layer, the firmware and the start-up behaviour stay
+# with the owner (tools/elecrow_device_admin.py, or confirm=true here).
+# YuriOS gives a tool call TOOL_TIMEOUT_S (10 s), so every call here is
+# bounded well below it.
+
+_DEVICE_LOCK = threading.Lock()
+RUN_SECONDS_MAX = 8
+OUTPUT_MAX = 4000
+
+
+def _secrets_path() -> Path:
+    return Path(os.environ.get("ELECROW_DEVICE_SECRETS",
+                               str(DEFAULT_ROOT.resolve().parent / "secrets"
+                                   / "elecrow_device.json")))
+
+
+def _device_call(port: str, snippets: list[str], timeout: float = 8.0) -> dict:
+    """Run code snippets in one raw-REPL session; the last one's result wins.
+
+    Every string that comes back passes the Redactor - an app can read the
+    board's Wi-Fi secrets, and nothing it prints may leave this machine."""
+    from elecrow_device import DeviceError, RawRepl, Redactor, board_port
+    redact = Redactor.from_file(_secrets_path())
+    try:
+        device = board_port(port)
+    except DeviceError as exc:
+        return {"ok": False, "status": "port", "error": str(exc)}
+    if not _DEVICE_LOCK.acquire(timeout=5):
+        return {"ok": False, "status": "busy", "error": "the board is in use by another call"}
+    try:
+        with RawRepl(device) as repl:
+            result: dict = {}
+            for code in snippets:
+                result = repl.exec(code, timeout=timeout)
+                if not result["ok"] and not result["timed_out"]:
+                    break
+    except DeviceError as exc:
+        return {"ok": False, "status": "no_runtime", "port": device, "error": redact(str(exc))}
+    except Exception as exc:                  # a busy or vanished COM port
+        return {"ok": False, "status": "serial", "port": device,
+                "error": redact(f"{type(exc).__name__}: {exc}")}
+    finally:
+        _DEVICE_LOCK.release()
+    for key in ("stdout", "stderr"):
+        text = redact(result.get(key, ""))
+        result[key] = text[-OUTPUT_MAX:]
+    result["port"] = device
+    return result
+
+
+def _json_out(result: dict) -> dict:
+    """Parse the last stdout line as JSON into `data`, when the board sent one."""
+    import json as _json
+    line = (result.get("stdout") or "").strip().splitlines()[-1:] or [""]
+    try:
+        result["data"] = _json.loads(line[0])
+        result.pop("stdout", None)
+    except ValueError:
+        pass
+    return result
+
+
+def _device_tools(mcp: FastMCP) -> None:
+    from elecrow_device import (MAX_APP_BYTES, MAX_FILE_BYTES, MAX_FILES,
+                                check_app_name, check_file_name, describe_frame,
+                                png_bytes, rgb565be_to_rgb, upload_code)
+
+    @mcp.tool()
+    def device_info(port: str = "auto") -> dict:
+        """Use first on the board: runtime version, safe mode, SD card, Wi-Fi
+        (online or not - never which network), free memory and her apps."""
+        code = (
+            "import sys, gc, json, machine\n"
+            "try:\n"
+            "    import nova\n    i = nova.info()\n"
+            "except Exception as e:\n"
+            "    i = {'runtime': None, 'error': repr(e)}\n"
+            "try:\n"
+            "    import nova.apps as A\n"
+            "    i['apps_root'] = A.root(); i['apps'] = [a['name'] for a in A.list_apps()]\n"
+            "except Exception as e:\n"
+            "    i['apps_error'] = repr(e)\n"
+            "gc.collect(); i['mem_free'] = gc.mem_free()\n"
+            "i['micropython'] = sys.version; i['reset_cause'] = machine.reset_cause()\n"
+            "print(json.dumps(i))\n")
+        return _json_out(_device_call(port, [code]))
+
+    @mcp.tool()
+    def device_exec(code: str, seconds: int = 5, port: str = "auto") -> dict:
+        """Run a MicroPython snippet on the board and return what it printed and
+        any traceback. For quick experiments; lasting work belongs in an app."""
+        if not code.strip():
+            raise ValueError("code must not be empty")
+        seconds = max(1, min(RUN_SECONDS_MAX, int(seconds)))
+        return _device_call(port, [code], timeout=seconds)
+
+    @mcp.tool()
+    def device_list_apps(port: str = "auto") -> dict:
+        """List her apps (folders with main.py) and the shared _lib folder."""
+        code = ("import json, nova.apps as A\n"
+                "print(json.dumps({'root': A.root(), 'apps': A.list_apps()}))\n")
+        return _json_out(_device_call(port, [code]))
+
+    @mcp.tool()
+    def device_write_app(name: str, files: dict[str, str], port: str = "auto") -> dict:
+        """Create or replace files of one app: {"main.py": "...", ...}. Use the
+        name "_lib" for modules shared by all apps. Flat folder, text files only."""
+        name = check_app_name(name)
+        if not files or len(files) > MAX_FILES:
+            raise ValueError(f"give 1 to {MAX_FILES} files")
+        encoded = {check_file_name(f): body.encode("utf-8") for f, body in files.items()}
+        too_big = [f for f, b in encoded.items() if len(b) > MAX_FILE_BYTES]
+        if too_big:
+            raise ValueError(f"over {MAX_FILE_BYTES} bytes: {too_big}")
+        if sum(len(b) for b in encoded.values()) > MAX_APP_BYTES:
+            raise ValueError(f"app over {MAX_APP_BYTES} bytes")
+        snippets = [f"import nova.apps as A\nA._mkdirs(A.app_dir({name!r}))\n"]
+        for fname, data in encoded.items():
+            snippets.append(f"P = A.file_path({name!r}, {fname!r})\n")
+            snippets += [s.replace(repr("__P__"), "P") for s in upload_code("__P__", data)]
+        snippets.append("import json\nprint(json.dumps([a for a in A.list_apps() "
+                        f"if a['name'] == {name!r}]))\n")
+        result = _json_out(_device_call(port, snippets, timeout=8))
+        result["written"] = {f: len(b) for f, b in encoded.items()}
+        return result
+
+    @mcp.tool()
+    def device_read_app(name: str, file: str = "main.py", port: str = "auto") -> dict:
+        """Read one file of an app back from the board."""
+        name, file = check_app_name(name), check_file_name(file)
+        code = (f"import nova.apps as A\n"
+                f"print(open(A.file_path({name!r}, {file!r})).read())\n")
+        return _device_call(port, [code])
+
+    @mcp.tool()
+    def device_delete_app(name: str, port: str = "auto") -> dict:
+        """Delete one of her apps with all its files (not the runtime)."""
+        name = check_app_name(name, allow_lib=False)
+        code = (f"import os, json, nova, nova.apps as A\n"
+                f"d = A.app_dir({name!r})\n"
+                f"for f in os.listdir(d): os.remove(d + '/' + f)\n"
+                f"os.rmdir(d)\n"
+                f"s = nova.state()\n"
+                f"if s.get('autostart') == {name!r}:\n"
+                f"    s['autostart'] = None; nova.save_state(s)\n"
+                f"print(json.dumps({{'deleted': {name!r}}}))\n")
+        return _json_out(_device_call(port, [code]))
+
+    @mcp.tool()
+    def device_run_app(name: str, seconds: int = 6, port: str = "auto") -> dict:
+        """Run an app for up to `seconds` (max 8) and return its output and any
+        traceback. An app that loops is stopped with Ctrl-C when time is up -
+        that is normal, not a failure; it keeps showing what it drew."""
+        name = check_app_name(name, allow_lib=False)
+        seconds = max(1, min(RUN_SECONDS_MAX, int(seconds)))
+        result = _device_call(port, [f"import nova.apps as A\nA.run({name!r})\n"],
+                              timeout=seconds)
+        if result.get("timed_out") and "KeyboardInterrupt" in result.get("stderr", ""):
+            result.update(ok=True, stopped_after_s=seconds, stderr="",
+                          note="still running when time was up; stopped with Ctrl-C")
+        return result
+
+    @mcp.tool()
+    def device_screenshot(port: str = "auto") -> dict:
+        """What the display shows right now: the text drawn on it and a colour
+        and coverage summary. The picture is saved on the PC; `png_b64` is
+        described in words by the vision step on Benniclaw when configured."""
+        code = ("import nova, json, binascii\n"
+                "d = nova.display_if_ready()\n"
+                "if d is None:\n"
+                "    print(json.dumps({'display': None}))\n"
+                "else:\n"
+                "    raw = d.snapshot(2)\n"
+                "    print(json.dumps({'w': 120, 'h': 142, 'texts': d.texts, "
+                "'frames': d.frames}))\n"
+                "    print(binascii.b2a_base64(raw).decode().strip())\n")
+        result = _device_call(port, [code], timeout=8)
+        lines = (result.get("stdout") or "").strip().splitlines()
+        if not result.get("ok") or not lines:
+            return result
+        import base64 as _b64
+        import json as _json
+        head = _json.loads(lines[0])
+        if head.get("display") is None and "w" not in head:
+            return {"ok": False, "status": "display_not_started",
+                    "error": "the runtime has not drawn anything since boot"}
+        rgb = rgb565be_to_rgb(_b64.b64decode("".join(lines[1:])))
+        w, h = 120, 142
+        png = png_bytes(rgb, w, h)
+        shots = _root() / "screenshots"
+        shots.mkdir(exist_ok=True)
+        path = shots / time.strftime("%Y%m%d-%H%M%S.png")
+        path.write_bytes(png)
+        return {"ok": True, "texts": head.get("texts", []), "frames": head.get("frames"),
+                "picture": describe_frame(rgb, w, h), "saved": str(path),
+                "png_b64": _b64.b64encode(png).decode("ascii")}
+
+    @mcp.tool()
+    def device_log(lines: int = 40, port: str = "auto") -> dict:
+        """The runtime's own log on the board (boot, autostart, failures)."""
+        lines = max(1, min(200, int(lines)))
+        code = ("import nova\n"
+                "try:\n"
+                f"    print('\\n'.join(open(nova._log_path()).read().splitlines()[-{lines}:]))\n"
+                "except OSError:\n"
+                "    print('(no log yet)')\n")
+        return _device_call(port, [code])
+
+    @mcp.tool()
+    def device_set_autostart(name: str = "", confirm: bool = False,
+                             port: str = "auto") -> dict:
+        """Choose the app that starts at power-up ("" = none). This changes how
+        the board boots, so it needs confirm=true after the user agreed."""
+        if not confirm:
+            return {"ok": False, "status": "confirmation_required",
+                    "message": "Changing the start-up app needs the user's yes; call again with confirm=true."}
+        value = check_app_name(name, allow_lib=False) if name else None
+        code = ("import json, nova\n"
+                "s = nova.state()\n"
+                f"s['autostart'] = {value!r}; s['boot_fails'] = 0\n"
+                "nova.save_state(s)\n"
+                "print(json.dumps(s))\n")
+        return _json_out(_device_call(port, [code]))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--http", action="store_true", help="serve MCP over Streamable HTTP")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8769)
+    parser.add_argument("--token", default=os.environ.get("ELECROW_MCP_TOKEN", ""))
+    args = parser.parse_args()
+    if not args.http:
+        build_server().run()
+    else:
+        if not args.token:
+            raise SystemExit("--token or ELECROW_MCP_TOKEN is required for HTTP mode")
+        import uvicorn
+
+        app = build_server(args.host).streamable_http_app()
+
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import JSONResponse
+
+        class TokenMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                if request.headers.get("authorization") != f"Bearer {args.token}":
+                    return JSONResponse({"error": "unauthorized"}, status_code=401)
+                return await call_next(request)
+
+        app.add_middleware(TokenMiddleware)
+
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")

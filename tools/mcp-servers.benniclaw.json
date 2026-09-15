@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "elecrow": {
+      "command": "/home/benni/YuriOS/.venv/bin/python",
+      "args": ["/home/benni/YuriOS/tools/elecrow_mcp_stdio_proxy.py"],
+      "env": {
+        "ELECROW_MCP_URL": "http://192.168.0.104:8769/mcp",
+        "ELECROW_MCP_TOKEN_FILE": "/home/benni/YuriOS/secrets/elecrow_mcp_token"
+      },
+      "rate": 4
+    }
+  }
+}
