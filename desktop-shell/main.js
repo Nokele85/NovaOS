@@ -19,6 +19,7 @@
  * installed. Run it by hand if you like — see README.md.
  */
 const { app, BrowserWindow, Notification, globalShortcut, shell } = require('electron');
+const fs = require('node:fs');
 
 const DEFAULT_URL = 'http://127.0.0.1:8768/?desktop=1';
 const PASS_THROUGH_HOTKEY = 'Control+Alt+Y';
@@ -30,9 +31,22 @@ function argOf(name, fallback) {
   return hit === undefined ? fallback : hit.slice(name.length + 3);
 }
 
-const url = argOf('url', process.env.YURI_URL || DEFAULT_URL);
-const width = Number(argOf('width', process.env.WINDOW_WIDTH || 360));
-const height = Number(argOf('height', process.env.WINDOW_HEIGHT || 640));
+const rawUrl = argOf('url', process.env.YURI_URL || DEFAULT_URL);
+const tokenFile = argOf('token-file', process.env.YURI_TOKEN_FILE || '');
+let url = rawUrl;
+if (tokenFile) {
+  // Pairing stays local: the token is read from disk and never printed.
+  const token = fs.readFileSync(tokenFile, 'utf8').trim();
+  const target = new URL(rawUrl);
+  const auth = new URL('/auth', target.origin);
+  auth.searchParams.set('token', token);
+  auth.searchParams.set('next', `${target.pathname}${target.search}${target.hash}`);
+  url = auth.toString();
+}
+// Keep the desktop pet compact by default. Both values remain overridable via
+// --width/--height or WINDOW_WIDTH/WINDOW_HEIGHT for larger layouts.
+const width = Number(argOf('width', process.env.WINDOW_WIDTH || 280));
+const height = Number(argOf('height', process.env.WINDOW_HEIGHT || 500));
 const onTop = String(argOf('on-top', process.env.WINDOW_ON_TOP || 'true'))
   .toLowerCase() !== 'false';
 const devTools = process.argv.includes('--dev');
@@ -192,7 +206,7 @@ app.whenReady().then(() => {
     console.log(`[shell] click-through ${passingThrough ? 'on' : 'off'}`);
   });
 
-  console.log(`[shell] ${url}`);
+  console.log(`[shell] ${new URL(url).origin} · desktop mode`);
   console.log(`[shell] drag her to move · ${PASS_THROUGH_HOTKEY} toggles click-through`);
 });
 

@@ -40,10 +40,14 @@ sanctuary's night instead of on your wallpaper).
 npm start -- --url=http://172.20.240.9:8768/?desktop=1
 ```
 
+For the remote YuriOS instance, `Start-Nova-Desktop.ps1` reads the local owner
+token file, performs the pairing redirect without printing the token, and opens
+Nova's compact Live2D desktop body. Pass `-Width` and `-Height` to resize it.
+
 | flag | default | |
 |---|---|---|
 | `--url=` | `http://127.0.0.1:8768/?desktop=1` | the page; from WSL this is usually the VM's address, which the launcher prints |
-| `--width=` `--height=` | `360` `640` | `WINDOW_WIDTH` / `WINDOW_HEIGHT` in `.env` |
+| `--width=` `--height=` | `280` `500` | `WINDOW_WIDTH` / `WINDOW_HEIGHT` in `.env` |
 | `--on-top=false` | on top | |
 | `--click-through` | off | start with the mouse passing through her |
 | `--dev` | | detached devtools |
