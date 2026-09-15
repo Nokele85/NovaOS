@@ -28,7 +28,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 from yurios.app.core import assemble as asm
 from yurios.characters.setting import read_place
@@ -39,7 +39,8 @@ from yurios.mind.workspace import DESK_WRITE_TOOLS
 from ..kernel import correlate
 from .avatar.controller import VrmController
 from .situation import render_situation
-from .tools.client import ToolRunner, ToolSpec, build_directive
+from .tools.client import (
+    ToolRunner, ToolSpec, arg_names_from_specs, build_directive)
 from .tools.guard import Guard, Turn
 from .tools.timers import TimerBoard
 from .tooltags import ToolCall, ToolTagParser
@@ -132,7 +133,11 @@ class _EchoSkipper:
                     self.held = self.trail
                     self.i = 0
                     self._skip()
-                else:
+                if self.i >= len(self.already):
+                    # First pass was only tags/whitespace (nothing to echo), or
+                    # she has already echoed it `_MAX_WRAPS` times. Live, a
+                    # `[tender]` lead-in before `[[list_notes]]` walked `i` off
+                    # the end of `already` and crashed the turn (IndexError).
                     out.append(self._release(self.trail) + ch)
                     self.open = True
                     continue
@@ -178,12 +183,17 @@ class ToolBrain(BrainAdapter):
         self.selfies = selfies                 # SelfieLab | None (§7.6)
         self.research = research               # Researcher | None (§7.7)
         self.stories = stories
+        # Whether a page with her body on it is open right now (§2.5). The
+        # runtime wires the hub's count in; unset means "assume so", which is
+        # Build #4's behaviour and what the desktop app gets.
+        self.body_visible: Optional[Callable[[], bool]] = None
         # mind/selfedit.py's door (§23), wired by the MindLoop the same way the
         # shelf and the desk are. None means the tool was never advertised.
         self.selfedit = None
         self.runner: Optional[ToolRunner] = None
         self.world = None                      # WorldModelStore, wired by the mind
         self._directive: str = ""
+        self._arg_names: dict[str, tuple[str, ...]] = {}
         # model-verbatim record per session (markers + results), for persist():
         # the corpus should see what the model actually did, not the cleaned speech
         self._raw: dict[str, str] = {}
@@ -197,13 +207,23 @@ class ToolBrain(BrainAdapter):
         return cls(base.state, base.cfg, guard=guard, timers=timers,
                    controller=controller, selfies=selfies, research=research, stories=stories)
 
+    def set_body_probe(self, probe: Callable[[], bool]) -> None:
+        """Wire "is her body on a screen right now?" (SPEC §2.5) — the hub's
+        body-viewer count, in practice. Read per prompt, never cached."""
+        self.body_visible = probe
+
     def set_tools(self, runner: Optional[ToolRunner], specs: list[ToolSpec]) -> None:
         """Wire the discovered hands (SPEC §7.2). None/empty → she has no hands
         here — never an error, the directive simply isn't appended."""
         self.runner = runner
-        self._directive = build_directive(
-            specs, user_name=self.cfg.user_name,
-            max_calls=self.cfg.tool_max_calls_per_turn) if runner and specs else ""
+        if runner and specs:
+            self._directive = build_directive(
+                specs, user_name=self.cfg.user_name,
+                max_calls=self.cfg.tool_max_calls_per_turn)
+            self._arg_names = arg_names_from_specs(specs)
+        else:
+            self._directive = ""
+            self._arg_names = {}
 
     def set_selfedit(self, selfedit) -> None:
         """Wire the §23 self-edit door, so `propose_edit` has somewhere to land.
@@ -254,7 +274,8 @@ class ToolBrain(BrainAdapter):
             situation = render_situation(
                 self.guard.clock, controller=self.controller,
                 timers=self.timers, user_name=self.cfg.user_name,
-                place=read_place(self.cfg.vault_dir))
+                place=read_place(self.cfg.vault_dir),
+                body=self.body_visible() if self.body_visible else True)
         prompt.messages[0]["content"] += (
             "\n\n## THE SITUATION RIGHT NOW\n\n" + situation)
         return soul, prompt
@@ -342,7 +363,7 @@ class ToolBrain(BrainAdapter):
         cap = self.cfg.tool_max_calls_per_turn
         turn = self.guard.turn()      # one dedupe scope for this reply (§7.3)
         while True:
-            parser = ToolTagParser()
+            parser = ToolTagParser(arg_names=self._arg_names)
             spoken_this_pass: list[str] = []
             # "Continue from where you left off" is an instruction the model takes
             # as "say it again, then continue": every live tool turn came out with

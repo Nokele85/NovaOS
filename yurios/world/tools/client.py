@@ -401,30 +401,33 @@ def one_line(description: str, limit: int = DESC_MAX_CHARS) -> str:
     return text[:limit].rsplit(" ", 1)[0] + " …"
 
 
+def arg_names_from_specs(specs: list[ToolSpec]) -> dict[str, tuple[str, ...]]:
+    """Property names in schema order, for positional `name("value")` repair."""
+    return {
+        s.name: tuple((s.schema or {}).get("properties") or {})
+        for s in specs
+    }
+
+
 def build_directive(specs: list[ToolSpec], *, user_name: str, max_calls: int) -> str:
     """The ## TOOLS system block (SPEC §7.4), built from discovery. Kept tiny and
     example-led, like B2 §6.1's expression directive: the model already has the
-    persona; this only teaches the marker grammar and the lead-in rule."""
-    lines = []
-    for s in specs:
-        props = (s.schema or {}).get("properties", {})
-        required = set((s.schema or {}).get("required", []))
-        args = ", ".join(n if n in required else f"{n}?" for n in props)
-        lines.append(f"- {s.name}({args}) — {one_line(s.description)}")
+    persona; this only teaches the marker grammar and the lead-in rule.
+
+    Catalogue lines are `name — description`, not `name(args)`. A 12B copies
+    the signature as the call (`[[read_note("path")]]`) and the live GLM did
+    the same; the example is the only shape it should imitate.
+    """
+    lines = [f"- {s.name} — {one_line(s.description)}" for s in specs]
     tools = "\n".join(lines)
     return (
-        "You have hands — real tools. Use one only when "
-        f"{user_name} asks for something a tool covers.\n"
-        "How: say one short natural lead-in sentence first, then end your message "
-        "with the call on its own — double brackets, the tool's own name, JSON "
-        "args, nothing after it, exactly like the example at the end of this "
-        "block. Close it with two brackets together and NO space between them: "
-        "`}]]`, never `}] ]`. Keep the JSON on one line — a line break inside a "
-        "string is `\\n` and a quote inside one is `\\\"`. You'll be prompted to "
-        "continue once the result is back; weave it in naturally and never read "
-        "JSON or mention the mechanics aloud.\n"
-        f"Your tools (the only ones that exist — never invent one; at most "
-        f"{max_calls} calls per reply):\n{tools}\n"
+        "You have hands. Use one only when "
+        f"{user_name} asks for something a tool covers. One short lead-in, "
+        "then the call on its own, exactly like the example: double brackets, "
+        "the tool name, a space, JSON on one line, close with `}]]` (no space "
+        "inside the closer). Weave the result in; never read JSON aloud. "
+        "Never invent a tool; at most "
+        f"{max_calls} calls per reply:\n{tools}\n"
         'Example: "Mm, hold on — let me set that. [[set_timer {"minutes": 10, '
         '"label": "tea"}]]"'
     )

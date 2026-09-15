@@ -116,6 +116,7 @@ class ConsolidationReport:
         self.facts_added = 0
         self.exhausted_budget = False
         self.nothing_to_do = False
+        self.user_md_rewritten = False
 
 
 class DreamConsolidator:
@@ -139,13 +140,24 @@ class DreamConsolidator:
                       if is_canonical_day(p.stem) and p.stem < today)
         return [d for d in days if d not in done]
 
+    def partner_backlog(self) -> list[str]:
+        """One partner rewrite per calendar night, even without a journal (§21)."""
+        needs_evolution = getattr(self.store, "partner_evolution_pending", None)
+        if not callable(needs_evolution) or not needs_evolution():
+            return []
+        progress = read_json(self.progress_path, {}) or {}
+        if progress.get("partner_evolved_on") == day_of(self.clock.now()):
+            return []
+        return [day_of(self.clock.now() - 86400.0)]
+
     # ------------------------------------------------------------ consolidate
 
     async def consolidate(self, *, token_budget: int = 40000) -> ConsolidationReport:
         report = ConsolidationReport()
         pending = self.backlog()
         if not pending:
-            report.nothing_to_do = True
+            await self._evolve_partner(report)
+            report.nothing_to_do = not report.user_md_rewritten
             return report
 
         progress = read_json(self.progress_path, {}) or {}
@@ -186,10 +198,26 @@ class DreamConsolidator:
             spent += cost
 
         if report.days_processed:                 # a night that consolidated
-            write_json(self.progress_path,        # nothing leaves no trace and
-                       {"consolidated_days": done_days})   # no commit
+            progress["consolidated_days"] = done_days
+            write_json(self.progress_path, progress)
             self.vault.mark_dirty()
+        await self._evolve_partner(report)
         return report
+
+    async def _evolve_partner(self, report: ConsolidationReport) -> None:
+        """USER.md is a living model, not a log. Compact it whenever DREAM
+        runs — even a quiet night — so a frozen early-phase and a contradicting
+        pair of bullets cannot wait for the next extracted fact to move."""
+        evolve = getattr(self.store, "evolve_partner", None)
+        if not callable(evolve):
+            return
+        days = sum(1 for _ in self.episodic.glob("*.md"))
+        if await evolve(days_together=days):
+            report.user_md_rewritten = True
+        progress = read_json(self.progress_path, {}) or {}
+        progress["partner_evolved_on"] = day_of(self.clock.now())
+        write_json(self.progress_path, progress)
+        self.vault.mark_dirty()
 
     async def _summarise_day(self, day: str, text: str) -> list[str]:
         text = without_work_products(text)

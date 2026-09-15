@@ -108,7 +108,8 @@ class MindLoop:
         self.vault = MindVault(cfg.vault_dir)
         state = brain.state                    # the Build #1 AppState
         self.world = WorldModelStore(self.vault, clock, controller=controller,
-                                     timers=timers, user_name=cfg.user_name)
+                                     timers=timers, user_name=cfg.user_name,
+                                     body_visible=lambda: hub.body_viewers > 0)
         brain.set_world(self.world)            # the §19.2 seam swap: every prompt
                                                # now carries the store's stage
         self.knowledge = KnowledgeStore(
@@ -457,6 +458,9 @@ class MindLoop:
         # a restart at 23:59 does not do the day twice.
         reflect_notes.extend(self._day_rollover(now))
         reflect_notes.extend(self._bootstrap_handoff(now))
+        # Partner-model → PERSONA is gated, not daily: a DREAM rewrite at 2am
+        # must be able to queue the same night, not wait for tomorrow's rollover.
+        reflect_notes.extend(housekeeping.propose_learned_persona(self))
 
         # ---- APPRAISE (cheap by construction: heuristics, no model) ----------
         appraisals: list[Appraisal] = [
@@ -862,7 +866,8 @@ class MindLoop:
             "budget": self.budget.snapshot(),
             "goals": [{"id": g.id, "text": g.text, "kind": g.kind,
                        "state": g.state, "due": g.due,
-                       "provenance": g.provenance}
+                       "provenance": g.provenance,
+                       "desk": self.GOAL_DESK.format(id=g.id)}
                       for g in self.goals.all()][-30:],
             "pending_edits": self.selfedit.pending(),
             # Goals of her own (§22.1), as the inner-life panel reads them.

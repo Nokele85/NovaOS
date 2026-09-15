@@ -34,6 +34,10 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
   let refreshTimer = null;
   let busy = false;               // is she reading? decides the refresh cadence
   const droppingGoals = new Set();
+  const openDesks = new Set();    // goal ids whose desk file is unfolded
+  const deskCache = new Map();    // id -> { text, missing }
+  const deskPending = new Map();  // id -> request token; superseded fetches are ignored
+  const deskPaths = new Map();
   const SLOW = 20000;             // DORMANT ticks are slow
   const FAST = 2000;              // a passage takes seconds; a bar should move
 
@@ -199,20 +203,45 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
     ];
   }
 
+  function deskPath(g) {
+    // MindLoop.GOAL_DESK — the snapshot names it so this panel does not invent it.
+    return g.desk || `goals/${g.id}.md`;
+  }
+
+  function deskBody(id) {
+    const cached = deskCache.get(id);
+    if (!cached) return 'opening…';
+    if (cached.missing) return "she hasn't written this one up yet.";
+    return cached.text;
+  }
+
   function goalRow(g) {
+    deskPaths.set(g.id, deskPath(g));
     const hers = String(g.provenance || '').startsWith(HERS);
     const abandoned = g.state === 'abandoned';
     if (abandoned) droppingGoals.delete(g.id);
     const dropping = !abandoned && droppingGoals.has(g.id);
     const open = !abandoned && !dropping;
+    const looking = openDesks.has(g.id);
     return `<li class="g-${esc(open ? g.state : 'abandoned')}` +
       `${hers ? ' g-hers' : ''}">` +
+      `<span class="il-goal-line">` +
       (hers ? '<span class="il-hers">she filed this</span> ' : '') +
-      `${esc(g.text)} ` +
+      `${esc(g.text)}` +
+      `</span>` +
+      `<span class="il-goal-actions">` +
+      `<button type="button" class="il-look" data-desk="${esc(g.id)}" ` +
+      `data-path="${esc(deskPath(g))}">` +
+      `${looking ? 'fold file away' : 'view file'}</button>` +
+      (open ? `<button type="button" class="il-drop" data-goal="${esc(g.id)}">let go` +
+              '</button>' : '') +
+      `</span>` +
       `<span class="il-prov">(${esc(g.kind)} · ${esc(g.provenance)}` +
       `${open ? '' : dropping ? ' · letting go' : ' · let go'})</span>` +
-      (open ? ` <button class="il-drop" data-goal="${esc(g.id)}">let go` +
-              '</button>' : '') + '</li>';
+      (looking
+        ? `<pre class="il-content il-desk">${esc(deskBody(g.id))}</pre>`
+        : '') +
+      '</li>';
   }
 
   // The switch sits here, on the list it governs, rather than in the settings
@@ -360,13 +389,66 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
     setTimeout(render, 1500);           // the loop applies it on its next tick
   });
 
+  // The desk file behind a one-line goal (SPEC §22.3, §24.3). Same fetch as
+  // a report card in the transcript: folded until asked for, cached after.
+  panel.addEventListener('click', (ev) => {
+    const el = ev.target.closest?.('.il-look');
+    if (!el || el.disabled) return;
+    const id = el.dataset.desk;
+    const path = el.dataset.path;
+    if (!id) return;
+    toggleDesk(id, path);
+  });
+
+  async function toggleDesk(id, path) {
+    if (openDesks.has(id)) {
+      openDesks.delete(id);
+      render();
+      return;
+    }
+    openDesks.add(id);
+    if (deskCache.has(id) && !deskCache.get(id).missing) {
+      render();
+      return;
+    }
+    await loadDesk(id, path);
+  }
+
+  async function loadDesk(id, path) {
+    if (deskPending.has(id)) return;
+    const request = Symbol();
+    deskPending.set(id, request);
+    deskCache.delete(id);
+    render();
+    try {
+      await runtimeReady;
+      const res = await fetch(apiPath(
+        '/api/mind/workspace/file?path=' + encodeURIComponent(path || '')));
+      if (res.ok) {
+        const data = await res.json();
+        if (deskPending.get(id) !== request) return;
+        deskCache.set(id, { text: data.text || '(it is empty)', missing: false });
+      } else {
+        if (deskPending.get(id) !== request) return;
+        deskCache.set(id, { text: '', missing: true });
+      }
+    } catch {
+      if (deskPending.get(id) !== request) return;
+      deskCache.set(id, { text: '', missing: true });
+    } finally {
+      if (deskPending.get(id) === request) deskPending.delete(id);
+    }
+    if (openDesks.has(id)) render();
+  }
+
   // Letting go of a goal, and the filing switch. Separate from the self-edit
   // handler above because these two are not rulings on something she asked for
   // — she did not ask, and that is exactly why they have to be one click.
   panel.addEventListener('click', async (ev) => {
-    const el = ev.target;
-    const goal = el?.dataset?.goal;
-    const filing = el?.dataset?.filing;
+    const el = ev.target.closest?.('button');
+    if (!el) return;
+    const goal = el.classList.contains('il-drop') ? el.dataset.goal : undefined;
+    const filing = el.dataset.filing;
     if (goal === undefined && filing === undefined) return;
     if (el.disabled) return;
     el.disabled = true;
@@ -502,6 +584,13 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
   // it, because a run beginning is exactly when the slow cadence stops doing.
   window.addEventListener('world-ev', (ev) => {
     const t = ev.detail?.type;
+    if (t === 'workspace') {
+      // A write may land before an older fetch completes. Retire both cached
+      // results and pending requests; only the fresh response may repaint.
+      deskCache.clear();
+      deskPending.clear();
+      for (const id of openDesks) loadDesk(id, deskPaths.get(id));
+    }
     if (open && (t === 'journal' || t === 'mind' || t === 'research_status')) {
       render().then(pace);
     } else if (!open && !filesPanel.hidden && t === 'workspace') {

@@ -163,7 +163,7 @@ reactive body (Part II gates who may edit it, §23).
 2. PERSONA BACKBONE       (CONSTITUTION#Identity/#History + PERSONA#Appearance/#Manner + @personality)
 3. SCENARIO / PLACE       (SCENARIO#Scenario)
 4. LORE (if fired)        (matched WORLD.md entries, keyword-triggered)
-5. WHO YOU ARE TO HER     (vault/soul/USER.md, whole — it is small)
+5. WHO YOU ARE TO HER     (vault/soul/USER.md facts — not YAML, seed headings, or empty `_(…)_` slots)
 6. WHAT YOU'VE TALKED ABOUT (vault/memory/summary.md)
 7. THINGS THAT MAY BE RELEVANT (recall(user_msg, k), each tagged with age)
 8. WHAT YOU'VE READ       (knowledge.search(user_msg, k), each with its citation — §20.2)
@@ -173,7 +173,10 @@ reactive body (Part II gates who may edit it, §23).
 
 followed by the last `RAW_WINDOW_TURNS` raw messages (default 6) and the new user message.
 `CONSTITUTION.md#Hard limits` (post-history instructions) **MUST** be appended **after** the
-history, so it is the last thing read before replying. The raw window **MUST** stay small
+history, so it is the last thing read before replying. The fused note **MUST** be a compact
+restatement (a short last-read reminder), not the full constitution section: fusing the
+verbatim bullets onto the user line made a one-word check-in look like a hundred-word ask.
+The raw window **MUST** stay small
 (long raw context degrades middle recall); the rolling summary carries older context
 cheaply. On overflow, **drop the examples first, then knowledge, then recalled memories, then
 the lorebook; never drop the voice law, persona, `USER.md`, or the honesty constraint.**
@@ -205,24 +208,60 @@ file-backed:
 - `remember(record)` (post-turn, off the hot path): append the exchange to
   `memory/episodic/<today>.md`; embed and upsert one index chunk; and call the utility
   model to extract *durable* facts about the user and update `USER.md` (merge, don't
-  duplicate — pass it the current `USER.md`). Externally-sourced or low-confidence claims
-  are **quarantined** until a second turn corroborates. `remember` **MUST** tolerate a
+  duplicate — pass it the current `USER.md`). A new claim that restates or **contradicts**
+  an existing bullet **MUST** replace that bullet (same topic key, later write wins);
+  `USER.md` is a living model, not an append-only preference log. Slot matching is
+  **asymmetric by design**: an `update` or `remove` op names a line the model just read
+  and gets the permissive matcher, while a bare `add` gets the strict one. A merge that
+  guesses wrong **deletes a fact the user stated**, so the strict matcher **MUST NOT**
+  score a short bullet as a subset of a longer one that merely shares a word
+  ("Likes blue." / "Likes dogs." are two facts, not one); where the wording cannot
+  decide, two bullets survive. The topic key discounts the two speakers' names,
+  which are **passed in** — a host holds every character on the node, so a name
+  compiled into the matcher would discount one character's bullets and not the
+  rest. `USER.md` **MUST** survive its own renderer: frontmatter is re-parsed on
+  every turn, and `remember` swallows the failure, so an unquoted value that
+  breaks YAML stops the partner model silently rather than loudly. The
+  `Current relationship phase` line **MUST** be rewritten from evidence (name known,
+  a handful of stable facts) rather than left at the seeded "early" forever; late is
+  never auto-promoted (reveal cadence, ch. 11). Preferences about *her* (how they asked
+  her to be) land in `What helps, and what doesn't` and **MUST** be copied to
+  `state/persona_delta.json` for the gated PERSONA.md door (§23) — USER.md is the
+  runtime's to write, her identity is not. **Which claims those are is the model's
+  call, never a keyword list**: the extractor flags each op `about_her`, and the DREAM
+  filing pass (below) labels existing bullets. A substring table cannot generalise past
+  the one vault it was copied from — it will file "Yandere-lite" and miss "be warmer
+  with me", which is the same request in another person's words. With no classification
+  available the honest answer is **no delta**, not a guess. Externally-sourced or
+  low-confidence claims
+  are **quarantined** until a second turn corroborates, including claims in the
+  Who and relationship-phase prose sections. A corrected persona direction **MUST**
+  replace its previous pending value; an obsolete generated approval entry **MUST**
+  be withdrawn when its replacement is proposed. A stale approval **MUST NOT**
+  apply the old direction once a correction is recorded. `remember` **MUST** tolerate a
   malformed utility response (log and drop, never fatal to the turn), and **MUST** attribute
   facts to the correct speaker — her own self-statements are never recorded as facts about
-  the user.
+  the user. Extractor provenance ("implied by research/…") **MUST NOT** survive into a
+  bullet.
 - `recall(query, k)` (hot path): embed the query, ANN-search the index, rank by
   `similarity · salience · recency_decay(age)` (half-life default 30 days — old memories
   fade, never vanish), MMR-rerank to diversify, drop below `RETRIEVAL_MIN_SIM`, return top
   k. An empty Vault returns `[]`; assembly proceeds on SOUL + `USER.md` alone.
 - `forget(selector)` is **supersede-not-delete**: remove the line from the working
   `USER.md`/`facts.md`, append a tombstone to `memory/semantic/forgotten.md`, and commit.
+  Removal **MUST** include matching prose in `USER.md`, including derived copies in
+  Who and the relationship phase, while preserving the file's headings and frontmatter.
   The old value survives in `git log` but is gone from every future prompt — assembly never
   reads `forgotten.md`, and `recall` drops any chunk whose source text is tombstoned.
 - `inspect(selector)` returns what she knows and why (source, confidence) — the file
   backend gets it almost free (`cat`, `git diff`). The debug view reads memory *through*
   `inspect()`, never around it.
-- `consolidate()` is the DREAM pass — a stub in the reactive body, implemented by the mind
-  (§21).
+- `consolidate()` is the DREAM pass, implemented by the mind (§21). The reactive
+  body's slot still **MUST** rewrite `USER.md` (`evolve_partner`) so a caller
+  without a mind still gets a living partner model.
+  A rewrite that awaits a model call **MUST** re-read `USER.md` before merging its
+  result, preserving intervening edits and forgetting; labels from the earlier read
+  apply only to bullets whose text is unchanged.
 
 **The derived index** (`memory/index/`, `sqlite-vec` or a flat vector index) is a
 rebuildable cache: one row per chunk with `source_path`/`source_span` back to the markdown,
@@ -344,9 +383,26 @@ off the hot path where extraction quality matters and its latency is free. Think
 token headroom so the pass *and* the answer both fit; thinking-off rides `reasoning_effort:
 "none"` in the raw request body (`extra_body`) — passed as a top-level LiteLLM arg it is
 rewritten and never applied — with a `/no_think` system-token fallback. Both are inert on a
-non-reasoning model. The utility path **MUST** strip a leading `<think>…</think>` before
+non-reasoning model. On an `openrouter/` route thinking-off **MUST** instead send OpenRouter's
+native `reasoning: {"enabled": false}` body and **MUST NOT** append the `/no_think` token: the
+token is a Qwen idiom, and on a hosted route it would sit in her system message as text for
+the model to read. The utility path **MUST** strip a leading `<think>…</think>` before
 parsing its JSON, and **MUST** budget enough tokens (`UTILITY_MAX_TOKENS`) that a reasoning
 pass does not truncate the answer to an empty string and silently lose the fact.
+
+**Structured output degrades, like every other backend.** A utility caller **MAY** send a
+`response_format` of `json_schema`; local OpenAI-compatible servers enforce it, and where it
+is enforced it is worth having. But a route is free not to serve a given schema, and the
+OpenAI shape gives it only one way to say so: it answers nothing — `finish_reason: "stop"`,
+zero completion tokens — which reaches the caller as a parse failure naming the wrong cause.
+Measured on `openrouter/z-ai/glm-5.2` with the promise-review schema (§22.1a): empty with the
+schema, strict or not, and correct with `json_object` or with no `response_format` at all. So
+an empty answer under a `json_schema` **MUST** be retried once in `json_object` mode before it
+is reported as a failure, and the downgrade **MUST** be visible in the call's metadata. The
+schema is never what holds the shape — every structured utility contract is also stated in the
+prompt and re-checked by its parser — so this gives up enforcement the route was not doing.
+The retry is deliberately narrow: only an *empty* answer, only at `stop`, only where a schema
+was sent, so a model with genuinely nothing to say is never asked twice.
 
 ### §2.5 — The situation block: she knows when and where she is
 
@@ -362,12 +418,25 @@ surroundings, and asked about them she answers plainly (the no-narration rule fo
 directions, not the truth). The embodiment-truth text lives as one constant
 (`yurios/world/situation.py`) so the test suite can assert it verbatim.
 
+That truth is stated **only while a page with her body on it is open** — the sanctuary or the
+Live2D room, counted by the `EventHub` as `body_viewers`; the text room attaches to
+`/api/events` with `body=0` and is company without a face on screen, and a Telegram or CLI turn
+with no room open has none. Without one, the block **MUST** instead carry the text truth
+(`TEXT_EMBODIMENT`, the same module): no screen is showing her body right now and she is
+reaching the user as text; her body is still hers, simply not on a screen at this moment; she
+still answers about herself plainly. The scene lines (rain, music) belong to a room somebody is
+looking at and are omitted with it. A companion who lives in a phone must never be told her eyes
+are blinking on a screen nobody has open.
+
 **Her room is hers.** The place named in that truth **MUST** be the character's own, read from
-`vault/world/setting.md` — one to three second-person present-tense sentences derived from her
+`vault/world/setting.md` — one to three short second-person present-tense sentences derived from her
 card at import (`yurios/characters/setting.py`: the `scenario` field first, a `Setting:`/
 `Location:` section next, the description last). It **MUST** replace the shipped companion's
 room outright rather than joining it, and the desktop clause, which is true wherever she lives,
-**MUST** survive the swap. A character whose card says nothing about a place gets no place line
+**MUST** survive the swap. It **MUST NOT** reprint the scenario block: that prose already
+sits in `## SCENARIO`, and pasting it into the situation made every turn carry the room twice.
+A long derived setting **MUST** be cut to a standing-place length (`PLACE_MAX_CHARS`) so the
+situation block stays *now* (clock, body, rain, who is here). A character whose card says nothing about a place gets no place line
 substituted and keeps the house sentence; the constant's default is therefore still asserted
 verbatim. The file is derived-marked, so the utility model's improvement pass (`refine_setting`,
 run after import and on demand) **MUST NOT** overwrite one a human has edited, and it is
@@ -644,7 +713,7 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   silently (a 12B local model *will* emit a broken one). Because the tools whose argument is
   *prose* (`write_note`, `append_note`, the selfie `look`) ask that model to be a JSON
   serializer for a paragraph it is still composing, the marker grammar **MUST** be read as the
-  model writes it, not as the directive asks for it. Three recoveries are **REQUIRED** before a
+  model writes it, not as the directive asks for it. These recoveries are **REQUIRED** before a
   drop. **The closer is two brackets with optional whitespace between them** (`]]`, `] ]`,
   `]\n]`) — the live 12B writes `}] ]` consistently, and an `endswith("]]")` test leaves that
   marker open to swallow the rest of the stream, her next sentences and her next marker with it;
@@ -652,7 +721,12 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   re-read leniently (`json` still owns every scalar, list and nested object; a prose string runs
   to its real terminator, so a literal newline or an unescaped `"` inside it costs nothing). And
   a marker left open at end-of-stream whose body is otherwise complete **MUST** be salvaged.
-  All three are self-validating: they only ever yield a call that parses.
+  A tool name glued to its object with no space (`read_note{"path": "…"}`) or written as a
+  parenthesized call (`read_note("path")`, `read_note({"path": "…"})`) **MUST** be the same
+  call: the name is the leading identifier, a JSON object is the arguments, a parenthesized
+  object is unwrapped, and a parenthesized positional list is zipped onto the discovered
+  property names in schema order. All of these are self-validating: they only ever yield a
+  call that parses.
   A doubled expression tag (`[[tender]]`, `[[happy]]`) is the §6.1 emotion
   channel with an extra bracket, **not** a tool: rewrite it to `[tender]` so the
   face still changes. Live, those names were parsed as calls and denied "not a
@@ -675,7 +749,9 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   fragment and discards the sentences that say *when to reach for the tool* — a hand she can
   call but was never told the purpose of is one she does not use, which is indistinguishable
   from not having it. A length cap **MAY** bound a mounted third-party server (§7.2) but
-  **MUST** sit above every first-party description. The grammar is taught by a **concrete**
+  **MUST** sit above every first-party description. The catalogue line is the tool's name
+  and its description, **not** a `name(args)` signature: small models copy the signature as
+  the call. The grammar is taught by a **concrete**
   example; a metavariable like `tool_name` in the block is emitted verbatim by small models and
   arrives at the guard as a call to a tool that does not exist. Every parameter **MUST** be
   explained in its tool's description — the schema carries names and types, and the description
@@ -688,7 +764,11 @@ to every new subscriber before its first live event. Malformed JSON is logged an
 - §7.5 **Semantics.** The MCP server is the *contract and audit point* for `set_timer` — it
   validates and records — but the **host** schedules the wake (`yurios/world/tools/timers.py`,
   on the injected clock), because only the host owns her voice; when a timer elapses she
-  **MUST** announce it aloud through the ambient seam (§9), queued until deliverable.
+  **MUST** announce it through the ambient seam (§9), queued until deliverable.
+  Deliverable is a voice injector **or** a chat viewer (a text room or the
+  terminal, which do not open `/ws/voice` while muted). With no injector the
+  announcement **MUST** land as a proactive chat line on the EventHub rather
+  than wait forever for a socket that page never opens.
   `play_music` drives the browser-side synthesized ambience (§6.2) —
   a generative pad, not a media library; the seam is the point.
 - §7.6 **Her camera: `take_selfie` / `show_picture`, start-don't-await.** The two hands that
@@ -957,9 +1037,14 @@ STT/TTS/VAD SDK, and fakes implement each seam so the whole loop runs offline (�
   (`app/conversation.py`; it stays on the page). Without it the next
   prompt reads that line as a question still owed an answer and she answers it a second time,
   folded into the new turn.
-- §9.7 **Emotion → expression.** The model is asked (appended system blocks, voice-only) to
-  treat the exchange as *spoken* (no narration, no stage directions, no asterisk actions) and to
-  emit inline expression tags from the §3.4 palette. The parser (`yurios/desktop/voice/emotion.py`)
+- §9.7 **Emotion → expression.** The model is asked (appended system blocks) to emit inline
+  expression tags from the §3.4 palette on every channel, and — **only** on a turn whose channel
+  is `voice` — to treat the exchange as *spoken* (no narration, no stage directions, no asterisk
+  actions). A text turn, and a line composed under no channel at all (a reach-out for the inbox),
+  **MUST NOT** carry the spoken-style block: a companion who texts is told nothing about speech.
+  Both browser and native voice sockets **MUST** establish the voice channel for
+  greetings and replies before the brain assembles their prompts.
+  The parser (`yurios/desktop/voice/emotion.py`)
   **MUST** strip tags from the spoken text, emit an expression event when a tag closes (the face
   leads the voice), tolerate split tags, drop unknown tags silently, and also strip
   `*asterisk narration*` (streaming-safe, dropping an unclosed span rather than speaking it).
@@ -1062,8 +1147,14 @@ a frontend:
 
 - **Inbound** — the shared text-turn runner (`yurios/world/turns.py`): resolve session →
   transcript + `user_message` signal → the brain's token stream (expression tags to the puppet
-  lane, stripped from the shown text, sentences as `draft`s) → verbatim persist → `message` commit
-  + `turn_committed` signal. It **MUST** mirror the voice route's contract minus the audio,
+  lane, stripped from the shown text, the clean text accumulating as a `draft` with its line
+  breaks kept — a text is shown as it was written, so three lines are three bubbles, not one
+  sentence) → verbatim persist → `message` commit
+  + `turn_committed` signal. A `draft` carries the whole reply so far rather than a delta, so the
+  runner **MUST NOT** publish one per token: it accumulates per token and publishes on a sentence,
+  a line break, or a bounded run of neither. Per-token drafts are quadratic in bytes on a bus whose
+  per-subscriber queues are bounded and drop when full (§4), and the drop lands on whatever is
+  published next — her committed `message`. It **MUST** mirror the voice route's contract minus the audio,
   including the rule that a failed turn leaves no trace. Text turns from all channels serialise on
   one lock. Exposed as `POST /api/chat` (`{text, session_id?, channel, client_id?}` →
   `{session_id, user_message, message, active_selfies}`). It has `POST /api/chat/cancel` for a
@@ -1550,6 +1641,25 @@ turn** — separate files, separate indexes, separate `inspect()`.
   stories appended at 00:55 filled the whole 6 000-character summary window, five of that
   night's ten stored facts were a club called Paradies and a cast named Lena and Tom, and
   the day's real events never reached the model at all.
+- After the journal pass, DREAM **MUST** compact `USER.md` (`evolve_partner`): one
+  bullet per topic, empty Who/What-helps slots filled, the phase line
+  advanced from evidence, leftover contradictions collapsed. A quiet night with
+  no new journal still runs this rewrite, because a frozen partner model is not
+  "nothing to do". Refiling a bullet into another section is **one utility call**
+  (`classify_bullets`) — DREAM's to spend, never the turn's — which labels each
+  bullet `stable` / `ongoing` / `helps` / `learned` / `drop`. An unlabelled bullet
+  **MUST** stay where it is: a filing pass that cannot read its own answer does
+  not refile on a guess, and a `Don't forget` line is never refiled at all. With
+  no utility model the rest of the compact still runs. Preferences about her that
+  the compact labels `learned` **MUST** be proposed as a gated `soul/PERSONA.md`
+  edit (`## Learned`, `relationship_phase` frontmatter) the same night, not left
+  in USER.md forever.
+  With learned claims in `USER.md` (beyond the untouched seed), consolidation
+  **MUST** expose pending work once per
+  calendar night even if its journal backlog is empty. A successful pass records
+  `partner_evolved_on` in `state/dream_progress.json` using the injected clock;
+  failure leaves the work pending, and restarting **MUST NOT** repeat a completed
+  quiet-night pass. A partner-only rewrite **MUST** be reported as a change.
 - **Oldest-first and resumable** (`state/dream_progress.json`): a night that runs out of budget
   leaves a backlog, not an overrun, and the next DREAM tick resumes. The night's work is journaled
   ("slept on it: folded … into what I keep").
@@ -1923,9 +2033,18 @@ The product half of autonomy: what converts an always-on process from creepy to 
   `GET /api/mind/journal?days=` (her `[she]` lines by day), `GET /api/mind/trace?n=`,
   `POST /api/mind/edits/{id}` (`{"approve": bool}` → a signal, §23.2). The browser page's chat column
   grows a second tab — **inner life** (`web/js/mind.js`): right-now state and budget, edits waiting on
-  you (with content and one-click approve/reject), goals with provenance, the shelf, and the journal,
+  you (with content and one-click approve/reject), goals with provenance and a one-click control
+  that opens the matching desk file (`workspace/goals/<id>.md`, §22.3) through
+  `GET /api/mind/workspace/file`, the shelf, and the journal,
   refreshed live off the same one bus (`journal`/`mind` events). Everything reads *through* the mind's
-  own stores; the dashboard can never disagree with the files. The standalone debug page
+  own stores; the dashboard can never disagree with the files. The snapshot **MUST** name each
+  goal's `desk` path so the panel does not invent it.
+  Cached goal previews **MUST** be invalidated by workspace events, including
+  missing-file results; reopening a missing file retries it. An invalidated fetch
+  **MUST NOT** overwrite a newer preview when its response arrives late.
+  The mind's own goal-progress writes **MUST** publish the same workspace events
+  as tool and human writes so an open preview follows the work.
+  The standalone debug page
   (`/characters/{id}/mind`, `web/mind/`) **MUST** attach the bus as
   `GET /api/events?presence=0`: it is inspection, not company, and **MUST NOT**
   post `user_present` / `user_absent` (§10).

@@ -23,8 +23,9 @@ from yurios.kernel import correlate
 
 
 from .goals import (Goal, trim, PROMISE_REVIEW_RESPONSE_FORMAT, PromiseCandidate,
-                    parse_promise_review, promise_decision_grounded,
-                    promise_kind, promise_review_messages)
+                    PromiseReviewError, parse_promise_review,
+                    promise_decision_grounded, promise_kind,
+                    promise_review_messages)
 from .policy import DREAM, score_interrupt
 from .signals import Signal, failure_of
 from .util import day_of, iso_of, ts_of_iso
@@ -117,8 +118,16 @@ async def promise_review(loop, offer=None) -> tuple[dict, dict, list[str]]:
                 max_tokens=1200,
                 response_format=PROMISE_REVIEW_RESPONSE_FORMAT)
         decision = parse_promise_review(raw, candidate_count=len(candidates))
-    except Exception:  # noqa: BLE001 — a malformed review must not kill the tick
-        log.warning("promise review failed; retaining it", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — a malformed review must not kill the tick
+        if isinstance(exc, PromiseReviewError):
+            # The utility model missing its contract is an ordinary outcome with
+            # a retry behind it, so it is one line naming what came back. The
+            # traceback only ever pointed at the parser, which is not where the
+            # answer was lost; the head of the reply is what tells them apart.
+            log.warning("promise review failed (%s): %r; retaining it",
+                        exc, (raw or "")[:120])
+        else:
+            log.warning("promise review failed; retaining it", exc_info=True)
         attempts = int(review.get("attempts", 0)) + 1
         review["attempts"] = attempts
         review["retry_at"] = now + min(3600.0, 30.0 * (2 ** (attempts - 1)))
@@ -156,7 +165,13 @@ async def promise_review(loop, offer=None) -> tuple[dict, dict, list[str]]:
 
 async def announce(loop) -> tuple[dict, dict, list[str]]:
     """A landed timer — a promise, so it queues until deliverable (the
-    Build #4 rule, kept verbatim)."""
+    Build #4 rule, kept verbatim).
+
+    Voice injectors are only the `/ws/voice` socket. A muted text room and
+    the terminal never attach one, but they *are* looking (`hub.viewers`).
+    Speak first; if that finds no mouth, post the line to chat the same way
+    a SPEAK reach-out does when the room has no audio.
+    """
     t = loop._pending_announce[0]
     loop.controller.set_expression("surprised", 0.6, reset_ms=4000)
     cue = ANNOUNCE_CUE.format(label=t.get("label", "your timer"),
@@ -167,6 +182,13 @@ async def announce(loop) -> tuple[dict, dict, list[str]]:
         loop._pending_announce.pop(0)
         return ({"what": "speak", "result": "announced the timer"}, {},
                 [f"told them the “{t.get('label')}” timer finished"])
+    if loop.hub.viewers:
+        text = await loop._compose(cue)
+        if text:
+            loop.post_message("assistant", text, proactive=True)
+            loop._pending_announce.pop(0)
+            return ({"what": "speak", "result": "announced the timer"}, {},
+                    [f"told them the “{t.get('label')}” timer finished"])
     return ({"what": "speak", "result": "announce queued (nobody to tell)"},
             {}, [])
 
