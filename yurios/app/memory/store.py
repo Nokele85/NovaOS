@@ -87,6 +87,8 @@ class MemoryStore(Protocol):
     service is not — it cannot answer inspect() ownably."""
 
     async def remember(self, record: Record) -> WriteResult: ...
+    async def remember_story(self, story_id: str, title: str, theme: str,
+                             summary: str, source_path: str) -> WriteResult: ...
     def recall(self, query: str, k: int) -> list[Memory]: ...
     async def consolidate(self) -> ConsolidationReport: ...
     def forget(self, selector: str) -> int: ...
@@ -192,6 +194,29 @@ class FileMemoryStore:
 
         return WriteResult(journal_path=rel, chunks_indexed=1,
                            user_md_ops=applied, quarantined=held)
+
+    async def remember_story(self, story_id: str, title: str, theme: str,
+                             summary: str, source_path: str) -> WriteResult:
+        """Store a finished story without extracting its prose as user facts."""
+        now = datetime.datetime.now(datetime.UTC)
+        day = now.strftime("%Y-%m-%d")
+        rel = f"memory/episodic/{day}.md"
+        path = self.vault / rel
+        if not path.exists():
+            vaultgit.atomic_write(path, f"# Journal — {day}\n\n")
+        entry = (f"### {now.strftime('%H:%M')}  story:{story_id}  "
+                 f"{title} — Thema: {theme}\n{summary.strip()}\n"
+                 f"Quelle: {source_path}\n")
+        vaultgit.atomic_append(path, entry)
+        text = (f"Abgeschlossene Geschichte von Nova und dem Nutzer. "
+                f"Titel: {title}. Thema: {theme}. Story-ID: {story_id}.\n"
+                f"{summary.strip()}\nVolltext: {source_path}")
+        self.index.upsert(
+            id=f"story-{story_id}", kind="story", source_path=source_path,
+            source_span="1-end", text=text, embedding=self.embedder.embed([text])[0],
+            created_at=now.isoformat(), salience=1.25)
+        return WriteResult(journal_path=rel, chunks_indexed=1,
+                           user_md_ops=0, quarantined=0)
 
     # -- recall (§6.4, the hot path) ---------------------------------------------
 
