@@ -38,11 +38,17 @@ def _krea2(**opts: Any) -> ImageBackend:
     return Krea2Backend(**opts)
 
 
+def _comfyui(**opts: Any) -> ImageBackend:
+    from .comfyui import ComfyUIBackend
+    return ComfyUIBackend(**opts)
+
+
 REGISTRY: Dict[str, Callable[..., ImageBackend]] = {
     "mock": _mock,
     "openrouter": _openrouter,
     "diffusers": _diffusers,
     "krea2": _krea2,
+    "comfyui": _comfyui,
 }
 
 

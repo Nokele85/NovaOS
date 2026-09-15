@@ -21,7 +21,7 @@ never a crash, and never silence about a promise she made.
 ## Choosing a backend
 
 ```ini
-SELFIE_BACKEND=openrouter         # openrouter | diffusers | krea2 | mock | off
+SELFIE_BACKEND=openrouter         # openrouter | diffusers | krea2 | comfyui | mock | off
 ```
 
 | Backend | Where it renders | Needs |
@@ -29,10 +29,37 @@ SELFIE_BACKEND=openrouter         # openrouter | diffusers | krea2 | mock | off
 | **`openrouter`** *(default)* | hosted — the GPU stays free for her voice | `OPENROUTER_API_KEY` |
 | `diffusers` | **your** GPU, in-process: an SDXL checkpoint | `.[forge-local]` + a checkpoint |
 | `krea2` | **your** GPU, in-process: a Krea 2 transformer, INT4 | `.[forge-krea2]` + a checkpoint + HF access |
+| `comfyui` | remote ComfyUI, typically the gaming PC: Krea2 graph | LAN ComfyUI with the configured model files |
 | `mock` | deterministic placeholder cards | nothing — keyless, offline |
 | `off` | no camera at all | — |
 
 With `SELFIE_BACKEND=off` neither tool is advertised to the model: no hand, rather than a dead one.
+
+### Remote ComfyUI / Krea2 (`comfyui`)
+
+This is the YuriOS equivalent of the established local Rook image path, with a
+YuriOS-native backend boundary. YuriOS submits a Krea2 workflow to ComfyUI,
+polls `/history/<prompt_id>`, downloads the resulting PNG from `/view`, and
+always calls `/free` with `unload_models=true` and `free_memory=true` in a
+`finally` block. The ComfyUI process remains running, but its models do not
+remain resident after the render.
+
+```ini
+SELFIE_BACKEND=comfyui
+SELFIE_COMFY_HOST=192.168.0.104
+SELFIE_COMFY_PORT=8188
+SELFIE_COMFY_RELEASE_AFTER_RENDER=true
+SELFIE_COMFY_UNET=fineporn_v4_fp8.safetensors
+SELFIE_COMFY_CLIP=qwen3vl_4b_fp8_scaled.safetensors
+SELFIE_COMFY_VAE=qwen_image_vae.safetensors
+# Optional identity LoRA; empty means YuriOS character prompt only.
+SELFIE_COMFY_LORA=
+SELFIE_COMFY_LORA_STRENGTH=0.6
+SELFIE_COMFY_TRIGGER=
+```
+
+The backend uses only the ComfyUI API and the generic Forge types. It does not
+import Rook code, memory, database, or runtime state.
 
 **Any backend that can't run degrades to `mock` with one loud WARNING** — no key, missing
 dependencies, a missing checkpoint, or no access to a gated repo. She keeps working and
