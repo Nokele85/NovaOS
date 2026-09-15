@@ -51,6 +51,9 @@ signal to ask, not to invent a new place for it.
 - **The running host is fed commits, not copied files.** It is a clone like this one. A file
   dropped onto it with `scp` leaves a machine whose state matches no revision — it took a
   216-file hash comparison to prove one such deployment was even correct (2026-09-13).
+  Benniclaw pulls from its own remote since 2026-09-16: push with `git push benniclaw main`,
+  roll out with `git pull --ff-only` there. The whole procedure — rebuild, restart, checks,
+  rollback, and the one config pitfall — is [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 **Known debt from before this rule — do not take it as precedent.** `tell_story` is a real hand
 that is missing from SPEC §7.1; `world/stories.py` and `world/qwenvoice.py` carry no `SPEC §`
