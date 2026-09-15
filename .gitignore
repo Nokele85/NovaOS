@@ -41,3 +41,15 @@ desktop-shell/node_modules/
 # the measurement it came from is not
 .coverage
 .coverage.*
+# Local credential imports from the legacy Rook environment. Never commit.
+.env
+.env.local
+secrets/
+YuriOS-private-secrets/
+# local service logs (the Elecrow MCP server's stdout/stderr)
+logs/
+# Elecrow board: build output, flash images (16 MB each) and what the screen showed
+elecrow-firmware/*/.pio/
+elecrow-firmware/backups/
+elecrow-firmware/micropython/
+elecrow-firmware/screenshots/
