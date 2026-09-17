@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from yurios.app import main
 from yurios.app.config import Config
@@ -17,9 +18,10 @@ def test_unavailable_lmstudio_embeddings_fall_back_to_sentence_transformers(monk
             raise httpx.ConnectError("connection refused")
 
     class LocalEmbedder:
-        def __init__(self, model_name, dim):
+        def __init__(self, model_name, dim, *, wait=True):
             self.model_name = model_name
             self.dim = dim
+            self.wait = wait
 
     monkeypatch.setattr(lmstudio, "LMStudioEmbedder", UnavailableLMStudioEmbedder)
     monkeypatch.setattr(sentence_tf, "SentenceTFEmbedder", LocalEmbedder)
@@ -60,7 +62,7 @@ def _fake_sentence_transformers(monkeypatch, recorder, failures=()):
     import sys
     from types import SimpleNamespace
 
-    monkeypatch.setattr(sentence_tf, "_shared", {})   # no model leaks between tests
+    sentence_tf.reset_shared()
     calls = []
 
     class SentenceTransformer:
@@ -135,3 +137,155 @@ def test_every_characters_embedder_shares_one_loaded_model(monkeypatch):
 
     assert len(loaded) == 1                      # loaded once, not per character
     assert first._model is second._model is third._model
+
+
+def test_construction_neither_waits_for_the_model_nor_starts_it(monkeypatch):
+    """`wait=False` is inert: no thread, no import, nothing racing the build
+    that is about to import its own model provider (SPEC §2.4). `ensure_ready`
+    is what begins the load, and `embed()` is what waits for it — so a write
+    never drops a vector, and `build_brain` decides when the import runs."""
+    import sys
+    import threading
+    from types import SimpleNamespace
+
+    sentence_tf.reset_shared()
+    started = threading.Event()
+    release = threading.Event()
+    loaded = []
+
+    class SentenceTransformer:
+        def __init__(self, model_name, **kwargs):
+            started.set()
+            assert release.wait(timeout=5), "test gate was never opened"
+            loaded.append((model_name, kwargs))
+
+        def get_embedding_dimension(self):
+            return 384
+
+        def encode(self, texts, normalize_embeddings=True):
+            class _Arr:
+                def tolist(self_):
+                    return [[0.0] * 384 for _ in texts]
+            return _Arr()
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers",
+                        SimpleNamespace(SentenceTransformer=SentenceTransformer))
+
+    embedder = sentence_tf.SentenceTFEmbedder(wait=False)
+    assert not started.wait(timeout=0.2), "construction must not import anything"
+    assert embedder.ready is False
+
+    done = threading.Thread(target=embedder.ensure_ready, daemon=True)
+    done.start()
+    assert started.wait(timeout=5)          # …and this is what starts it
+    assert loaded == []                     # still in there, weights not back
+    assert embedder.ready is False
+
+    release.set()
+    done.join(timeout=5)
+    embedder.ensure_ready()
+    assert embedder.ready is True
+    assert loaded == [(sentence_tf.DEFAULT_MODEL, {"local_files_only": True})]
+    assert embedder.embed(["hi"])  # bound, not still waiting
+
+
+def test_a_wait_false_embedder_still_shares_the_in_flight_load(monkeypatch):
+    """Five characters boot at once; they must not start five loads."""
+    import sys
+    import threading
+    from types import SimpleNamespace
+
+    sentence_tf.reset_shared()
+    release = threading.Event()
+    loads = []
+
+    class SentenceTransformer:
+        def __init__(self, model_name, **kwargs):
+            loads.append(1)
+            assert release.wait(timeout=5)
+
+        def get_embedding_dimension(self):
+            return 384
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers",
+                        SimpleNamespace(SentenceTransformer=SentenceTransformer))
+
+    one = sentence_tf.SentenceTFEmbedder(wait=False)
+    two = sentence_tf.SentenceTFEmbedder(wait=False)
+    three = sentence_tf.SentenceTFEmbedder(wait=False)
+    assert one.ready is two.ready is three.ready is False
+    release.set()
+    one.ensure_ready()
+    two.ensure_ready()
+    three.ensure_ready()
+    assert len(loads) == 1
+    assert one._model is two._model is three._model
+
+
+def test_a_wrong_embed_dim_is_never_ready(monkeypatch):
+    """The width check is per-config, and the model loads fine when it fails —
+    so asking the shared cache "are the weights here?" answered yes for an
+    embedder that could not produce a vector. `ready` was True while every
+    `embed()` raised, and recall, the shelf's search and a journal row all
+    sailed past the guard written to keep them out of that (SPEC §2.4)."""
+    import sys
+    from types import SimpleNamespace
+
+    sentence_tf.reset_shared()
+
+    class SentenceTransformer:
+        def __init__(self, model_name, **kwargs):
+            pass
+
+        def get_embedding_dimension(self):
+            return 384                       # what the model actually produces
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers",
+                        SimpleNamespace(SentenceTransformer=SentenceTransformer))
+
+    embedder = sentence_tf.SentenceTFEmbedder(dim=768, wait=False)   # .env says 768
+    with pytest.raises(ValueError, match="EMBED_DIM=768"):
+        embedder.ensure_ready()
+
+    assert embedder.ready is False            # …and stays false: this cannot bind
+    with pytest.raises(ValueError, match="EMBED_DIM=768"):
+        embedder.embed(["anything"])
+    # the same answer, not a second load asking the model the same question
+    with pytest.raises(ValueError, match="EMBED_DIM=768"):
+        embedder.ensure_ready()
+
+
+def test_a_recall_through_a_broken_embedder_is_an_empty_vault(monkeypatch, tmp_path):
+    """The point of the `ready` guard, end to end: a misconfigured width is a
+    companion who talks and does not remember, not one who raises mid-turn."""
+    import sys
+    from types import SimpleNamespace
+
+    from yurios.app.memory.store import FileMemoryStore
+
+    sentence_tf.reset_shared()
+
+    class SentenceTransformer:
+        def __init__(self, model_name, **kwargs):
+            pass
+
+        def get_embedding_dimension(self):
+            return 384
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers",
+                        SimpleNamespace(SentenceTransformer=SentenceTransformer))
+
+    embedder = sentence_tf.SentenceTFEmbedder(dim=32, wait=False)
+    try:
+        embedder.ensure_ready()
+    except ValueError:
+        pass                                  # what the boot thread logs and files
+
+    (tmp_path / "memory" / "semantic").mkdir(parents=True)
+    (tmp_path / "soul").mkdir(parents=True)
+    store = FileMemoryStore(tmp_path, embedder, embed_dim=32)
+    store.index.upsert(id="x", kind="turn", text="the good knives",
+                       source_path="t", source_span="",
+                       created_at="2026-01-01T00:00:00+00:00",
+                       salience=1.0, embedding=[1.0] + [0.0] * 31)
+    assert store.recall("knives", 6) == []

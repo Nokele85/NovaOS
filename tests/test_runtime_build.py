@@ -138,3 +138,94 @@ def test_the_desk_asks_for_the_knowledge_store_rather_than_holding_one(cfg, cloc
     assert desk.knowledge() is None                    # no mind yet, and that is fine
     rt.mind = types.SimpleNamespace(knowledge="the store")
     assert desk.knowledge() == "the store"             # …and it follows the mind
+
+
+def test_building_the_brain_does_not_wait_for_the_embedder(monkeypatch):
+    """The sentence-transformers load is the slow part of a cold boot, and it
+    used to sit in front of her hands and mind. Construction now returns
+    while the boot panel is still on `loading` (SPEC §2.4)."""
+    import threading
+    import time
+
+    from yurios.world.boot import BootBoard
+
+    release = threading.Event()
+
+    class Slow:
+        dim = 384
+
+        def __init__(self):
+            self.ready = False
+
+        def ensure_ready(self):
+            assert release.wait(timeout=5)
+            self.ready = True
+
+    monkeypatch.setattr("yurios.app.main._default_embedder",
+                        lambda cfg, wait=False: Slow())
+    monkeypatch.setattr(runtime, "pin_lmstudio", lambda *a, **k: None)
+    monkeypatch.setattr(runtime.ToolBrain, "build",
+                        classmethod(lambda cls, *a, **k: "brain"))
+
+    rt = types.SimpleNamespace(
+        cfg=conf(embed_model="BAAI/bge-small-en-v1.5", embed_dim=384,
+                 character_id="adia"),
+        boot=BootBoard(),
+        guard=None, timers=None, controller=None, selfies=None, research=None,
+        model_configured=True,
+    )
+    assert runtime.build_brain(rt, chat_model=None, utility_model=None,
+                               embedder=None) == "brain"
+    embed = next(s for s in rt.boot.snapshot()["services"] if s["key"] == "embed")
+    assert embed["state"] == "loading"
+    release.set()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        embed = next(s for s in rt.boot.snapshot()["services"] if s["key"] == "embed")
+        if embed["state"] == "ready":
+            break
+        time.sleep(0.02)
+    assert embed["state"] == "ready"
+    assert "384d" in embed["detail"]
+
+
+def test_the_embedder_load_starts_after_the_brain_is_built(monkeypatch):
+    """Found live: five characters, a sixty-second boot reported as two and a
+    half minutes. Both are module imports — `sentence_transformers` on the
+    embedder's thread, litellm behind `build_chat_model` on this one — and
+    CPython locks per module, so a thread is no escape from one. Kicked off
+    first, the load was something the build then sat inside `import litellm`
+    waiting for. Ordering them is the fix, so the order is the test (§2.4)."""
+    from yurios.world.boot import BootBoard
+
+    events = []
+
+    class Embedder:
+        dim = 384
+        ready = False
+
+        def ensure_ready(self):
+            events.append("load begins")
+
+    def build(cls, *a, **k):
+        events.append("brain built")
+        return "brain"
+
+    monkeypatch.setattr("yurios.app.main._default_embedder",
+                        lambda cfg, wait=False: Embedder())
+    monkeypatch.setattr(runtime, "pin_lmstudio", lambda *a, **k: None)
+    monkeypatch.setattr(runtime.ToolBrain, "build", classmethod(build))
+    # the announcing thread would race the assertion; run it where we can see it
+    monkeypatch.setattr(runtime.threading, "Thread",
+                        lambda target, **kw: types.SimpleNamespace(start=target))
+
+    rt = types.SimpleNamespace(
+        cfg=conf(embed_model="BAAI/bge-small-en-v1.5", embed_dim=384,
+                 character_id="adia"),
+        boot=BootBoard(),
+        guard=None, timers=None, controller=None, selfies=None, research=None,
+        model_configured=True,
+    )
+    assert runtime.build_brain(rt, chat_model=None, utility_model=None,
+                               embedder=None) == "brain"
+    assert events == ["brain built", "load begins"]

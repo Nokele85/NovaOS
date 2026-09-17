@@ -246,7 +246,13 @@ file-backed:
 - `recall(query, k)` (hot path): embed the query, ANN-search the index, rank by
   `similarity · salience · recency_decay(age)` (half-life default 30 days — old memories
   fade, never vanish), MMR-rerank to diversify, drop below `RETRIEVAL_MIN_SIM`, return top
-  k. An empty Vault returns `[]`; assembly proceeds on SOUL + `USER.md` alone.
+  k. An empty Vault returns `[]`; assembly proceeds on SOUL + `USER.md` alone. **The rank
+  MMR diversifies is that blended rank**, not raw similarity: the re-ranker re-scores every
+  candidate, so a re-ranker reading `similarity` alone silently discards the sort above it
+  and recency decides nothing. It did, and a line fifteen days old took a slot from an
+  answer an hour old — while `Memory.score` went on reporting a decay that had not been
+  allowed to matter. Scores are normalised to the pool's best so the relevance and
+  redundancy terms stay comparable.
 - `forget(selector)` is **supersede-not-delete**: remove the line from the working
   `USER.md`/`facts.md`, append a tombstone to `memory/semantic/forgotten.md`, and commit.
   Removal **MUST** include matching prose in `USER.md`, including derived copies in
@@ -337,6 +343,33 @@ in-process sentence-transformers embedder (`EMBED_BACKEND=sentence_tf`) owns mem
 second server. An LM Studio embedder may instead reuse the chat server when explicitly selected.
 Embeddings are always local and ownable. A failed backend **MUST** degrade gracefully (keep
 talking, log the truth) rather than crash.
+
+The in-process sentence-transformers embedder **MUST** load off-thread and **MUST NOT** hold
+up the rest of boot: building a character continues into her hands, her mind and her
+channels, and the host **MUST** open its port without waiting for the weights. The boot
+board (§6.4) stays on `loading` until they land (or the load fails), and that line
+**MUST NOT** be one the enter gate waits on: most of the load is a module import, which
+runs several times slower while the other characters on the node are building, and a room
+held shut for it turns a one-minute boot into a two-and-a-half-minute one. Off-thread is
+not on its own enough, either — CPython locks per module being imported, so a load kicked
+off while the brain is still importing its own model provider is one the build then waits
+on. The load **MUST** be started after that, not before. A recall that arrives before the
+weights land **MUST** behave as an empty
+Vault — `[]`, no freeze of the event loop. `embed()` itself still waits, so a write that
+needs a vector (remember, reindex, ingest) never drops one. The exception is a journal
+line's index row (§15): REFLECT runs on the tick's own coroutine, where waiting would hold
+every character on the node, and the day file is truth while the index is only its cache —
+so that one row **MUST** be skipped rather than waited for. A failed load **MUST** settle
+the board as failed and keep her talking.
+
+Whatever the callers guard on to make that choice **MUST** mean *this* embedder can return a
+vector now — not that weights are loaded somewhere in the process. A wrong `EMBED_DIM` loads
+the model perfectly and fails the width check that follows, so the two are not the same
+question, and answering the second one let every guarded caller through into the exception the
+guard exists to avoid. That failure **MUST** also reach `/api/health`, as a degradation and
+in a `memory` field: the boot board carries it, but the enter
+gate no longer waits on that line (§6.4) and the panel leaves with the gate, so a companion who
+talks and never remembers would otherwise be a log line that scrolled past.
 
 **Model residency.** Sharing one server has a cost that is not obvious: LM Studio JIT-loads
 whatever model a request names, and by default unloads the previously JIT-loaded one to do it.
@@ -464,9 +497,23 @@ Both browser pages (`/` and `/live2d/`) **MUST** show a chat column next to the 
 scrolling transcript with the user's turns (typed *and* spoken — the STT transcript joins the
 chat), her committed replies, an accumulating **draft** while she speaks, a `proactive` tag on
 lines she spoke unprompted (the greeting, ambient self-talk, a finished selfie, the mind's
-initiative), and inline images when a message carries `image_url` (§7.6). The host owns the
+initiative), and inline images when a message carries `image_url` (§7.6). A committed line of
+*hers* that names a file on her desk — a relative path with a slash and a known suffix
+(`goals/…md`), optionally prefixed `workspace/` — **MUST** render that path as a
+control that fetches `GET /api/mind/workspace/file` and shows the contents in
+place, folded under the bubble until asked for (the same fetch the inner-life
+goal preview (§24.3) and a delivered report (§18.2a) already make). A missing
+file **MUST** say so rather than fail silently. Drafts **MUST NOT** be
+linkified: a path still being spoken is not a pointer yet. Neither **MUST** the
+user's own lines: a path you typed or pasted is not a pointer she offered, and
+rendering it as one turns what you said into buttons you did not put there. The host owns the
 transcript: an in-memory ring (~200 entries) appended by `post_message` and published as
 `message` events on the bus (§10); `GET /api/history` backfills a fresh page.
+The route **MUST** send `Cache-Control: no-store`, and the page's backfill
+fetch **MUST** opt out of the HTTP cache (`cache: 'no-store'`): the ring is a
+live transcript (another room, Telegram, a restart that seeded it from disk),
+and a browser that reuses an earlier empty snapshot opens the column blank
+until a hard refresh.
 
 **The column survives a restart.** Every committed entry is *also* written to
 `<vault>/state/conversation.jsonl` (`app/conversation.py`) and the ring is seeded from its tail
@@ -617,7 +664,12 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   before connecting the sockets, so the `AudioContext` is user-activated and the greeting (§9)
   is audible. A **boot board** (`yurios/world/boot.py`) shows the kernel-boot log while she
   wakes; the SSE stream opens after the gesture and the enter gate polls `/api/health` for
-  readiness. Desktop mode (§6.5) auto-enters but **MUST** still resume a suspended context on
+  readiness. A service **MAY** declare itself non-blocking: it keeps its line on the board and
+  still lands terminal, but is left out of `done`, so the gate does not wait on it. That is for
+  a service the rooms genuinely degrade around and no other — the embedder is the one (§2.4),
+  because a recall without it is an empty Vault rather than a broken turn. Everything the gate
+  *does* wait on **MUST** still reach a terminal state, so nothing is left pending for an event
+  that may never come. Desktop mode (§6.5) auto-enters but **MUST** still resume a suspended context on
   first click, so the worst case is a quiet greeting, never a dead one.
 - §6.5 **Desktop presence — the room, set aside.** `python -m yurios.world --window` **MAY**
   host the served page in a frameless, transparent, always-on-top native window (pywebview;
@@ -672,7 +724,14 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   (`yurios/world/tools/client.py`, stdio, spawning `yurios.world.tools.server`), discover tools
   with `list_tools`, and build the §7.4 directive from the discovered schemas. If the SDK or
   server fails, the build **MUST** degrade to tools-off and keep talking; `/api/health` reports
-  the truth.
+  the truth. Spawning the server **MUST NOT** hold up the rest of boot: her mind and channels
+  continue, the host opens its port, and the boot board (§6.4) stays on `loading` until
+  discovery finishes (or fails). A turn that arrives before her hands are wired **MUST** see
+  no tools — the same as tools-off — rather than waiting. The stdio session **MUST** still
+  live on the event loop (anyio cancel scopes cannot move to a thread); only the wait is
+  off the boot path. While the spawn is in flight `/api/health` **MUST** say so rather than
+  `off`, which is the answer for a character who has no hands at all and not one whose hands
+  are seconds away; a stage still loading is **NOT** a degradation.
 
   `MCP_SERVERS` **MAY** name a JSON file in the conventional `{"mcpServers": {…}}` shape, whose
   servers are mounted alongside hers behind the same `ToolRunner` seam (`MultiToolRunner`), so the
@@ -1050,7 +1109,14 @@ STT/TTS/VAD SDK, and fakes implement each seam so the whole loop runs offline (�
   `*asterisk narration*` (streaming-safe, dropping an unclosed span rather than speaking it).
 - §9.8 **The greeting.** On connect she **SHOULD** greet from memory before the user speaks
   (continuity). The greeting **MUST NOT** be persisted and **MUST NOT** pollute the session
-  window, and **MUST** fire at most once per session — a reconnect or a second socket **MUST NOT**
+  window — but it **SHOULD** be assembled *over* the last few committed lines, which is
+  reading the window, not joining it. Greeting from `summary.md` alone is how she opens on
+  state that is stale by construction: the summary folds every `SUMMARY_EVERY_N` turns, so
+  the closing turns of a session are never folded at all, and it speaks in confident third
+  person. Hers still said she "hasn't gotten the answer" four minutes after it was given,
+  and she opened by asking for it a second time. A wordless entry (a selfie is a chat line
+  with no words in it) **MUST NOT** reach the prompt as a blank turn. The greeting **MUST**
+  fire at most once per session — a reconnect or a second socket **MUST NOT**
   speak a second greeting over the first. On the **first-ever** arrival there is no memory to
   open from: while `soul/BOOTSTRAP.md` is present and the journal is empty, the greeting **MUST**
   be that file's authored cold open, spoken verbatim, with no model call and no corpus line (the
@@ -1476,6 +1542,21 @@ them is precisely the always-interrupting-assistant failure.
     brief and not seven of them (the retired ones stay on the desk, which is the archive);
   - and it is **only** available to a job file that asked for it. A tool product the mind started
     still stamps `_deliver: "vault"` and still posts nothing, unchanged.
+
+  And one clarification the rule was missing, which cost three promised photographs: **the lab
+  posting nothing is not the same as the product being unreachable.** A mind-started render still
+  stamps `_deliver: "vault"` and the lab still posts nothing — but the `task_completion` it posts
+  instead carries the product's `image_url`, and the goal that dispatched the work **MUST** keep it
+  (`Goal.product`). However that goal ends — kept or let go — a promise-derived one **MUST** hand
+  the picture to its follow-up `reach_out` goal rather than hand over a path to its own goal file,
+  and a Gate 2 delivery **MUST** carry it: posted with the SUGGEST line as one entry, or ahead of a
+  SPEAK, so that the line she says over it is true by the time she says it. This is not Gate 2
+  bypassed, it is Gate 2 obeyed — the gate's question is whether *she* interrupts, it still asks and
+  answers it, and all that changed is that when the answer is yes she arrives holding the thing
+  instead of a sentence describing it. Without this the gallery was a dead end: every picture the
+  mind ever took could be talked about and none of it could be shown, and "show me" was answered
+  with `goals/g-….md`. Only a **picture** travels this way, for this section's own reason — a
+  research digest is not a gift.
 - §18.3 **Outcomes, ascending imposition:** **SILENT** — the default: do it quietly and journal it
   (a stale non-blind goal is let go with a journal line; the journal, not notifications, carries the
   value); **SUGGEST** — one composed line posted to the chat, waiting for the user's next glance,
@@ -1916,7 +1997,17 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   worse than one who forgets yours; maintenance (DREAM backlog, shelf drops); and **her own
   judgement** (`strategy:<day>`) — the night's stock-take (§21.2) already asks her for the one thing
   worth doing next, and MAY file it. A companion whose every intention traces back to something the
-  user said is a queue with a voice. Near-duplicate open goals **MUST** merge, not multiply.
+  user said is a queue with a voice. Near-duplicate open goals **MUST** merge, not multiply —
+  **except a goal that names a parent** (`followup:<id>`, the news half of a kept promise). That
+  one is a second act about content she already has a goal for, so its words are the wrong test:
+  it quotes its parent in order to say what it is about, scores a total overlap against it, and is
+  merged back into the goal it exists to report on. Four of the first seven promises she kept were
+  never mentioned to anyone this way, and the three that survived did so only by falling under the
+  matcher's three-word floor. Two follow-ups of *different* parents are the same trap from the
+  other side: they share the boilerplate that frames them, so the second promise kept while the
+  first is still untold loses its news too. A follow-up **MUST** therefore be deduplicated on its
+  provenance — has this parent already got one — which is exact, idempotent, and the only test that
+  does not punish it for naming its subject.
 - §22.1b **A goal she filed herself is legible, capped, and disposable.** She may *add* to what she
   carries; she still **MUST NOT** silently reprioritise or drop what the user asked for. Every such
   goal **MUST** carry its `strategy:` provenance into `goals.md` and onto the inner-life surface, so
@@ -1979,6 +2070,14 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   after "I'll", so the subject stays behind in their sentence, and a step handed "find out which one
   is faster" alone invents a subject for it with total confidence. A goal filed from an exchange
   **MUST** carry that exchange (`meta.about`), because the goal outlives the conversation.
+  **And what has been said since**: `meta.about` freezes at the moment of filing, so a goal whose
+  own text names a later turn — "…once they answer" — could never be told the answer came. A
+  working step **MUST** be shown the committed lines that postdate the goal's `created`, bounded
+  and newest-last; it is a glance at the room, not the raw window, and this clause does not
+  otherwise reopen §22.4's "minus the conversation". Nor may recall fill the gap: the probe is
+  built from the goal's own text, which is itself indexed, so recall's best matches are echoes of
+  the prompt above it — and holding the exchange `about` was copied from is what lets MMR suppress
+  the *reply* to it as a near-duplicate. A recalled memory quoting the probe **MUST** be dropped.
 - §22.5 **Provenance covers dispatched work.** `meta.dispatched` names the tool a `waiting` goal is
   blocked on and when it went out; `task_completion` (§16) returns the goal to `active`, and a
   scheduled `wakeup` is the floor under how long it may be stranded by a run that never reports.
@@ -2500,7 +2599,12 @@ changes; a runtime does not know it has neighbours.
   tile per registered character with her portrait, name, state, model and voice, an import
   control, and a drawer with her journal, log and context history. Entering a character is a
   navigation to `/characters/<id>/sanctuary/`; **leaving her room returns to the board without
-  stopping her runtime** — a companion's life does not depend on being looked at.
+  stopping her runtime** — a companion's life does not depend on being looked at. Every entry
+  `index.html` the host serves — `/`, the board's own `/dashboard/`, the studio's `/studio/`
+  (§28.1), and each of a character's four pages (§6.6, §6.7, §24.3) — **MUST** send
+  `Cache-Control: no-cache`, for the same reason as the portrait route (§32.4): the hashed
+  `/assets/*` beside it change URL when they change, but these names survive every rebuild, and
+  a browser's heuristic freshness would otherwise serve yesterday's page until a hard refresh.
 - §32.2 **State is the truth, not a guess.** A character's reported state is `attention` when she
   is under review, else her mind's activity state when a runtime is up, else the host's own
   `offline` / `starting` / `ready` / `failed`. A failed character reports her error. The board

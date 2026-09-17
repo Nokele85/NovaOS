@@ -25,7 +25,7 @@ from yurios.app.core.assemble import age_tag
 from yurios.kernel import correlate
 
 from . import acts
-from .goals import Goal, night_owned
+from .goals import Goal, night_owned, trim
 from .hands import START_DONT_AWAIT, klass, parse_intent, stamp_contract
 from .util import iso_of
 
@@ -87,16 +87,71 @@ def memories(loop, goal: Goal, facts: str) -> list:
     Anything already sitting in the facts block is dropped: the same
     sentence under two headings reads as two pieces of evidence.
     """
-    probe = " ".join(p for p in (goal.text,
-                                 str(goal.meta.get("about") or "").strip())
-                     if p)
+    parts = [p for p in (goal.text,
+                         str(goal.meta.get("about") or "").strip()) if p]
+    probe = " ".join(parts)
     try:
-        mems = loop.store.recall(probe, loop.cfg.retrieval_k)
+        # Ask for more than will be shown: the filter below throws some away,
+        # and a probe that costs itself two slots should not also shorten it.
+        mems = loop.store.recall(probe, loop.cfg.retrieval_k + 3)
     except Exception:  # noqa: BLE001 — a cold index is not a reason to
         log.debug("goal work: no recall", exc_info=True)   # skip the step
         return []
     seen = facts.lower()
-    return [m for m in mems if m.text.strip().lower() not in seen]
+    # The probe is built from text that is itself indexed, so recall's best
+    # matches were echoes of the question: a journal line reading "I took that
+    # on: <goal text>", and the very exchange `about` was copied from. Two of
+    # six slots spent restating the prompt above them — and worse, holding that
+    # exchange in the set let MMR suppress the *reply* to it as a near-
+    # duplicate (0.89 cosine), which is how the answer she was waiting for lost
+    # to a line fifteen days old. Anything quoting the probe is dropped.
+    echoes = [p.lower() for p in parts if len(p) >= 25]
+    out = []
+    for m in mems:
+        text = m.text.strip().lower()
+        if text in seen or any(e in text for e in echoes):
+            continue
+        out.append(m)
+    return out[:loop.cfg.retrieval_k]
+
+
+def said_since(loop, goal: Goal, limit: int = 6) -> str:
+    """What has actually been said in the room since this goal was taken on.
+
+    `context()` is deliberately the conversational prompt minus the
+    conversation, and for most goals that is right. But `about` freezes at the
+    moment the goal is filed, so a goal whose own text names a *later* turn —
+    "…once they answer the framing question" — could never see the answer. She
+    waited an hour for a reply that had already arrived, wrote "still waiting
+    on his answer" onto the desk, and that came back next tick under WHAT YOU
+    HAVE ALREADY WORKED OUT as evidence for itself.
+
+    Bounded and newest-last: a handful of lines, trimmed, so this stays a
+    glance at the room and does not quietly become the raw window.
+    """
+    sessions = getattr(getattr(loop.brain, "state", None), "sessions", None)
+    chatlog = getattr(sessions, "log", None)
+    if chatlog is None:
+        return ""
+    try:
+        rows = chatlog.tail(40)
+    except Exception:  # noqa: BLE001 — no transcript is not a failed step
+        log.debug("goal work: no transcript", exc_info=True)
+        return ""
+    them = getattr(loop.store, "user_name", None) or "they"
+    her = getattr(loop.store, "char_name", None) or "you"
+    since = str(goal.created or "")
+    out = []
+    for r in rows:
+        ts = str(r.get("ts") or "")
+        if since and ts <= since:
+            continue
+        text = " ".join(str(r.get("text") or "").split())
+        if not text:
+            continue
+        who = them if r.get("role") == "user" else her
+        out.append(f"{ts[11:16]} {who}: {trim(text, 240)}")
+    return "\n".join(out[-limit:])
 
 
 def context(loop, goal: Goal) -> str:
@@ -125,6 +180,15 @@ def context(loop, goal: Goal) -> str:
     about = str(goal.meta.get("about") or "").strip()
     if about:
         parts.append(f"WHERE THIS CAME FROM\n\nThey said: “{about}”")
+    # …and whatever has been said since. `about` is frozen at filing time, so
+    # without this a goal that waits on an answer can never be told it came.
+    since = said_since(loop, goal)
+    if since:
+        parts.append(
+            "WHAT HAS BEEN SAID SINCE YOU TOOK THIS ON (newest last)\n\n"
+            + since
+            + "\n\nIf this answers what the goal was waiting for, it is "
+              "answered \u2014 act on it rather than waiting to be told again.")
     desk = desk_read(loop, goal)
     if desk.strip():
         parts.append("WHAT YOU HAVE ALREADY WORKED OUT ON THIS\n\n" + desk.strip())
@@ -163,6 +227,59 @@ def context(loop, goal: Goal) -> str:
     return "\n\n".join(parts)
 
 
+def offer_the_picture(loop, goal: Goal) -> list[str]:
+    """A finished goal holding a photo hands it to a goal that can send it.
+
+    The landing rule (SPEC §18.2a) is right that the lab must not post its own
+    product — but a rendered picture then lived only in the gallery, and the
+    goal that made it had no way to pass it on. The news half said "it's in
+    goals/g-….md", so "show me" was answered with a file path, three separate
+    times, while the photo sat on the shelf. Now the follow-up carries the
+    picture itself and Gate 2 still decides whether it goes.
+
+    Filed on the way out of a goal whichever way it ends: a promise she gave up
+    on is still a promise whose photo exists and whom nobody has shown it to.
+    `single-minded`, unlike ordinary news, because news has a shelf life and is
+    better let go than opened with stale — a photo she promised *is* the
+    promise, and letting this one quietly expire unsent is the failure, not
+    good manners.
+    """
+    shot = str(goal.product.get("image_url") or "")
+    if not shot:
+        return []
+    # Her own words about the shot rather than the goal's text: in the
+    # checklist it says *which* picture, which "tell them what came of …"
+    # never did. (Quoting the parent is safe now — `already_carrying` files a
+    # follow-up on its provenance, not its words — but this still reads
+    # better, and it was written when quoting silently deleted the goal.)
+    detail = str(goal.product.get("detail") or "").strip()
+    sid = str(goal.product.get("selfie_id") or "").strip()
+    about = f" — {detail}" if detail else (f" ({sid})" if sid else "")
+    loop.goals.add(
+        trim("send them the picture I took for them" + about),
+        kind="reach_out", priority=0.7,
+        due=iso_of(loop.clock.now() + 24 * 3600),
+        commitment="single-minded", provenance=f"followup:{goal.id}",
+        meta={"product": dict(goal.product)})
+    return [f"…and it's for them, not the shelf: {shot}"]
+
+
+def rescue_pictures(loop, dropped) -> list[str]:
+    """Goals swept by `reconsider()` hand their photos on first (SPEC §18.2a).
+
+    `reconsider` drops a stale open-minded goal wholesale — in `pending` or
+    `waiting`, before it is ever given another working step — so a goal holding
+    a rendered picture went out the same door as one holding nothing, and the
+    picture went with it. Letting go of the intention is right; letting go of
+    the object she has already made *for them* is the failure §18.2a exists to
+    end. The follow-up outlives the goal.
+    """
+    notes: list[str] = []
+    for goal in dropped:
+        notes += offer_the_picture(loop, goal)
+    return notes
+
+
 def offer_to_tell(loop, goal: Goal) -> list[str]:
     """A promise she has now kept becomes something to say (§18.2, §22.1).
 
@@ -182,6 +299,8 @@ def offer_to_tell(loop, goal: Goal) -> list[str]:
     """
     if goal.kind != "task" or not goal.provenance.startswith("promise:"):
         return []
+    if (told := offer_the_picture(loop, goal)):
+        return told
     loop.goals.add(
         f"tell them what came of “{goal.text}” — it's in "
         f"{loop.GOAL_DESK.format(id=goal.id)}",
@@ -370,6 +489,8 @@ async def goal_work(loop, goal: Goal,
         if goal.commitment == "open-minded" and goal.is_stale(loop.clock):
             state = "abandoned"
             notes.append(f"let go of: {goal.text} (I gave it what I had)")
+            # Letting the goal go must not let the photo go with it.
+            notes += offer_the_picture(loop, goal)
         else:
             state = "waiting"
             loop.wakeups[goal.id] = loop.clock.now() + 12 * 3600

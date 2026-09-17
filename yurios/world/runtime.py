@@ -3,8 +3,8 @@
 `Runtime.__init__` is one object's worth of state (the bus, the guard, the
 transcript ring, the timers, the inbox, the task list) plus four subsystems that
 are each a real build: the tool allowlist behind her `Guard`, her camera, her
-reading desk, and her brain — the last of which loads an embedding model and
-may pin gigabytes into LM Studio before it returns.
+reading desk, and her brain — the last of which starts an embedding model (off
+the boot path, SPEC §2.4) and may pin gigabytes into LM Studio before it returns.
 
 Those four had grown to two thirds of a 273-line constructor, and the effect was
 that the *shape* of a Runtime — what a connection actually gets — could not be
@@ -29,6 +29,7 @@ is still a cycle in the dependency graph.
 from __future__ import annotations
 
 import logging
+import threading
 
 from yurios.mind.workspace import DESK_TOOLS, SKILL_TOOLS
 
@@ -142,13 +143,21 @@ def build_brain(rt, *, chat_model, utility_model, embedder) -> ToolBrain:
 
     Only reached when nothing was injected — a route test's `FakeBrain` is
     assigned straight across, which is the point of the seam (no Vault, no
-    SQLite, no embedder). Building this one loads the embedding model that
-    indexes her memory (SPEC §3): with the sentence-transformers default that
-    is a cold torch model on the CPU, as slow to wake as the voice stack, and
-    it happens *here*, before the voice warm-up thread has even started. So it
-    is surfaced in the boot panel first. A server-backed embedder (ollama /
-    lm_studio) has no local weights to load; it still gets a line, so the panel
-    names what indexes her.
+    SQLite, no embedder). Building this one starts the embedding model that
+    indexes her memory (SPEC §2.4): with the sentence-transformers default that
+    is a cold torch model on the CPU, as slow to wake as the voice stack. The
+    load runs off-thread so her hands and mind are not sitting behind it, and
+    the enter gate does not wait on it at all. A server-backed embedder
+    (ollama / lm_studio) has no local weights to load; it still gets a line, so
+    the panel names what indexes her.
+
+    **The load is kicked off after the brain is built, not before.** Both are
+    module imports — `sentence_transformers` on one thread, litellm behind
+    `build_chat_model` on this one — and CPython serialises imports on a lock
+    per module, so a thread is no escape from one: the build sat inside
+    `import litellm` waiting on a lock the embedder's thread held, and paid for
+    the load it was supposed to have handed off. Ordering them is the whole fix.
+    By the time the second character builds there is nothing left to import.
     """
     from yurios.app.main import _default_embedder    # lazy: torch lives behind it
     cfg = rt.cfg
@@ -156,22 +165,52 @@ def build_brain(rt, *, chat_model, utility_model, embedder) -> ToolBrain:
     if not rt.model_configured:
         rt.boot.declare("models", "mind · language model", state="skipped",
                         detail="choose a model to connect")
-    rt.boot.declare("embed", "memory · embedding model")
-    if embedder is None:
+    # Not `blocking`: a room whose embedder is still coming is a room (§6.4).
+    rt.boot.declare("embed", "memory · embedding model", blocking=False)
+    ours = embedder is None
+    if ours:
         rt.boot.start("embed", detail=cfg.embed_model)
+        rt.memory_status = f"loading: {cfg.embed_model}"
         try:
-            embedder = _default_embedder(cfg)
+            embedder = _default_embedder(cfg, wait=False)   # inert; see above
         except Exception as e:
             rt.boot.done("embed", state="failed", detail=str(e)[:80])
+            rt.memory_status = f"failed: {e}"
             raise
-        rt.boot.done("embed", detail=f"{cfg.embed_model} · {cfg.embed_dim}d")
     else:
         rt.boot.done("embed", detail="injected")
-    return ToolBrain.build(
+        rt.memory_status = "injected"
+    brain = ToolBrain.build(
         cfg, guard=rt.guard, timers=rt.timers,
         controller=rt.controller, selfies=rt.selfies,
         research=rt.research, stories=getattr(rt, "stories", None), chat_model=chat_model,
         utility_model=utility_model, embedder=embedder)
+    if ours:
+        if getattr(embedder, "ready", True):
+            rt.boot.done("embed", detail=f"{cfg.embed_model} · {cfg.embed_dim}d")
+            rt.memory_status = f"{cfg.embed_model} · {cfg.embed_dim}d"
+        else:
+            _announce_embedder(rt, embedder, cfg)
+    return brain
+
+
+def _announce_embedder(rt, embedder, cfg: Config) -> None:
+    """Start the weights, off-thread, and settle the line when they land (§2.4).
+
+    `ensure_ready` is what begins the load — the constructor deliberately does
+    not, so that this happens after the brain's own imports are done.
+    """
+    def run() -> None:
+        try:
+            getattr(embedder, "ensure_ready", lambda: None)()
+            rt.boot.done("embed", detail=f"{cfg.embed_model} · {cfg.embed_dim}d")
+            rt.memory_status = f"{cfg.embed_model} · {cfg.embed_dim}d"
+        except Exception as e:
+            rt.boot.done("embed", state="failed", detail=str(e)[:80])
+            rt.memory_status = f"failed: {e}"
+            log.exception("embedding model failed to load")
+    threading.Thread(target=run, daemon=True,
+                     name=f"embed-boot-{cfg.character_id or 'house'}").start()
 
 
 def pin_lmstudio(rt, chat_model, utility_model, embedder) -> None:
@@ -260,8 +299,9 @@ def declare_services(rt) -> None:
     """Fill the boot panel, in the order it should read down (SPEC §6.4).
 
     Each line is one thing she wakes with and the state it is already in. The
-    voice stack declares its own three (plus fillers) as it is built; tools and
-    mind resolve later on the event loop (`start_async`), so they land pending;
+    voice stack declares its own three (plus fillers) as it is built; tools
+    and mind are kicked off on the event loop (`start_async`) — tools settle
+    when discovery finishes, without holding the rest of boot (SPEC §7.2);
     selfies is settled by now and lands terminal.
     """
     cfg = rt.cfg

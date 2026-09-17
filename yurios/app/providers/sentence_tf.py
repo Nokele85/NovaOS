@@ -1,4 +1,4 @@
-"""Local Embedder via sentence-transformers (SPEC §3).
+"""Local Embedder via sentence-transformers (SPEC §2.4).
 
 The chat model may be rented (Build #1 accepts a hosted reply voice) but the
 *mind* — including the embeddings that index it — stays local and ownable
@@ -15,6 +15,19 @@ used to mean one full model load PER CHARACTER: three residents, three
 "Loading weights" bars, 3× the RSS for identical weights. The weights are
 read-only after load, so one SentenceTransformer per model name is shared
 process-wide instead.
+
+The load itself is the slow part of a cold boot (a torch model, ~20 s alone in
+a process and a good deal more with five characters building around it) and
+**MUST NOT** hold up the rest of her (SPEC §2.4): `begin_load` kicks the thread
+off and returns, `embed()` waits, and a recall that arrives before the weights
+do behaves as an empty Vault rather than freezing the event loop.
+
+Most of that time is `import sentence_transformers`, not the weights — which is
+why *when* the thread starts matters as much as that it is one. CPython holds a
+lock per module being imported, so a second thread importing anything the same
+chain touches blocks until the first is done. Kicked off from the constructor,
+this raced the build's own `import litellm` and the build waited on it; started
+after, both run alone. `world/runtime.build_brain` owns that ordering.
 """
 from __future__ import annotations
 
@@ -37,6 +50,8 @@ DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_DIM = 384
 
 _shared: dict[str, object] = {}            # model name -> loaded SentenceTransformer
+_done: dict[str, threading.Event] = {}     # set when that load finished (ok or fail)
+_errors: dict[str, BaseException] = {}
 _shared_lock = threading.Lock()
 _encode_lock = threading.Lock()            # several mind loops can land here at once
 
@@ -72,50 +87,156 @@ def _load(SentenceTransformer, model_name: str, **kwargs):
         return SentenceTransformer(model_name, device="cpu", **kwargs)
 
 
-def _load_shared(model_name: str):
-    """The one process-wide SentenceTransformer for this model name."""
+def reset_shared() -> None:
+    """Drop the process-wide model cache. Tests only."""
     with _shared_lock:
-        model = _shared.get(model_name)
-        if model is None:
-            # Lazy import: torch is heavy; tests use a fake Embedder instead. This
-            # is the one heavy backend with no fake to degrade into — her memory
-            # can't silently run on nothing — so it fails loudly, and says how to
-            # fix it both ways.
-            try:
-                from sentence_transformers import SentenceTransformer
-            except ImportError as e:  # pragma: no cover — needs a torch-free env
-                raise RuntimeError(_INSTALL_HINT) from e
-            try:
-                # A complete local cache: no etag checks, no hub chatter at all.
-                model = _load(SentenceTransformer, model_name, local_files_only=True)
-            except Exception as offline_error:
-                # First run, or a partial cache: go to the hub once, and every
-                # later boot takes the offline path above. Only reasons the local
-                # cache can't answer reach here — a full card was already dealt
-                # with, and downloading the weights again would not have freed a
-                # byte of it.
-                log.info("embeddings: %s is not fully cached (%s: %s) — downloading "
-                         "from Hugging Face once; later starts load offline",
-                         model_name, type(offline_error).__name__, offline_error)
-                model = _load(SentenceTransformer, model_name)
-            _shared[model_name] = model
-        return model
+        _shared.clear()
+        _errors.clear()
+        _done.clear()
+
+
+def begin_load(model_name: str) -> None:
+    """Start loading this model if nobody has. Returns immediately (SPEC §2.4).
+
+    The first caller in the process starts the thread; everyone else is a
+    no-op. ``ensure_ready`` and ``embed`` both call it, so nothing that needs
+    a vector has to remember to; construction with ``wait=False`` deliberately
+    does *not*, because it is what decides when the import runs (see below).
+    """
+    with _shared_lock:
+        if model_name in _shared or model_name in _done:
+            return
+        done = threading.Event()
+        _done[model_name] = done
+    threading.Thread(
+        target=_load_in_background, args=(model_name, done),
+        daemon=True, name=f"embed-{model_name.split('/')[-1]}",
+    ).start()
+
+
+def _load_in_background(model_name: str, done: threading.Event) -> None:
+    try:
+        model = _load_model(model_name)
+        with _shared_lock:
+            if _done.get(model_name) is done:
+                _shared[model_name] = model
+    except Exception as e:
+        with _shared_lock:
+            if _done.get(model_name) is done:
+                _errors[model_name] = e
+        log.exception("embeddings: failed to load %s", model_name)
+    finally:
+        done.set()
+
+
+def _load_model(model_name: str):
+    """The actual SentenceTransformer construction. No lock held.
+
+    Lazy import: torch is heavy; tests use a fake Embedder instead. This is
+    the one heavy backend with no fake to degrade into — her memory can't
+    silently run on nothing — so it fails loudly, and says how to fix it
+    both ways.
+    """
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as e:  # pragma: no cover — needs a torch-free env
+        raise RuntimeError(_INSTALL_HINT) from e
+    try:
+        # A complete local cache: no etag checks, no hub chatter at all.
+        return _load(SentenceTransformer, model_name, local_files_only=True)
+    except Exception as offline_error:
+        # First run, or a partial cache: go to the hub once, and every later
+        # boot takes the offline path above. Only reasons the local cache
+        # can't answer reach here — a full card was already dealt with, and
+        # downloading the weights again would not have freed a byte of it.
+        log.info("embeddings: %s is not fully cached (%s: %s) — downloading "
+                 "from Hugging Face once; later starts load offline",
+                 model_name, type(offline_error).__name__, offline_error)
+        return _load(SentenceTransformer, model_name)
+
+
+def wait_loaded(model_name: str):
+    """The one process-wide SentenceTransformer for this model name.
+
+    Starts the load if needed, then blocks until it finishes. Raises whatever
+    the loader raised.
+    """
+    begin_load(model_name)
+    with _shared_lock:
+        done = _done.get(model_name)
+    if done is not None:
+        done.wait()
+    with _shared_lock:
+        error = _errors.get(model_name)
+        if error is not None:
+            raise error
+        return _shared[model_name]
 
 
 class SentenceTFEmbedder:
-    def __init__(self, model_name: str = DEFAULT_MODEL, dim: int = DEFAULT_DIM):
-        self._model = _load_shared(model_name)
+    def __init__(self, model_name: str = DEFAULT_MODEL, dim: int = DEFAULT_DIM,
+                 *, wait: bool = True):
+        self.model_name = model_name
         self.dim = dim
-        # Renamed in sentence-transformers 5.x; read whichever this install has.
-        dimension = getattr(self._model, "get_embedding_dimension", None) \
-            or self._model.get_sentence_embedding_dimension
-        actual = dimension()
-        if actual != dim:
-            raise ValueError(
-                f"EMBED_DIM={dim} but {model_name} produces {actual}-d vectors — "
-                "the index dimension is config, never hard-coded (§3); fix .env"
-            )
+        self._model = None
+        #: Why *this* embedder can't work, when the shared weights are fine.
+        #: The width check below is per-config, so it cannot live in `_errors`
+        #: beside the load failures every character on the node shares.
+        self._error: BaseException | None = None
+        if wait:
+            self.ensure_ready()
+        # `wait=False` leaves this inert: no thread, no import. The caller says
+        # when — `world/runtime.build_brain` does it once the brain's own
+        # imports are done, because two threads importing at the same time
+        # serialise on CPython's per-module lock and the build ends up paying
+        # for the load anyway (SPEC §2.4).
+
+    @property
+    def ready(self) -> bool:
+        """True when ``embed()`` will return a vector without waiting.
+
+        *This* embedder, bound — not "the weights are somewhere in the
+        process". Asking the shared dict instead said yes to an embedder whose
+        width check had failed: the model loads fine when EMBED_DIM is wrong,
+        so `ready` was True while every `embed()` raised, and each of the
+        callers that guards on this (recall, the shelf's search, a journal row)
+        sailed past its guard into the exception it was written to avoid.
+        False while the weights are still coming, and false for good if this
+        one can never bind — both are the empty-Vault path (SPEC §2.4).
+        """
+        return self._model is not None
+
+    def ensure_ready(self) -> None:
+        """Bind to the shared model, waiting for it and checking its width.
+
+        Raises the same answer every time once it has one: a wrong EMBED_DIM
+        is not something a retry improves, and re-deriving it would mean
+        loading the model again to ask it the same question.
+        """
+        if self._model is not None:
+            return
+        if self._error is not None:
+            raise self._error
+        try:
+            model = wait_loaded(self.model_name)
+            # Renamed in sentence-transformers 5.x; read whichever this has.
+            dimension = getattr(model, "get_embedding_dimension", None) \
+                or model.get_sentence_embedding_dimension
+            actual = dimension()
+            if actual != self.dim:
+                raise ValueError(
+                    f"EMBED_DIM={self.dim} but {self.model_name} produces "
+                    f"{actual}-d vectors — the index dimension is config, "
+                    "never hard-coded (§2.4); fix .env"
+                )
+        except BaseException as e:
+            self._error = e
+            raise
+        self._model = model
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        self.ensure_ready()
+        model = self._model
+        assert model is not None
         with _encode_lock:
-            return self._model.encode(texts, normalize_embeddings=True).tolist()
+            return model.encode(texts, normalize_embeddings=True).tolist()

@@ -38,6 +38,7 @@ def fresh_park_gate():
     running hundreds of runtimes, so a gate a failed test left shut would
     silently hold every later one at the door, and a backend one test built
     would be handed to the next. Each test gets a clean card."""
+    from yurios.app.providers.sentence_tf import reset_shared
     from yurios.forge.backends import reset_shared_backends
     from yurios.world.vram import reset_card, reset_shared_gate
 
@@ -45,6 +46,7 @@ def fresh_park_gate():
         reset_shared_gate()
         reset_card()               # the card's warm-pipeline claim and its lock
         reset_shared_backends()    # …and the backends that would hold one
+        reset_shared()             # in-process embedder cache (SPEC §2.4)
 
     _fresh()
     yield
@@ -289,8 +291,13 @@ class PostRecorder:
         # **kw absorbs the routing fields a late-arriving message carries back
         # (channel, client_id, selfie_id) — a recorder that rejected them would
         # fail on exactly the callers that need them most.
+        # `image_url` is named here and so does NOT land in **kw: it has to be
+        # put back by hand or the transcript records every picture as a blank
+        # line, which is precisely the failure these tests exist to catch.
         entry = {"role": role, "text": text, "ts": self.clock.now(),
                  "proactive": proactive, **kw}
+        if image_url is not None:
+            entry["image_url"] = image_url
         self.messages.append(entry)
         return entry
 

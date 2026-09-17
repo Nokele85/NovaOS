@@ -141,11 +141,43 @@ def test_every_body_of_a_character_is_reachable_by_her_own_id(tmp_path, monkeypa
         text = client.get("/characters/yuri/text/")
         assert text.status_code == 200
         assert text.text == "text room"
+        assert text.headers["cache-control"] == "no-cache"
         assert client.get("/characters/yuri/text").status_code == 200
         assert client.get("/characters/unknown/text/").status_code == 404
         live2d = client.get("/characters/yuri/live2d", follow_redirects=False)
         assert live2d.status_code == 307
         assert live2d.headers["location"] == "/live2d/?character=yuri"
+
+
+def test_the_boards_revalidate_their_own_entry_html(tmp_path, monkeypatch):
+    """`/assets/*` carries a content hash, so a changed file is a changed URL.
+    An entry `index.html` keeps its name across every rebuild, which is exactly
+    when a browser's heuristic freshness serves yesterday's page — and these
+    two sit under `StaticFiles` mounts, which send no `Cache-Control` at all.
+    The tray opens `/dashboard/` and the switchboard links `/studio/`, so the
+    directory URL is a route and everything beside it is still the mount."""
+    dist = tmp_path / "dist"
+    (dist / "dashboard").mkdir(parents=True)
+    (dist / "studio").mkdir(parents=True)
+    (dist / "dashboard" / "index.html").write_text("switchboard", encoding="utf-8")
+    (dist / "studio" / "index.html").write_text("studio", encoding="utf-8")
+    (dist / "studio" / "optimize.js").write_text("// beside it", encoding="utf-8")
+    registry = CharacterRegistry(tmp_path)
+    registry.add(record(tmp_path))
+    monkeypatch.setattr("yurios.world.host.hosting.create_app", fake_character_app)
+    monkeypatch.setattr("yurios.world.host.app.DIST_DIR", dist)
+    monkeypatch.setattr("yurios.world.host.pages.DIST_DIR", dist)
+    app = create_host_app(Config(data_dir=tmp_path), registry)
+
+    with TestClient(app) as client:
+        for url, body in (("/", "switchboard"), ("/dashboard/", "switchboard"),
+                          ("/studio/", "studio")):
+            page = client.get(url)
+            assert page.status_code == 200, url
+            assert page.text == body
+            assert page.headers["cache-control"] == "no-cache", url
+        # …and the mount still owns the rest of the bundle
+        assert client.get("/studio/optimize.js").status_code == 200
 
 
 def test_socket_for_a_parked_character_is_refused_in_websocket(tmp_path, monkeypatch):
@@ -1171,11 +1203,11 @@ async def test_starting_a_character_does_not_freeze_the_rest_of_the_node(
     """A host is one process holding every character on the node, so building
     one of them cannot be something the others wait *behind*.
 
-    Building a character is not a quick object graph. It loads the embedding
-    model that indexes her memory — the sentence-transformers default is a cold
-    torch model, about twenty seconds the first time in a process — and with
-    LMSTUDIO_PRELOAD on, which is the default, it also waits on LM Studio
-    seating her chat model: roughly a minute for a cold 6 GB file. Run inline
+    Building a character is not a quick object graph. With LMSTUDIO_PRELOAD
+    on, which is the default, it waits on LM Studio seating her chat model:
+    roughly a minute for a cold 6 GB file. The embedding model that indexes
+    her memory is a cold torch load too, but that one is kicked off-thread
+    and does not hold the rest of the start. Run the LM Studio wait inline
     on the event loop, that is a minute in which this process answers nothing —
     not the switchboard that asked for the start, not the SSE stream in
     somebody else's room, not the voice socket of a character who was
