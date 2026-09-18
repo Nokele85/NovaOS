@@ -471,6 +471,11 @@ Eingang" is a glance at a door. "Ich werde" counts only when a verb ends the sen
 turns it into an offer she is waiting on you to accept. And a promise in quotation marks is her
 quoting one — `ich hab dir gesagt „ich meld mich"` — not making it, in either language.
 
+German also turns the sentence round when a time word leads: "Jetzt bau ich", "Erst hör ich, ob
+der Lautsprecher klingt", "Dann schreib ich mir die erste App". That is how she lists the next
+steps of a job, so it counts too — with the same working verbs, never "Jetzt sitz ich hier". And
+"ich meld mich nicht, bis es steht" is a promise, not a refusal: *not until* names the moment.
+
 Until this existed, a companion who spoke German could promise nothing the mind would keep: the
 turn ended and the work she had just taken on was gone. (SPEC §22.1c)
 

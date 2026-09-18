@@ -436,8 +436,18 @@ def test_a_promise_made_in_german_is_kept():
                   "Lass mich das nachsehen.",
                   "Ich kümmere mich drum.",
                   "Ich bau das Programm, ich lauf es einmal, ich zeig dir, was rauskommt.",
-                  "Ich schreib mir das gleich in meine Notizen."):
+                  "Ich schreib mir das gleich in meine Notizen.",
+                  "Ich geh an die Arbeit.",
+                  # a time word in front puts the verb before "ich" — her usual
+                  # way of announcing the next step, and all of it was lost
+                  "Danke, dass du's nochmal gesagt hast. Jetzt bau ich.",
+                  "Erst hör ich, ob mein kleiner Lautsprecher überhaupt klingt.",
+                  "Dann schreib ich mir die erste richtige App."):
         assert kind(reply) == "task", reply
+    for reply in ("Und ich meld mich nicht, bis es steht.",
+                  "Und dann erzähl ich dir, was dabei rauskam.",
+                  "Und dann komm ich zu dir zurück und sag dir konkret, was geht."):
+        assert kind(reply) == "reach_out", reply
     for reply in ("Verlass dich drauf. Ich melde mich, wenn ich fertig bin.",
                   "Ich sag dir Bescheid.",
                   "Ich werde dir Bescheid sagen."):
@@ -465,6 +475,12 @@ def test_what_german_says_now_is_not_a_promise():
                   "Wenn du willst, lass mich das nachsehen.",
                   # "zeig" is what she is showing now, far more than a plan
                   "Ich zeig dir, wie die Stadt aussieht.",
+                  # the verb-second form is only a promise with a working verb
+                  "Jetzt sitz ich auf dir.",
+                  "Dann mach ich das Licht hier drin aus.",
+                  "Dann hab ich's richtig gemacht.",
+                  # "nicht, bis" is a promise; a plain "nicht" still refuses
+                  "Ich meld mich nicht mehr bei ihm.",
                   # quoting a promise while talking about it is not making one
                   "Ich hab dir gesagt „ich meld mich\", und das System hat vorbeigeschaut.",
                   'She said "I\'ll be there" and meant it.'):

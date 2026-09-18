@@ -432,7 +432,18 @@ PROMISE_RES_DE = (
                 + r"|geh\w*\s+(?:\w+\s+){0,3}(?:nachsehen|nachschauen|nachgucken"
                 r"|nachlesen|gucken|schauen|lesen|suchen|pr[üu]fen)\b"
                 r"|(?:recherchier|pr[üu]f|test|bau|schreib)\w*\b"
+                r"|geh\w*\s+an\s+die\s+arbeit\b|mach\w*\s+mich\s+an\s+die\s+arbeit\b"
                 r")[^.!?\n]{0,70}?)" + _DE_END, re.I), "soft"),
+    # "Dann bau ich mir das Gerüst", "Erst schau ich mir an, was drauf ist",
+    # "Jetzt bau ich." — a time word in front puts the verb *before* "ich" (the
+    # verb-second rule), which is how German announces a sequence of steps. The
+    # time word is itself the future marker here, so no particle is asked for;
+    # the verbs are the same closed working list, plus the telling ones.
+    (re.compile(r"\b(?:dann|jetzt|gleich|erst|zuerst|morgen|nachher|sp[äa]ter|danach"
+                r"|sofort|heute\s+abend|als\s+n[äa]chstes|bis\s+dahin)\s+"
+                r"((?:bau|schreib|schau|guck|les|such|find|pr[üu]f|test|probier|versuch"
+                r"|recherchier|fang|flash|arbeit|h[öo]r|meld|erz[äa]hl|komm)"
+                r"\w*(?:'s)?\s+ich\b[^.!?\n—–]{0,80}?)" + _DE_END, re.I), "soft"),
 )
 #: An opener right after an opening quotation mark is her quoting a line, not
 #: making one — `ich hab dir gesagt „ich meld mich", und …` is about a promise,
@@ -443,7 +454,10 @@ REMIND_RE_DE = re.compile(
     r"\berinner(?:e|')?\s+mich\s+(?:(?:bitte|mal|doch)\s+)*(?:da)?(?:ran)?,?\s*"
     r"(?:dass\s+ich\s+)?(.{4,100}?)" + _DE_END, re.I)
 #: German puts "nicht" after the verb: "ich schau nicht nach" negates in word two.
-_NEGATED_DE = re.compile(r"^(?:\S+\s+){0,4}?(?:nicht|nie|niemals|kein\w*)\b", re.I)
+#: "Ich meld mich nicht, bis es steht" is the one "nicht" that is not a refusal —
+#: it means *only once*, and that is a promise with its moment named.
+_NEGATED_DE = re.compile(r"^(?:\S+\s+){0,4}?(?:nicht|nie|niemals|kein\w*)\b"
+                         r"(?!,?\s*(?:bis|bevor|eher|vorher)\b)", re.I)
 
 #: What the opener may not be followed by. `not`/`never` invert the promise;
 #: the modal "have to"/"had to" turns "I can" into a report rather than an offer.
@@ -743,8 +757,9 @@ _TELLING_RE = re.compile(
 #: promise, and the telling after it is when.
 _TELLING_DE_RE = re.compile(
     r"^(?:(?:dann|gleich|kurz|auch|sofort|nachher|sp[äa]ter|erst)\s+)*"
-    r"(?:meld\w*\s+mich|sag\w*\s+dir|geb\w*\s+dir\s+bescheid"
-    r"|(?:erz[äa]hl|zeig|schreib)\w*\s+(?:(?:es|das)\s+)?dir"
+    r"(?:meld\w*\s+(?:ich\s+)?mich|sag\w*\s+(?:ich\s+)?dir"
+    r"|geb\w*\s+(?:ich\s+)?dir\s+bescheid"
+    r"|(?:erz[äa]hl|zeig|schreib)\w*(?:'s)?\s+(?:ich\s+)?(?:(?:es|das)\s+)?dir"
     r"|komm\w*\s+(?:\w+\s+){0,3}zur[üu]ck)"
     r"|^(?!.*\bund\b)(?:\S+\s+){0,4}?(?:bescheid\s+(?:sagen|geben)|mich\s+melden"
     r"|(?:(?:es|das)\s+)?dir\s+(?:sagen|zeigen|erz[äa]hlen|schreiben))\s*$", re.I)

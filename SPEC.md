@@ -2077,7 +2077,15 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   holds for both languages: an opener directly after an opening quotation mark is her *quoting* a
   line, not making one. Talking about the promise that had been lost, she wrote `ich hab dir gesagt
   „ich meld mich"`, and the scan offered it as a fresh commitment — a `strong` one, which the
-  fallback would have filed unread. A quoted opener **MUST NOT** become a candidate.
+  fallback would have filed unread. A quoted opener **MUST NOT** become a candidate. And the scan
+  **MUST** read German's verb-second order: a time word in front — *dann, erst, gleich, morgen* —
+  puts the verb before "ich" ("Jetzt bau ich", "Erst hör ich, ob der Lautsprecher klingt"), which
+  is how she announces a sequence of steps. Given the same task twice in one night, she answered in
+  exactly that form both times and nothing was filed. The fronted time word is itself the future
+  marker, so this opener asks for no particle, only a verb from the working list; measured on 414
+  of her replies it roughly doubled the share that offers a candidate (10 % to 19 %), almost all of
+  the added ones commitments she had made and lost. "Nicht, bis" is the one negation that is a
+  promise ("ich meld mich nicht, bis es steht") and **MUST NOT** be refused as one.
 - §22.2 **Commitment governs staleness:** `blind` is defended past due (a birthday is a birthday),
   `single-minded` drops only when moot, `open-minded` is abandoned the moment it stops being timely.
   The suspend-gap catch-up (§15.4) applies these in one pass, and so **MUST** the local-day
