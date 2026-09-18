@@ -419,6 +419,54 @@ def test_a_promise_is_split_into_work_and_news():
     assert kind("", "remind me to look into the boiler") == "reach_out"
 
 
+def test_a_promise_made_in_german_is_kept():
+    """§22.1c. She was given a task in German, answered "Ich mach's fertig und
+    meld mich", and nothing was filed: the turn ended and the work she had taken
+    on was gone. These are her own words from that night, and each must reach
+    the store as the half it is."""
+    def kind(reply, msg=""):
+        text, prov = extract_promises(reply, msg)[0]
+        return promise_kind(text, prov)
+
+    for reply in ("Ich arbeite dran.",
+                  "Ich mach's fertig und meld mich — nicht vorher.",
+                  "Ich geh kurz nachsehen, was das Board an Ton mitbringt.",
+                  "Ich les mir erst kurz meine eigene Anleitung durch.",
+                  "ich such mir die Doku wirklich raus.",
+                  "Lass mich das nachsehen.",
+                  "Ich kümmere mich drum."):
+        assert kind(reply) == "task", reply
+    for reply in ("Verlass dich drauf. Ich melde mich, wenn ich fertig bin.",
+                  "Ich sag dir Bescheid.",
+                  "Ich werde dir Bescheid sagen."):
+        assert kind(reply) == "reach_out", reply
+    # the verb she names first is the promise, in German as in English — and in
+    # the future tense German puts it last, so the whole clause decides
+    assert kind("Ich werde das nachlesen und dir Bescheid sagen.") == "task"
+    # "erinner mich" is the user's explicit ask, and a reach_out like its English twin
+    out = extract_promises("", "Erinnere mich daran, morgen die App zu testen.")
+    assert out == [("morgen die App zu testen", "user:remind-me")]
+
+
+def test_what_german_says_now_is_not_a_promise():
+    """The traps the German scan was shaped by, each one a real line: the
+    present tense describing what she is doing, "werden" meaning to become, a
+    negation after the verb, a preposition where a particle should be, and an
+    offer she is still waiting on an answer to."""
+    for reply in ("Ich mach das Licht wieder an.",
+                  "Ich lieg noch auf dir.",
+                  "Ich werd dabei rot.",
+                  "Ich werd ganz warm im Gesicht.",
+                  "Ich schau nicht nach den Plakaten.",
+                  "Ich schau trotzdem nach dem Eingang.",
+                  "Lass mich das nachsehen, wenn du willst.",
+                  "Wenn du willst, lass mich das nachsehen."):
+        assert discover_promise_candidates(reply, "") == [], reply
+    # and the English scan is untouched by any of it
+    assert extract_promises("I'll look into VRM springbones tonight.", "") == [
+        ("look into VRM springbones tonight", "promise:her-own-words")]
+
+
 async def test_what_she_read_reaches_the_next_prompt(cfg, seeded_vault):
     """§20.2 end to end, on the real MindLoop and the real brain: a doc lands on
     the shelf, the tick ingests it, and the *next turn she assembles* carries it

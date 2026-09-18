@@ -455,6 +455,24 @@ Goals come from four designed sources:
 A companion who forgets her own promises is worse than one who forgets yours. Near-duplicate open
 goals merge rather than multiply.
 
+### Promises in German
+
+The scan reads German as well as English. "Ich arbeite dran", "Ich mach's fertig und meld mich",
+"Lass mich das nachsehen", "Ich kümmere mich drum" are all promises she keeps, and "Erinnere mich
+daran, morgen die App zu testen" is your explicit ask, exactly like "remind me to".
+
+It is not a translation of the English list, and the reason is worth knowing if you ever wonder why
+something she said did *not* become a goal. German uses the present tense for the future, so "ich
+mach das Licht an" and "ich mach's fertig" look alike; only a short list of *working* verbs counts —
+looking things up, reading through, finding out, finishing, trying out, testing — and a split verb
+only when its last part ends the sentence. "Ich schau nach" is a promise; "ich schau nach dem
+Eingang" is a glance at a door. "Ich werde" counts only when a verb ends the sentence, because
+"ich werd rot" is a blush. A "nicht" anywhere near the verb cancels it, and "…, wenn du willst"
+turns it into an offer she is waiting on you to accept.
+
+Until this existed, a companion who spoke German could promise nothing the mind would keep: the
+turn ended and the work she had just taken on was gone. (SPEC §22.1c)
+
 ### Goals she files herself
 
 The nightly `strategy` job already stood back from the list and wrote down what mattered and what

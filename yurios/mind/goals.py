@@ -378,6 +378,69 @@ PROMISE_RES = (
 )
 REMIND_RE = re.compile(r"\bremind me to\s+(.{4,100}?)(?:[.!?\n]|$)", re.I)
 
+# --- the same scan in German (SPEC §22.1c) -------------------------------------
+#
+# Every opener above is English, so a companion who answers in German could make
+# no promise the store would keep: "Ich mach's fertig und meld mich" filed
+# nothing, the turn ended, and the work she had just taken on evaporated. The
+# German family is not a translation of the English one, because the grammar
+# will not allow it, and three traps decided its shape — each measured on a live
+# companion's German replies before any of this was written:
+#
+#   * **the present tense is also the future.** "Ich mach das Licht an" is what
+#     she is doing *now*; "ich mach's fertig" is a commitment. A bare "ich" plus a
+#     verb matched most of what she says. So the present-tense opener is a closed
+#     list of *working* verbs, and a separable one only counts when its particle
+#     ends the clause — "ich schau nach" is looking something up, "ich schau nach
+#     dem Eingang" is looking towards a door.
+#   * **"werden" is also "to become".** "Ich werd rot" is a blush, not a plan,
+#     and every one of the ten "ich werd…" lines in the sample was that. The
+#     future therefore needs an infinitive to end the clause, and it is only ever
+#     `soft` — a noun ending in -en still slips through ("bis in die Zehen"), and
+#     only the review can tell.
+#   * **negation follows the verb.** "Ich schau nicht nach" puts "nicht" second,
+#     where the English guard, which reads the opening word, never looks.
+#
+# Measured on 411 German replies: the working-verb opener matched nine lines and
+# all nine were commitments; one reply in sixteen offers any candidate at all.
+_DE_END = r"(?:[.!?\n—–]|$)"
+#: A separated particle ("nach", "durch", "raus", "aus") counts only at the end
+#: of its clause — that is what tells the verb apart from the preposition.
+_DE_PARTICLE_END = r"(?=\s*(?:[,.!?\n—–]|$))"
+PROMISE_RES_DE = (
+    # "Ich werde das nachlesen", "ich werd's dir zeigen" — the future puts its
+    # infinitive last; "ich werd rot" ends on an adjective and is refused
+    (re.compile(r"\bich\s+werd(?:e|')?\s+((?:[^.!?\n—–,]{0,90}?\s)?\w{2,}(?:en|ern|eln))"
+                + _DE_PARTICLE_END, re.I), "soft"),
+    # "Ich kümmere mich drum", "ich kümmer mich um die App"
+    (re.compile(r"\bich\s+(k[üu]mmer(?:e)?\s+mich\s+.{2,100}?)" + _DE_END, re.I),
+     "strong"),
+    # "Ich meld mich, wenn ich fertig bin", "ich sag dir Bescheid" — the news half
+    (re.compile(r"\bich\s+((?:meld(?:e)?\s+mich|sag(?:e)?\s+dir\s+bescheid"
+                r"|geb(?:e)?\s+dir\s+bescheid)\b.{0,100}?)" + _DE_END, re.I), "strong"),
+    # "Lass mich das nachsehen" — German's "let me"
+    (re.compile(r"\blass\s+mich\s+(.{4,100}?)" + _DE_END, re.I), "soft"),
+    # the present tense as the future — working verbs only
+    (re.compile(r"\bich\s+((?:"
+                r"(?:schau|guck|seh|sieh)\w*\b[^.!?\n—–,]{0,50}?\bnach" + _DE_PARTICLE_END
+                + r"|les\w*\b[^.!?\n—–,]{0,60}?\b(?:nach|durch)" + _DE_PARTICLE_END
+                + r"|(?:such|find)\w*\b[^.!?\n—–,]{0,50}?\b(?:raus|heraus)"
+                + _DE_PARTICLE_END
+                + r"|mach\w*\b[^.!?\n—–,]{0,40}?\bfertig\b"
+                r"|arbeit\w*\s+(?:da)?(?:ran|dran)\b"
+                r"|probier\w*\b[^.!?\n—–,]{0,50}?\baus" + _DE_PARTICLE_END
+                + r"|geh\w*\s+(?:\w+\s+){0,3}(?:nachsehen|nachschauen|nachgucken"
+                r"|nachlesen|gucken|schauen|lesen|suchen|pr[üu]fen)\b"
+                r"|(?:recherchier|pr[üu]f|test)\w*\b"
+                r")[^.!?\n]{0,70}?)" + _DE_END, re.I), "soft"),
+)
+#: "Erinnere mich daran, morgen die App zu testen" — the user's explicit ask.
+REMIND_RE_DE = re.compile(
+    r"\berinner(?:e|')?\s+mich\s+(?:(?:bitte|mal|doch)\s+)*(?:da)?(?:ran)?,?\s*"
+    r"(?:dass\s+ich\s+)?(.{4,100}?)" + _DE_END, re.I)
+#: German puts "nicht" after the verb: "ich schau nicht nach" negates in word two.
+_NEGATED_DE = re.compile(r"^(?:\S+\s+){0,4}?(?:nicht|nie|niemals|kein\w*)\b", re.I)
+
 #: What the opener may not be followed by. `not`/`never` invert the promise;
 #: the modal "have to"/"had to" turns "I can" into a report rather than an offer.
 _NEGATED = re.compile(r"^(?:never|not|n't|no\b|hardly|barely)\b", re.I)
@@ -386,15 +449,18 @@ _NEGATED = re.compile(r"^(?:never|not|n't|no\b|hardly|barely)\b", re.I)
 #: the clause the opener starts is inspected, so "I'll read it if you send it"
 #: still files — she committed and named a precondition, which is different from
 #: "if you like, I can read it".
-_CONDITIONAL = re.compile(r"\b(?:if|unless|whether)\b[^.!?\n]{0,60}$", re.I)
+_CONDITIONAL = re.compile(
+    r"\b(?:if|unless|whether|wenn|falls|ob|sofern)\b[^.!?\n]{0,60}$", re.I)
 
 #: …and the same offer, phrased with the condition on the end. "if you send it"
 #: is a precondition on work she took on; "if you want" is her asking. Only the
 #: second is excluded, and only because it is the one she is waiting on an
 #: answer to.
 _TRAILING_OFFER = re.compile(
-    r",?\s*\b(?:if|unless)\s+(?:you|you'd|you would)\s+"
-    r"(?:want|like|wish|prefer|care)\b.*$", re.I)
+    r",?\s*\b(?:(?:if|unless)\s+(?:you|you'd|you would)\s+"
+    r"(?:want|like|wish|prefer|care)"
+    r"|(?:wenn|falls)\s+du\s+(?:(?:das|es)\s+)?(?:willst|magst|m[öo]chtest"
+    r"|lust\s+hast))\b.*$", re.I)
 
 
 def _clean(text: str) -> str:
@@ -505,16 +571,18 @@ def discover_promise_candidates(reply: str, user_msg: str) -> list[PromiseCandid
             return
         text = _clean(text)
         key = (text.lower(), provenance)
-        if not text or _NEGATED.match(text) or key in seen:
+        if (not text or _NEGATED.match(text) or _NEGATED_DE.match(text)
+                or key in seen):
             return
         seen.add(key)
         raw.append((start, text, provenance, source.strip(), confidence))
 
     # Explicit reminders are already decisions by the user. They remain first
     # for compatibility with the old three-item cap and bypass model review.
-    for match in REMIND_RE.finditer(user_msg or ""):
-        take(match.start(), match.group(1), "user:remind-me", match.group(0),
-             "explicit")
+    for remind in (REMIND_RE, REMIND_RE_DE):
+        for match in remind.finditer(user_msg or ""):
+            take(match.start(), match.group(1), "user:remind-me", match.group(0),
+                 "explicit")
 
     patterns = (
         (PROMISE_RES[0], "strong"),
@@ -522,6 +590,7 @@ def discover_promise_candidates(reply: str, user_msg: str) -> list[PromiseCandid
         (PROMISE_RES[2], "soft"),
         (PROMISE_RES[3], "soft"),
         (PROMISE_RES[4], "strong"),
+        *PROMISE_RES_DE,
     )
     found: list[tuple[int, str, str, str, str]] = []
     for pattern, confidence in patterns:
@@ -658,6 +727,22 @@ _TELLING_RE = re.compile(
     r")", re.I)
 
 
+#: The German telling verbs, in both places German puts a verb. Verb-first is
+#: what the present-tense openers capture ("meld mich, wenn ich fertig bin");
+#: verb-last is what the future leaves behind once "ich werde" is taken off
+#: ("dir Bescheid sagen"). The verb-last form only counts when the telling is the
+#: whole clause — "das nachlesen und dir Bescheid sagen" leads with the reading,
+#: and the rule above holds in both languages: the work she names first is the
+#: promise, and the telling after it is when.
+_TELLING_DE_RE = re.compile(
+    r"^(?:(?:dann|gleich|kurz|auch|sofort|nachher|sp[äa]ter|erst)\s+)*"
+    r"(?:meld\w*\s+mich|sag\w*\s+dir|geb\w*\s+dir\s+bescheid"
+    r"|(?:erz[äa]hl|zeig|schreib)\w*\s+(?:(?:es|das)\s+)?dir"
+    r"|komm\w*\s+(?:\w+\s+){0,3}zur[üu]ck)"
+    r"|^(?!.*\bund\b)(?:\S+\s+){0,4}?(?:bescheid\s+(?:sagen|geben)|mich\s+melden"
+    r"|(?:(?:es|das)\s+)?dir\s+(?:sagen|zeigen|erz[äa]hlen|schreiben))\s*$", re.I)
+
+
 def promise_kind(text: str, provenance: str) -> str:
     """`task` or `reach_out` — which half of a promise this one is (§22.1).
 
@@ -671,7 +756,9 @@ def promise_kind(text: str, provenance: str) -> str:
     """
     if not provenance.startswith("promise:"):
         return "reach_out"
-    return "reach_out" if _TELLING_RE.match(_clean(text)) else "task"
+    text = _clean(text)
+    telling = _TELLING_RE.match(text) or _TELLING_DE_RE.match(text)
+    return "reach_out" if telling else "task"
 
 
 def extract_promises(reply: str, user_msg: str) -> list[tuple[str, str]]:

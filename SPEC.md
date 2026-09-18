@@ -2041,6 +2041,26 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   ever a `task`, so goal work and her hands had no subject and she talked about work she had not
   done. **A `task` she finishes on her own promise MUST file the news half** (`followup:<goal>`,
   `open-minded`) rather than closing silently, or the split loses the half you were waiting for.
+- §22.1c **A promise made in German is a promise.** Every opener the scan knew was English, so a
+  companion who answers in German could commit to nothing the store would keep: given a task and
+  answering "Ich mach's fertig und meld mich", she filed no goal, the turn ended, and the work was
+  gone — and the one promise of hers the store ever did keep was kept because she had switched to
+  English mid-sentence. The scan **MUST** therefore recognise German commitments and the user's
+  German `erinner mich` ask, and it **MUST NOT** be a word-for-word translation of the English
+  openers, because German grammar defeats all three things such a translation would rely on. The
+  present tense is also the future, so "ich" plus a verb matches what she is doing *now* ("ich mach
+  das Licht an") as readily as what she has taken on; the present-tense opener is a closed list of
+  *working* verbs, and a separable one counts only when its particle ends the clause ("ich schau
+  nach", not "ich schau nach dem Eingang"). *Werden* also means to become, so "ich werd rot" is a
+  blush: the future counts only with an infinitive ending its clause, and only as a `soft`
+  candidate the review rules on — never one the fallback files unread. And German negates after
+  the verb ("ich schau nicht nach"), so the negation guard reads the opening words, not the opening
+  word. The split of §22.1a holds unchanged, which German makes harder, since the future puts the
+  verb last: a telling counts as the news half only when it is the whole clause, so "das nachlesen
+  und dir Bescheid sagen" leads with the reading and is a `task`. The German openers were shaped
+  against a live companion's German replies before they were written — the working-verb opener
+  matched nine lines and all nine were commitments — and a change to them **SHOULD** be measured the
+  same way, because every candidate costs a review call.
 - §22.2 **Commitment governs staleness:** `blind` is defended past due (a birthday is a birthday),
   `single-minded` drops only when moot, `open-minded` is abandoned the moment it stops being timely.
   The suspend-gap catch-up (§15.4) applies these in one pass, and so **MUST** the local-day
