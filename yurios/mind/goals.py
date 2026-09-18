@@ -432,7 +432,8 @@ PROMISE_RES_DE = (
                 + r"|geh\w*\s+(?:\w+\s+){0,3}(?:nachsehen|nachschauen|nachgucken"
                 r"|nachlesen|gucken|schauen|lesen|suchen|pr[üu]fen)\b"
                 r"|(?:recherchier|pr[üu]f|test|bau|schreib)\w*\b"
-                r"|geh\w*\s+an\s+die\s+arbeit\b|mach\w*\s+mich\s+an\s+die\s+arbeit\b"
+                r"|geh\w*\s+an\s+die\s+arbeit\b"
+                r"|mach\w*\s+mich\s+(?:an\s+die\s+arbeit|(?:da)?ran|dran)\b"
                 r")[^.!?\n]{0,70}?)" + _DE_END, re.I), "soft"),
     # "Dann bau ich mir das Gerüst", "Erst schau ich mir an, was drauf ist",
     # "Jetzt bau ich." — a time word in front puts the verb *before* "ich" (the

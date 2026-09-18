@@ -421,7 +421,13 @@ native `reasoning: {"enabled": false}` body and **MUST NOT** append the `/no_thi
 token is a Qwen idiom, and on a hosted route it would sit in her system message as text for
 the model to read. The utility path **MUST** strip a leading `<think>…</think>` before
 parsing its JSON, and **MUST** budget enough tokens (`UTILITY_MAX_TOKENS`) that a reasoning
-pass does not truncate the answer to an empty string and silently lose the fact.
+pass does not truncate the answer to an empty string and silently lose the fact. That budget is
+the house's, and a caller that turns the pass on **MUST NOT** cap it below the house figure. The
+promise review (§22.1a) asked for thinking and capped itself at 1,200 tokens; on
+`deepseek-flash` every one of the 1,200 went to reasoning (`finish_reason: "length"`,
+`reasoning_tokens: 1200`) and the answer was empty — the live review failed that way on two
+consecutive attempts and a replay of the same call did too, so the promise it held was never
+filed. Given the house's 4,096 the same call thought for 878 tokens and answered.
 
 **Structured output degrades, like every other backend.** A utility caller **MAY** send a
 `response_format` of `json_schema`; local OpenAI-compatible servers enforce it, and where it

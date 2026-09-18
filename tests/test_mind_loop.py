@@ -325,6 +325,9 @@ async def test_yuriquant_fragments_become_one_canonical_goal(cfg, seeded_vault):
     assert len(goals[0].meta["candidate_sources"]) == 3
     assert utility.review_params[0]["thinking"] is True
     assert utility.review_params[0]["reasoning_effort"] == "low"
+    # §2.4: a reasoning pass is budgeted by the house, not capped below it here —
+    # 1200 let a reasoning model think all of it and answer nothing
+    assert "max_tokens" not in utility.review_params[0]
     assert utility.review_params[0]["response_format"]["type"] == "json_schema"
 
 
@@ -438,6 +441,7 @@ def test_a_promise_made_in_german_is_kept():
                   "Ich bau das Programm, ich lauf es einmal, ich zeig dir, was rauskommt.",
                   "Ich schreib mir das gleich in meine Notizen.",
                   "Ich geh an die Arbeit.",
+                  "Verstanden. Ich mach mich dran.",
                   # a time word in front puts the verb before "ich" — her usual
                   # way of announcing the next step, and all of it was lost
                   "Danke, dass du's nochmal gesagt hast. Jetzt bau ich.",

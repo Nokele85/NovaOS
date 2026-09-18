@@ -152,9 +152,12 @@ async def promise_review(loop, offer=None) -> tuple[dict, dict, list[str]]:
         capabilities=list(offer.tools) if offer else [])
     try:
         with correlate.scope(kind=correlate.UTILITY):
+            # No `max_tokens` of its own: the house budget (UTILITY_MAX_TOKENS)
+            # is what SPEC §2.4 sizes for a reasoning pass *and* its answer. A cap of
+            # 1200 here let deepseek-flash spend all 1200 thinking and hand back
+            # nothing, and the promise it was reviewing was never filed.
             raw = await loop._utility(
                 messages, soul=False, thinking=True, reasoning_effort="low",
-                max_tokens=1200,
                 response_format=PROMISE_REVIEW_RESPONSE_FORMAT)
         decision = parse_promise_review(raw, candidate_count=len(candidates))
     except Exception as exc:  # noqa: BLE001 — a malformed review must not kill the tick
