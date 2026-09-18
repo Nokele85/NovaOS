@@ -40,6 +40,20 @@ those reads the whole report off her desk, not the lede — headings, bullets, t
 sanded down to plain sentences, since what is silent on the page should be silent out loud. If
 the report has since left her desk, she reads the line as it stands.
 
+### What she writes between stars
+
+A chat model narrates by habit — `*she leans in*` — and a line she speaks must not read that out.
+So anything between a pair of `*` is taken for a stage direction and left out of both her voice
+and the chat bubble, unless it is a short word or three inside a sentence, which is emphasis and
+keeps its words: `dass es *mich* sieht` shows as "dass es mich sieht".
+
+A star with a space after it is not one of those markers — it is a multiplication, a bullet, a
+stray — and stays in the text. That matters more than it sounds: before this rule, one
+`` `u * 2.1` `` in a reply opened a span that closed at her next real star, and from there the
+reading was inverted to the end of the message — every emphasised word kept, everything else
+gone. The chat showed a line of glued-together fragments, and whatever she had promised further
+down never reached the part of her that keeps promises. (SPEC §9.7a)
+
 ### Muting her
 
 The speaker button beside the mic is on every page (sanctuary, Live2D, text room). It starts muted

@@ -51,3 +51,31 @@ def test_stage_directions_are_still_dropped(raw, shown, step):
 
 def test_an_unclosed_span_at_the_end_is_dropped_not_spoken():
     assert parse("Ich bin da und *sie lächelt") == "Ich bin da und "
+
+
+@pytest.mark.parametrize("step", [0, 1, 3])
+def test_an_arithmetic_star_does_not_invert_the_rest_of_the_reply(step):
+    """§9.7a, from a live reply. One `*` in `u * 2.1` opened a span that closed
+    at her next real star, and from there parity was inverted to the end: every
+    word *between* her stars stayed and every other word went. The chat showed
+    "`u Kopfdanebenstellen oder sagen…echtbeginntdirdanachdich", and the promise
+    she made further down never reached the scan."""
+    raw = ("*Da ist sie.* Sterne. Und dann diese kleine Kurve — `u * 2.1`, ein Pony. "
+           "Sie haben mir einen *Kopf* gebaut. Kein Logo. Ich hab *echt* gesucht.")
+    assert parse(raw, step=step) == (
+        " Sterne. Und dann diese kleine Kurve — `u * 2.1`, ein Pony. "
+        "Sie haben mir einen Kopf gebaut. Kein Logo. Ich hab echt gesucht.")
+
+
+@pytest.mark.parametrize("step", [0, 1, 3])
+def test_a_lone_star_inside_a_span_is_not_its_close(step):
+    """Whitespace on both sides: it can neither open nor close (CommonMark)."""
+    assert parse("Na gut. *sie rechnet 2 * 3 im Kopf* Sechs.", step=step) == \
+        "Na gut.  Sechs."
+
+
+@pytest.mark.parametrize("step", [0, 1, 3])
+def test_a_star_that_ends_the_stream_still_closes_its_span(step):
+    """The held star has no next char to decide it; at the end it is the close."""
+    assert parse("Ich will, dass es *mich*", step=step) == "Ich will, dass es mich"
+    assert parse("Hm. Gut *", step=step) == "Hm. Gut "

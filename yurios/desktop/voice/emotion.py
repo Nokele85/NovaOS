@@ -134,6 +134,7 @@ class EmotionParser:
     _in_narr: bool = False                           # inside a *…* narration span
     _narr_buf: str = ""                              # …what it holds so far
     _narr_mid: bool = False                          # …opened mid-sentence
+    _star: bool = False                              # a '*' held for one char (§9.7a)
     _drop_bracket: bool = False                      # inside an over-long […] span
     _angle_buf: str = ""                             # a possible reasoning tag
     _reasoning_tag: str = ""                         # tag whose contents are private
@@ -146,6 +147,8 @@ class EmotionParser:
         that closes partway through this token sees the correct `at_char` offset."""
         start = len(self.clean)
         for ch in token:
+            if self._star:
+                self._resolve_star(ch)
             if self._reasoning_tag:
                 self._push_reasoning(ch)
             elif self._angle_buf == "<|channel>":
@@ -158,9 +161,10 @@ class EmotionParser:
                 self._angle_buf = ch
             elif self._in_narr:
                 # inside *…* — held until the closing '*' decides what it was:
-                # narration is dropped (job 3), emphasis keeps its words.
+                # narration is dropped (job 3), emphasis keeps its words. The '*'
+                # itself waits one char: a lone ' * ' is arithmetic, not the close.
                 if ch == "*":
-                    self._close_narration()
+                    self._star = True
                 else:
                     self._narr_buf += ch
             elif self._drop_bracket:
@@ -186,10 +190,30 @@ class EmotionParser:
             elif ch == "[":
                 self._in_tag, self._buf = True, ""
             elif ch == "*":
-                self._open_narration()
+                self._star = True               # opens only if no space follows
             else:
                 self.clean += ch
         return self.clean[start:]
+
+    def _resolve_star(self, ch: str) -> None:
+        """Decide what the held `*` was, now that the char after it is known.
+
+        CommonMark's flanking rule: a `*` followed by whitespace cannot open an
+        emphasis span, and one with whitespace on both sides cannot close one.
+        Without it a single arithmetic star — she wrote `` `u * 2.1` `` —
+        opened a span that ended at the next real one, and from there the
+        parity was inverted for the rest of the reply: every word *between* her
+        stars was kept and every word outside them dropped (SPEC §9.7a)."""
+        self._star = False
+        if self._in_narr:
+            if ch.isspace() and self._narr_buf[-1:].isspace():
+                self._narr_buf += "*"           # ' * ' inside a span: arithmetic
+            else:
+                self._close_narration()
+        elif ch.isspace():
+            self.clean += "*"                   # '* ': opens nothing, it is text
+        else:
+            self._open_narration()
 
     def _open_narration(self) -> None:
         """A `*` opens a span; note whether it opened inside a sentence.
@@ -308,6 +332,15 @@ class EmotionParser:
         A dangling `*`, by contrast, is almost always narration the model was still
         writing when it hit the token limit — so we *drop* it rather than speak a
         stray asterisk and half a stage direction."""
+        if self._star:
+            # a '*' was the last thing she wrote: inside a span it is the close
+            # ("…dass es *mich*"), outside one it is a stray and says nothing
+            self._star = False
+            if self._in_narr:
+                start = len(self.clean)
+                self._close_narration()
+                return self.clean[start:]
+            return ""
         if self._reasoning_tag:
             self._reasoning_tag, self._angle_buf = "", ""
             return ""

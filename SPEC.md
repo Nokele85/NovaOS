@@ -1107,6 +1107,19 @@ STT/TTS/VAD SDK, and fakes implement each seam so the whole loop runs offline (�
   **MUST** strip tags from the spoken text, emit an expression event when a tag closes (the face
   leads the voice), tolerate split tags, drop unknown tags silently, and also strip
   `*asterisk narration*` (streaming-safe, dropping an unclosed span rather than speaking it).
+- §9.7a **One asterisk must not invert a reply.** The narration strip toggled on every `*`, so a
+  single star that was not a delimiter flipped its parity for the rest of the reply. Live, she wrote
+  `` `u * 2.1` `` about her boot animation; the star opened a span that closed at her next real
+  one, and from there every word *between* her stars was kept and every word outside them dropped.
+  The committed line — which is what the chat draws and what `turn_committed` hands the promise
+  scan (§22.1) — ended "`u Kopfdanebenstellen oder sagen…echtbeginntdirdanachdich`", 1442 of its
+  3536 characters, and the promise she made further down never reached the scan. The parser
+  **MUST** apply CommonMark's flanking rule: a `*` followed by whitespace opens nothing and is
+  text, and a `*` with whitespace on both sides inside a span is not its close. Deciding that
+  needs the next character, so the star is held for exactly one character — across token
+  boundaries — and a star that ends the stream closes an open span and is otherwise dropped, as an
+  unclosed span always was. Measured against 412 of her replies, each fed whole and in 1-, 3- and
+  7-character tokens: exactly one changed, the one with the arithmetic star, and it came back whole.
 - §9.8 **The greeting.** On connect she **SHOULD** greet from memory before the user speaks
   (continuity). The greeting **MUST NOT** be persisted and **MUST NOT** pollute the session
   window — but it **SHOULD** be assembled *over* the last few committed lines, which is
