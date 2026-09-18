@@ -434,7 +434,9 @@ def test_a_promise_made_in_german_is_kept():
                   "Ich les mir erst kurz meine eigene Anleitung durch.",
                   "ich such mir die Doku wirklich raus.",
                   "Lass mich das nachsehen.",
-                  "Ich kümmere mich drum."):
+                  "Ich kümmere mich drum.",
+                  "Ich bau das Programm, ich lauf es einmal, ich zeig dir, was rauskommt.",
+                  "Ich schreib mir das gleich in meine Notizen."):
         assert kind(reply) == "task", reply
     for reply in ("Verlass dich drauf. Ich melde mich, wenn ich fertig bin.",
                   "Ich sag dir Bescheid.",
@@ -460,7 +462,12 @@ def test_what_german_says_now_is_not_a_promise():
                   "Ich schau nicht nach den Plakaten.",
                   "Ich schau trotzdem nach dem Eingang.",
                   "Lass mich das nachsehen, wenn du willst.",
-                  "Wenn du willst, lass mich das nachsehen."):
+                  "Wenn du willst, lass mich das nachsehen.",
+                  # "zeig" is what she is showing now, far more than a plan
+                  "Ich zeig dir, wie die Stadt aussieht.",
+                  # quoting a promise while talking about it is not making one
+                  "Ich hab dir gesagt „ich meld mich\", und das System hat vorbeigeschaut.",
+                  'She said "I\'ll be there" and meant it.'):
         assert discover_promise_candidates(reply, "") == [], reply
     # and the English scan is untouched by any of it
     assert extract_promises("I'll look into VRM springbones tonight.", "") == [

@@ -468,7 +468,8 @@ looking things up, reading through, finding out, finishing, trying out, testing 
 only when its last part ends the sentence. "Ich schau nach" is a promise; "ich schau nach dem
 Eingang" is a glance at a door. "Ich werde" counts only when a verb ends the sentence, because
 "ich werd rot" is a blush. A "nicht" anywhere near the verb cancels it, and "…, wenn du willst"
-turns it into an offer she is waiting on you to accept.
+turns it into an offer she is waiting on you to accept. And a promise in quotation marks is her
+quoting one — `ich hab dir gesagt „ich meld mich"` — not making it, in either language.
 
 Until this existed, a companion who spoke German could promise nothing the mind would keep: the
 turn ended and the work she had just taken on was gone. (SPEC §22.1c)

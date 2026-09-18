@@ -2060,7 +2060,11 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   und dir Bescheid sagen" leads with the reading and is a `task`. The German openers were shaped
   against a live companion's German replies before they were written — the working-verb opener
   matched nine lines and all nine were commitments — and a change to them **SHOULD** be measured the
-  same way, because every candidate costs a review call.
+  same way, because every candidate costs a review call. One rule the first live German turn added
+  holds for both languages: an opener directly after an opening quotation mark is her *quoting* a
+  line, not making one. Talking about the promise that had been lost, she wrote `ich hab dir gesagt
+  „ich meld mich"`, and the scan offered it as a fresh commitment — a `strong` one, which the
+  fallback would have filed unread. A quoted opener **MUST NOT** become a candidate.
 - §22.2 **Commitment governs staleness:** `blind` is defended past due (a birthday is a birthday),
   `single-minded` drops only when moot, `open-minded` is abandoned the moment it stops being timely.
   The suspend-gap catch-up (§15.4) applies these in one pass, and so **MUST** the local-day

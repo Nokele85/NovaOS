@@ -431,9 +431,13 @@ PROMISE_RES_DE = (
                 r"|probier\w*\b[^.!?\n—–,]{0,50}?\baus" + _DE_PARTICLE_END
                 + r"|geh\w*\s+(?:\w+\s+){0,3}(?:nachsehen|nachschauen|nachgucken"
                 r"|nachlesen|gucken|schauen|lesen|suchen|pr[üu]fen)\b"
-                r"|(?:recherchier|pr[üu]f|test)\w*\b"
+                r"|(?:recherchier|pr[üu]f|test|bau|schreib)\w*\b"
                 r")[^.!?\n]{0,70}?)" + _DE_END, re.I), "soft"),
 )
+#: An opener right after an opening quotation mark is her quoting a line, not
+#: making one — `ich hab dir gesagt „ich meld mich", und …` is about a promise,
+#: and filing it would chase work nobody took on. True in either language.
+_QUOTE_OPEN = frozenset("„\"‚«»“")
 #: "Erinnere mich daran, morgen die App zu testen" — the user's explicit ask.
 REMIND_RE_DE = re.compile(
     r"\berinner(?:e|')?\s+mich\s+(?:(?:bitte|mal|doch)\s+)*(?:da)?(?:ran)?,?\s*"
@@ -595,7 +599,10 @@ def discover_promise_candidates(reply: str, user_msg: str) -> list[PromiseCandid
     found: list[tuple[int, str, str, str, str]] = []
     for pattern, confidence in patterns:
         for match in pattern.finditer(reply or ""):
-            if _CONDITIONAL.search((reply or "")[:match.start()].rsplit("\n", 1)[-1]):
+            before = (reply or "")[:match.start()].rsplit("\n", 1)[-1]
+            if _CONDITIONAL.search(before):
+                continue
+            if before.rstrip()[-1:] in _QUOTE_OPEN:
                 continue
             found.append((match.start(), match.group(1),
                           "promise:her-own-words", match.group(0), confidence))
