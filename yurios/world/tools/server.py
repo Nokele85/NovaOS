@@ -232,10 +232,11 @@ def build_server(*, max_minutes: float | None = None,
                     "scene_talk": [str(x) for x in (scene_talk or [])],
                     "characters": characters, "avoid": avoid, "form": form}
 
-    @mcp.tool()
+    @mcp.tool(description=(
+        "Set a countdown timer. `minutes` must be in (0, "
+        f"{max_minutes:g}]; `label` is what the timer is for "
+        '("tea", "the oven") and is spoken back when it finishes.'))
     def set_timer(minutes: float, label: str = "") -> dict:
-        """Set a countdown timer. `minutes` must be positive; `label` is what the
-        timer is for ("tea", "the oven") and is spoken back when it finishes."""
         if not (0 < minutes <= max_minutes):
             raise ValueError(f"minutes must be in (0, {max_minutes:g}]")
         seconds = round(minutes * 60)

@@ -176,21 +176,44 @@ async def test_finishing_promised_work_files_the_telling(cfg, seeded_vault):
     assert rig.post.proactive() == [], "filing it is not saying it"
 
 
-# --- a timer is a promise: queued until deliverable ---------------------------------
+# --- a timer is a promise: delivered, spoken or unheard ---------------------------------
 
-async def test_timer_announce_queues_until_someone_can_hear(cfg, seeded_vault):
+async def test_timer_announce_lands_unheard_when_the_room_is_empty(
+        cfg, seeded_vault):
+    """A timer is a promise: with no mouth and no viewer it still lands,
+    stamped unheard, so the inbox and the doorbell carry it (SPEC §7.5)."""
     rig = make_mind(cfg, seeded_vault)
     rig.timers.add(id="t1", label="tea", seconds=60.0)
     rig.clock.advance(61)
     rig.timers.poll()
     rig.speak.connected = False                    # nobody in the room
     await rig.mind.tick()
-    assert rig.mind._pending_announce, "the promise stays queued"
-    rig.speak.connected = True                     # a page attaches
+    assert not rig.mind._pending_announce, "the promise was delivered"
+    posted = rig.post.proactive()
+    assert posted and posted[-1].get("unheard") is True
+    assert posted[-1]["text"]
+    assert not any(c["delivered"] for c in rig.speak.calls)
+
+
+async def test_a_timer_restored_across_a_restart_is_not_called_punctual(
+        cfg, seeded_vault):
+    """A countdown that ended in the night reaches her the next morning (§7.5),
+    and "just finished" about it is the one thing that would make the whole
+    feature read as broken rather than as diligent."""
+    rig = make_mind(cfg, seeded_vault)
+    # what a restored board looks like on the first poll: already long due
+    rig.timers.add(id="t1", label="wake him", seconds=60.0)
+    rig.clock.advance(7 * 3600)
+    rig.timers.poll()
+    rig.speak.connected = True
+    await rig.mind.tick()                       # SENSE queues the promise…
     rig.clock.advance(30)
-    await rig.mind.tick()
-    assert not rig.mind._pending_announce
-    assert any("tea" in c["cue"] for c in rig.speak.calls if c["delivered"])
+    await rig.mind.tick()                       # …and the next tick keeps it
+
+    said = [c["cue"] for c in rig.speak.calls if c["delivered"]]
+    assert said and "wake him" in said[0]
+    assert "hours ago" in said[0], said[0]
+    assert "just finished" not in said[0]
 
 
 async def test_timer_announce_lands_in_chat_when_a_text_page_is_open(

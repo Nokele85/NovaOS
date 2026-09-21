@@ -6,8 +6,8 @@ looking, pursues small goals, keeps the promises she made, reads what lands on h
 consolidates memory while you sleep, and now and then decides to reach out first.
 
 It's additive. `MIND_ENABLED=false` gives you the reactive companion minus ambient life, and
-conversation never depends on it. Timer expiries currently use the mind loop for delivery, so
-enable the mind and select a model if they must be announced or queued.
+conversation never depends on it. Timer announcements still go through the mind loop, so enable
+the mind and select a model if they must be spoken or filed as `unheard`.
 
 > **Experimental.** This is a reference implementation of *initiative*, not a hardened product.
 > Much of what's on this page is new and still moving between releases — DREAM, self-edits, her
@@ -16,7 +16,7 @@ enable the mind and select a model if they must be announced or queued.
 > read [the cost note](README.md#experimental--and-it-can-spend) before pointing her at a metered
 > API.
 
-Normative detail: [`SPEC.md` §15–§25](../SPEC.md).
+Normative detail: [`SPEC.md` §15–§26](../SPEC.md).
 
 ## The tick loop
 
@@ -37,8 +37,8 @@ Three rules hold it together:
    one thing per heartbeat can be read like a diary — and is.
 2. **APPRAISE never calls a model.** That single rule is what makes always-on affordable; the
    model is invoked inside ACT, for work already judged worth it.
-3. **Everything is journaled and traced**, and every tick that changed the Vault ends in exactly
-   one git commit. An uneventful tick commits nothing.
+3. **Everything is journaled and traced.** Writes land immediately; the Vault's git history is
+   at most one commit a day (`COMMIT_INTERVAL_S`). An uneventful tick writes nothing.
 
 Time is injected everywhere — no wall-clock reads, no bare sleeps — which is why days of an
 always-on mind can run in milliseconds in the test suite.
@@ -61,7 +61,8 @@ what they mean.
 Each arrival appends a line to `signals.jsonl` — "what woke her at 3 a.m." is a file you read.
 `user_present` / `user_absent` mean a chat room or the live CLI is on `/api/events`. The tray,
 Telegram, the doorbell, and the mind debug page are not company; a message from your phone is
-reachable, not present.
+reachable, not present. A new session minted while another room is open, or within a minute of
+the last viewer leaving, is a reconnect flap, not an arrival — she does not greet again.
 
 ## Activity states
 
@@ -128,8 +129,8 @@ Three outcomes, in ascending imposition:
 | Outcome | What it does |
 |---|---|
 | **SILENT** *(the default)* | do it quietly and journal it. The journal, not notifications, carries the value |
-| **SUGGEST** | one composed line posted to the chat, waiting for your next glance — never spoken |
-| **SPEAK** | aloud through the ambient seam if a page is open; a `proactive` chat line if the room is empty |
+| **SUGGEST** | one composed line posted to the chat, waiting for your next glance — never spoken. A picture the goal made is posted with the line |
+| **SPEAK** | aloud through the ambient seam if a page is open; a `proactive` chat line if the room is empty. A picture she made for you is posted ahead of the line so what she says over it is already true |
 
 Both dials are yours, in `.env`. You cannot tune the dial against someone who holds it.
 
@@ -543,7 +544,7 @@ her own past acts) and published live on the event bus.
 
 ```bash
 tail -f data/characters/yuri/traces/ticks.jsonl        # one record per heartbeat
-git -C data/characters/yuri/vault log                  # one commit per tick that changed anything
+git -C data/characters/yuri/vault log                  # history, at most one commit a day
 ```
 
 The **tick trace** is the why-record behind the journal: sensed, appraised (with scores), decided
@@ -561,6 +562,9 @@ The chat column's second tab, refreshed live off the same event bus:
 - edits waiting on your approval, with content and one-click approve/reject,
 - and the journal.
 
+A committed line of hers that names a file on her desk (`goals/….md`, `workspace/…`) is a
+control: it fetches the file and folds the contents under the bubble. A path you typed is not.
+
 Everything reads *through* the mind's own stores — the dashboard can never disagree with the
 files. The same data is available at `GET /api/mind`, `/api/mind/journal`, `/api/mind/trace`
 ([API](api.md#the-mind)).
@@ -574,21 +578,45 @@ way back.
 
 ![The mind debug page: the tool-call audit, each call shown with the photo it produced.](img/mind-debug.png)
 
-Ten sections down the left — **Overview**, **Timeline**, **Ticks**, **Dreams**, **Context**,
-**Tools**, **Vault**, **Memory**, **Signals**, **Cost** — and two chips in the header that mean
+Fourteen sections down the left, in two groups, and two chips in the header that mean
 different things: the rung she is on, and whether this page's own event stream is `live` or
 `offline`. The second one going offline changes nothing about what you can read; the files are
 still there. The stream is a drain (`/api/events?presence=0`): watching this page is not being
 in the room with her.
 
+**What happened, joined** is six views of one graph (SPEC §24.4) — every record about her in a
+window, and what each is joined to. They share one window (Day, Week, Month, All), one range, one
+set of kind filters, one search and one selection, so the evening you zoom into on the Timeline is
+the evening the Ledger lists, and the record you picked stays picked. Keys `1`–`6` move between
+them, `←` `→` step record to record, `/` searches. Whatever is selected, the inspector beside it
+gives its why-record — for a decision, SENSE, the APPRAISE scores against her gate-1 line, DECIDE
+with its runners-up, ACT, Gate 2's factors — and everything joined to it, each join marked
+**Recorded** (the files say so: a shared tick, a `corr_id`, a `turn_id`, a commit naming its tick)
+or **Inferred** (matched by time, with the reason). When the tick's own account of a step and the
+call log disagree, it says so. **Open the full record** goes to the section below that holds it:
+the whole prompt, the tick trace, the commit's patch.
+
+- the **map** — the architecture, reactive body beside the tick, with the window's counts on it;
+- the **timeline** — swimlanes, one per kind of record, with her activity rung as the top band and
+  the REST majority as a density bar rather than a thousand dots; drag to pan, wheel to zoom;
+- **space** — the same records in three dimensions: time left to right, and work that shares a
+  tick or a correlation id clustered across it;
+- **stories** — one decision, one exchange, one reach-out at a time, each with its why in plain
+  words and its chain in the order it happened;
+- **goals** — each with where it came from, her rationale, what done looks like, the ticks that
+  served it, and the desk file she has been writing against (`workspace/goals/<id>.md`);
+- the **ledger** — every record, newest first, grouped by day.
+
+It reads each log's rolled `.1` generation too, which the sections below do not.
+
+**One log at a time** is the rest:
+
 - the **overview** — what is on disk for her, read without starting her: the state, the budget,
   the Vault head, row counts, and a manifest of every log with a `rotated` flag, because a page
   that reads only the live file should say so when an older one exists;
-- the **activity timeline** — every ENGAGED/IDLE/DORMANT/DREAM transition she actually made, with
-  the rung that fired it (`traces/activity.jsonl`, appended only on a real change);
 - the **tick traces**, in full — sensed, appraised with scores, decided with runners-up, acted,
   and the interrupt decision with its factors, which the tab summarises and the `/log` view throws
-  away;
+  away; one tick's page draws its phases the way the inspector does, and links to its story;
 - **every context window she was ever given** — not just committed turns. Self-talk, the arrival
   greeting, a reach-out being written, goal work and DREAM consolidation all call a model, and
   before `traces/prompts.jsonl` none of them left any record of what they were asked;
@@ -600,9 +628,8 @@ in the room with her.
   than waiting for 2 a.m. to come round again;
 - the **Vault's own history** — the commit list, any file now or at a revision, and every edit to
   one file (`soul/USER.md` is the usual reason you came);
-- **signals, goals and edits** — the inbox and the checklist of what she means to do, with a
-  control on each goal that opens the desk file she has been writing against
-  (`workspace/goals/<id>.md`);
+- **signals and edits** — the inbox, the self-edits waiting on your ruling, and the history of
+  changes to who she is;
 - the **recall index**, her semantic facts, beliefs, and the knowledge shelf;
 - and **what it costs** — context pressure over time, the budget, and what the small model
   produced versus what was quarantined.
@@ -624,9 +651,16 @@ MIND_MAX_INTERRUPTS_PER_DAY=3     # the hard daily cap
 MIND_CONSIDER_COOLDOWN_S=3600     # minimum gap between re-chewing one goal
 MIND_GOAL_FILING_ENABLED=true     # may the night file a goal of her own?
 MIND_SELF_GOALS_MAX=3             # how many of hers may be open at once
+MIND_GOAL_MAX_STEPS=3             # working ticks one goal gets before it waits
+MIND_DISPATCH_TIMEOUT_S=3600      # how long a goal waits on work it dispatched
+MIND_SOUL_IN_PROMPTS=full         # full | brief | off — her card in private prompts
 MIND_DAILY_TOKENS=200000
 MIND_DREAM_TICK_TOKENS=40000
-MIND_TRACE_MAX_BYTES=2000000       # rotate traces/ticks.jsonl to ticks.jsonl.1 at this size
+MIND_DREAM_RESEARCH_TOKENS=120000
+MIND_DREAM_RESEARCH_SEARCHES=8
+MIND_DREAM_RESEARCH_PAGES=6
+MIND_DREAM_RESEARCH_STEPS=16
+MIND_TRACE_MAX_BYTES=2000000      # rotate traces/ticks.jsonl to ticks.jsonl.1 at this size
 MIND_ENGAGED_CADENCE_S=10
 MIND_IDLE_CADENCE_S=60
 MIND_DORMANT_CADENCE_S=900
@@ -635,6 +669,18 @@ MIND_ENGAGED_TIMEOUT_S=180        # quiet this long → IDLE
 MIND_IDLE_TIMEOUT_S=3600          # away this long → DORMANT
 MIND_DREAM_START_HOUR=2
 MIND_DREAM_END_HOUR=6
+
+# her hands in the loop (SPEC §26) — inert until the first is true
+MIND_TOOLS_ENABLED=false          # house switch: may anything on this machine act unasked?
+MIND_TOOL_ALLOWLIST=              # explicit names; empty even when the switch is on
+MIND_TOOL_CALLS_PER_DAY=8         # a cap, checked before the call
+MIND_TOOL_PRESSURE_CEILING=0.5    # over it, the expensive hands are not offered
+MIND_TOOL_COOLDOWN_CHEAP_S=21600  # desk / set_timer fingerprint (six hours)
+MIND_TOOL_COOLDOWN_EXPENSIVE_S=172800  # web / camera (two days)
+TOOL_RATE_MIND_DESK=4             # the mind's own buckets, not conversation's
+TOOL_RATE_MIND_WEB=1
+TOOL_RATE_MIND_CAMERA=1
+TOOL_RATE_MIND_OTHER=1
 ```
 
 Body reflexes and the murmur keep the old idle machine's windows:
@@ -652,18 +698,45 @@ dropped rather than queued when nobody can hear. Body reflexes run on a seeded R
 and no journal, and stay silent while she's engaged, while the room is empty, and in
 DORMANT/DREAM.
 
-Per-character overrides: the `mind`, `utility` and `dream` switches live in the registry, so one
-companion can be fully autonomous while another stays reactive-only —
-see [Characters](characters.md#loop-switches).
+Per-character overrides: the `mind`, `utility`, `dream` and `hands` switches live in the
+registry, so one companion can be fully autonomous while another stays reactive-only —
+see [Characters](characters.md#loop-switches). `mind` and `hands` take effect live; `utility`
+and `dream` restart her.
+
+## Her hands in the loop
+
+The mind *can* reach for a tool, as a step of an open goal — never free-floating, at most one
+call per tick. It ships **off**. Two switches in series, the same pattern as notify:
+
+- `MIND_TOOLS_ENABLED` (house, **false**) says whether anything on this machine may act unasked.
+- Her own `hands` switch on the tile says whether she is one of the ones that may.
+
+`MIND_TOOL_ALLOWLIST` names the permitted hands explicitly — no wildcard, no inheritance from
+the conversational allowlist, **empty even when the house switch is on**.
+`yurios settings MIND_TOOL_ALLOWLIST` prints every hand this build has, what each one does and
+whether its backend is on. A gentle first setting is her desk alone:
+`write_note,append_note,read_note,list_notes`.
+
+Cheap hands (the desk, `set_timer`) are a step of goal work in any state except ENGAGED.
+Expensive ones (`research`, `read_page`, `web_search`, the cameras) take the whole tick, need
+their backend, budget pressure under `MIND_TOOL_PRESSURE_CEILING`, and DORMANT/DREAM **or** you
+absent. `MIND_TOOL_CALLS_PER_DAY` is a cap, not a governor: it is checked before the call and
+it refuses. The same call is refused for hours by a fingerprint ledger that survives restarts.
+Nothing she makes this way is sent to you — it goes on her shelf, in her gallery, or on her
+desk. Whether you hear about it is the same reach-out gate as everything else.
+
+The switchboard's fourth toggle revokes her hands before her next tick, without restarting her.
+`tool-logs/calls.jsonl` marks every one of them `mind_tool`. See
+[the cost note](README.md#experimental--and-it-can-spend).
 
 ## What the mind deliberately doesn't do
 
-- **No tool calls.** Her hands stay conversational; a tool-bearing autonomous act needs a
-  broker that comes with the sandboxed workshop.
+- **No code execution, no shell, no sandboxed workshop.** Autonomous *reading* ships, default-off
+  (above). What a sandbox is for is running code, which is a different threat model from
+  fetching a page, and that is still the named next rung.
 - **No goals invented mid-conversation.** She files one of her own on the night's stock-take and
   nowhere else — deliberately, so a new intention is something you can read on the goals page
   before it acts, rather than something that appeared while you were mid-sentence.
-- **No code execution, no shell, no autonomous research-and-build.**
 - **No multimodal sensing** — SENSE reads text, time, files and its own completions.
 - **No temporal knowledge graph** — the world model stops at the snapshot.
 - **No affective state model** — the reflex pulses approximate warmth without modelling it.

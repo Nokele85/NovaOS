@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 
 from yurios.kernel import correlate
 from yurios.kernel.clock import Clock
-from yurios.world.tools.guard import Guard, _fingerprint
+from yurios.world.tools.guard import Guard, _fingerprint, failure
 
 from .policy import DORMANT, DREAM, ENGAGED
 from .util import day_of
@@ -276,6 +276,11 @@ class Hands:
     #: onto the brain at start-up and can be replaced (a failed MCP start leaves
     #: None), and the mind is built either side of that.
     runner: object = None
+    #: () -> bool: is her tool server still being spawned? A runner that is
+    #: None because discovery hasn't answered yet is not the same fact as one
+    #: that is None because there is no server, and the trace must not say the
+    #: second when the first is true.
+    starting: object = None
     #: The live per-character switch. Revoking it denies every subsequent call
     #: and says so in the audit; it cancels nothing already dispatched, because
     #: a kill switch that pretends to recall a running request is lying.
@@ -350,6 +355,12 @@ class Hands:
             return self.runner() if callable(self.runner) else self.runner
         except Exception:       # noqa: BLE001 — a brain mid-rebuild
             return None
+
+    def _starting(self) -> bool:
+        try:
+            return bool(self.starting()) if callable(self.starting) else False
+        except Exception:       # noqa: BLE001 — same rule as _runner
+            return False
 
     # ------------------------------------------------------------- the ledger
 
@@ -435,6 +446,8 @@ class Hands:
         if not self.allowlist:
             return Offer(reason="no hand is on MIND_TOOL_ALLOWLIST")
         if self.guard is None or self._runner() is None:
+            if self.guard is not None and self._starting():
+                return Offer(reason="her hands are still starting")
             return Offer(reason="no tool server is running")
         if state == ENGAGED:
             return Offer(reason="she is mid-conversation — those are the "
@@ -497,9 +510,16 @@ class Hands:
 
     # ------------------------------------------------------------ the dispatch
 
-    async def execute(self, tool: str, args: dict, *, timeout_s: float) -> str:
+    async def execute(self, tool: str, args: dict, *,
+                      timeout_s: float) -> tuple[str, str]:
         """Guard → MCP → audit. Never raises: a failed hand is a sentence in the
         journal, not a dead heartbeat.
+
+        Returns `(verdict, text)` — `"ok"`, `"denied"` or `"error"`, and what
+        she reads. The verdict is returned rather than left for the caller to
+        infer from the text, because the caller used not to: a `write_note`
+        that timed out was `error` in `calls.jsonl` and `(ok)` in the tick
+        trace, two records of one call that disagreed.
 
         Deliberately the same shape as `ToolBrain._execute`, with one difference
         that matters and one that doesn't. The one that matters: the guard is
@@ -519,17 +539,18 @@ class Hands:
         if not ok or runner is None:
             reason = reason or "no tool server is running"
             self.guard.audit(tool, args, f"denied: {reason}", 0.0, "")
-            return f"denied ({reason})"
+            return "denied", f"denied ({reason})"
         try:
             text = await asyncio.wait_for(runner.call(tool, args),
                                           timeout=timeout_s)
         except Exception as e:                 # timeout, tool error, transport
             dt = (self.guard.clock.now() - t0) * 1000
-            self.guard.audit(tool, args, "error", dt, str(e))
-            return f"error ({e})"
+            why = failure(e, timeout_s)
+            self.guard.audit(tool, args, "error", dt, why)
+            return "error", f"error ({why})"
         dt = (self.guard.clock.now() - t0) * 1000
         self.guard.audit(tool, args, "ok", dt, self.guard.truncate(text))
-        return text
+        return "ok", text
 
     def deny(self, tool: str, args: dict, reason: str) -> None:
         """Audit a call the preconditions refused before it was ever dispatched.

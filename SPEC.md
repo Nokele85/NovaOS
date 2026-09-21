@@ -737,7 +737,9 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   live on the event loop (anyio cancel scopes cannot move to a thread); only the wait is
   off the boot path. While the spawn is in flight `/api/health` **MUST** say so rather than
   `off`, which is the answer for a character who has no hands at all and not one whose hands
-  are seconds away; a stage still loading is **NOT** a degradation.
+  are seconds away; a stage still loading is **NOT** a degradation. Her mind is the one
+  exception to "see no tools rather than wait": its first tick **MAY** wait for discovery to
+  settle, bounded, and on its own task only (§26.3).
 
   `MCP_SERVERS` **MAY** name a JSON file in the conventional `{"mcpServers": {…}}` shape, whose
   servers are mounted alongside hers behind the same `ToolRunner` seam (`MultiToolRunner`), so the
@@ -759,8 +761,10 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   JSON that names how many files there were. A folder that is not on the desk **MUST** say so
   rather than returning an empty listing that reads as "kept-memory is empty". Every call —
   allowed or denied — **MUST** append one JSONL audit line
-  (`ts, tool, args, verdict, duration_ms, result`) to `TOOL_LOG_DIR`. She can be *asked*
-  anything; the guard decides what her hands actually do.
+  (`ts, tool, args, verdict, duration_ms, result`) to `TOOL_LOG_DIR`. A call that ran out of time
+  **MUST** say so in that `result` and in what she reads ("timed out after 10s"), never an empty
+  string: a blank failure cannot be told apart from a broken tool. She can be *asked* anything; the
+  guard decides what her hands actually do.
 
   **The mind gets a second Guard, not a share of this one** (§26). Its `rates_per_min` is built
   from `TOOL_RATE_MIND_*` over `MIND_TOOL_ALLOWLIST` alone, so a night of autonomous work cannot
@@ -830,10 +834,21 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   validates and records — but the **host** schedules the wake (`yurios/world/tools/timers.py`,
   on the injected clock), because only the host owns her voice; when a timer elapses she
   **MUST** announce it through the ambient seam (§9), queued until deliverable.
+  A timer is a promise, so it **MUST** outlive the process: the board is written to
+  `<vault>/state/timers.json` on every change and read back at construction (untracked and
+  best-effort, the inbox's rules — a board that cannot be saved is still a board). A timer's
+  `due` is an absolute wall epoch, not a countdown, so one that elapsed while the host was down
+  is simply already due and lands on the first poll with no catch-up path; the `timer` signal
+  **MUST** carry `late_s` so that announcement does not describe itself as punctual. A timer
+  more than a day past due — longer than `TIMER_MAX_MINUTES`' own ceiling, so no longer a
+  promise anyone is still waiting on — **MUST** be dropped on the way in rather than announced.
   Deliverable is a voice injector **or** a chat viewer (a text room or the
   terminal, which do not open `/ws/voice` while muted). With no injector the
   announcement **MUST** land as a proactive chat line on the EventHub rather
-  than wait forever for a socket that page never opens.
+  than wait forever for a socket that page never opens. With no injector
+  **and** no viewer, the line **MUST** still land, stamped `unheard`, so the
+  inbox and the doorbell (§18.4) carry the promise instead of the tick
+  re-queuing it until someone walks in.
   `play_music` drives the browser-side synthesized ambience (§6.2) —
   a generative pad, not a media library; the seam is the point.
 - §7.6 **Her camera: `take_selfie` / `show_picture`, start-don't-await.** The two hands that
@@ -886,8 +901,13 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   (`forge/backends/sniff.py`), so `SELFIE_BACKEND=diffusers` names *the local camera*, not one
   architecture. Any backend that cannot run — `openrouter` with no key, a local one missing deps,
   its checkpoint, or (krea2) access to the gated companion repo its text encoder and VAE come
-  from — **MUST** degrade to `mock` with one loud WARNING; a failed render **MUST** become a
-  quiet chat message, never a crash and never silence.
+  from — **MUST** say so with one loud WARNING at boot and report `<backend> (unavailable — why)`
+  as its status, and **MUST NOT** be replaced by `mock`: a placeholder delivered as her photo is a
+  picture she did not take. `mock` renders only when `SELFIE_BACKEND` names it. The lab **MUST**
+  ask the backend whether it can run before every shot, and before any park, so a drive mounted
+  or a key set after boot brings the camera back without a restart; a shot it cannot take fails
+  like any other render. A failed render **MUST** become a quiet chat message, never a crash and
+  never silence — one refused for an unavailable camera names why.
 
   The same lab is reachable from owner HTTP without going through a hand: `POST /api/selfie` and
   `POST /api/picture` (and the per-character forms under `/api/characters/<id>/…`) start a render
@@ -1110,9 +1130,14 @@ STT/TTS/VAD SDK, and fakes implement each seam so the whole loop runs offline (�
   Both browser and native voice sockets **MUST** establish the voice channel for
   greetings and replies before the brain assembles their prompts.
   The parser (`yurios/desktop/voice/emotion.py`)
-  **MUST** strip tags from the spoken text, emit an expression event when a tag closes (the face
-  leads the voice), tolerate split tags, drop unknown tags silently, and also strip
-  `*asterisk narration*` (streaming-safe, dropping an unclosed span rather than speaking it).
+  **MUST** strip tags from the shown text on every channel, emit an expression event when a tag
+  closes (the face leads the voice), tolerate split tags, and drop unknown tags silently.
+  Narration — `*asterisk actions*` and bracketed stage directions — is the **spoken path's rule
+  alone** (streaming-safe, dropping an unclosed span rather than speaking it), for the same reason
+  the spoken-style block is: a text turn **MUST NOT** strip it. On the page it is not markup but
+  how she shows a feeling in writing, and the span the voice rule drops is not always a stage
+  direction on a line of its own — `Keeping *us* working.` reached the chat as "Keeping working.",
+  a word taken out of the middle of her sentence.
 - §9.7a **One asterisk must not invert a reply.** The narration strip toggled on every `*`, so a
   single star that was not a delimiter flipped its parity for the rest of the reply. Live, she wrote
   `` `u * 2.1` `` about her boot animation; the star opened a span that closed at her next real
@@ -1126,6 +1151,8 @@ STT/TTS/VAD SDK, and fakes implement each seam so the whole loop runs offline (�
   boundaries — and a star that ends the stream closes an open span and is otherwise dropped, as an
   unclosed span always was. Measured against 412 of her replies, each fed whole and in 1-, 3- and
   7-character tokens: exactly one changed, the one with the arithmetic star, and it came back whole.
+  Since a text turn no longer strips narration (above), the chat line is out of its reach; the
+  rule now guards the spoken path, where the strip still runs and a mangled line is read aloud.
 - §9.8 **The greeting.** On connect she **SHOULD** greet from memory before the user speaks
   (continuity). The greeting **MUST NOT** be persisted and **MUST NOT** pollute the session
   window — but it **SHOULD** be assembled *over* the last few committed lines, which is
@@ -1136,7 +1163,9 @@ STT/TTS/VAD SDK, and fakes implement each seam so the whole loop runs offline (�
   and she opened by asking for it a second time. A wordless entry (a selfie is a chat line
   with no words in it) **MUST NOT** reach the prompt as a blank turn. The greeting **MUST**
   fire at most once per session — a reconnect or a second socket **MUST NOT**
-  speak a second greeting over the first. On the **first-ever** arrival there is no memory to
+  speak a second greeting over the first. A new session id minted inside a
+  short rejoin of the last viewer leaving (an SSE flap, a switch of rooms)
+  **MUST NOT** count as an arrival either. On the **first-ever** arrival there is no memory to
   open from: while `soul/BOOTSTRAP.md` is present and the journal is empty, the greeting **MUST**
   be that file's authored cold open, spoken verbatim, with no model call and no corpus line (the
   text is SOUL, not a completion); once the journal shows she has met someone, the bootstrap
@@ -1234,7 +1263,10 @@ a frontend:
   transcript + `user_message` signal → the brain's token stream (expression tags to the puppet
   lane, stripped from the shown text, the clean text accumulating as a `draft` with its line
   breaks kept — a text is shown as it was written, so three lines are three bubbles, not one
-  sentence) → verbatim persist → `message` commit
+  sentence; but a line that was *entirely* stripped markup — an asterisk or bracketed stage
+  direction, a consumed `[[tool …]]` marker — leaves only its newlines behind, so the runner
+  **MUST** collapse a run of blank lines to one: the break she wrote survives, the hole does not)
+  → verbatim persist → `message` commit
   + `turn_committed` signal. A `draft` carries the whole reply so far rather than a delta, so the
   runner **MUST NOT** publish one per token: it accumulates per token and publishes on a sentence,
   a line break, or a bounded run of neither. Per-token drafts are quadratic in bytes on a bus whose
@@ -1330,8 +1362,9 @@ however it was started, and what it claims lives in `.yurios/` (`yurios/daemon.p
 
 Typed (`yurios/world/config.py`), read once from env/`.env`, extending the voice config (which
 extends the brain's). Every knob in `.env.example` **MUST** have a default and the default stack
-**MUST** need no key (`SELFIE_BACKEND=openrouter` without a key degrades to mock — §7.6 — so the
-no-key rule survives it). The port is **8768**. The brain knobs (model routes, `LMSTUDIO_BASE_URL`,
+**MUST** need no key (the camera defaults to `off`, and `SELFIE_BACKEND=openrouter` without a key
+fails its shots with a chat note rather than failing the boot — §7.6 — so the no-key rule
+survives it). The port is **8768**. The brain knobs (model routes, `LMSTUDIO_BASE_URL`,
 the reasoning switches, `CONTEXT_LENGTH` and the context readout it feeds — §3, `EMBED_BACKEND`
 and its auto-reindex, retrieval and summary budgets, the
 Vault dir) are inherited; the body knobs are `COMPANION_NAME`, `TOOLS_BACKEND=mcp|fake|off`, the
@@ -1566,9 +1599,16 @@ them is precisely the always-interrupting-assistant failure.
   posting nothing is not the same as the product being unreachable.** A mind-started render still
   stamps `_deliver: "vault"` and the lab still posts nothing — but the `task_completion` it posts
   instead carries the product's `image_url`, and the goal that dispatched the work **MUST** keep it
-  (`Goal.product`). However that goal ends — kept or let go — a promise-derived one **MUST** hand
-  the picture to its follow-up `reach_out` goal rather than hand over a path to its own goal file,
-  and a Gate 2 delivery **MUST** carry it: posted with the SUGGEST line as one entry, or ahead of a
+  (`Goal.product`). However that goal ends — kept, let go, swept, or **parked at the horizon still
+  waiting on the world** — a promise-derived one **MUST** hand the picture to its follow-up
+  `reach_out` goal rather than hand over a path to its own goal file, and it **MUST** do so exactly
+  once however many of those exits it takes in its life (`Goal.meta.offered` names the heir; the
+  open-goal dedupe of §22.1 cannot see a follow-up that has already been delivered and closed).
+  Parking is named here because it is not a footnote but the common case, and the one the promise
+  that cost the three photographs actually took: a `single-minded` goal never reaches the let-go
+  branch and `reconsider` sweeps only `open-minded` ones, so out of steps and waiting on an answer
+  is where such a goal lives — and where, holding a finished photograph no `task` goal can send, it
+  would wait twelve hours at a time forever. A Gate 2 delivery **MUST** carry it: posted with the SUGGEST line as one entry, or ahead of a
   SPEAK, so that the line she says over it is true by the time she says it. This is not Gate 2
   bypassed, it is Gate 2 obeyed — the gate's question is whether *she* interrupts, it still asks and
   answers it, and all that changed is that when the answer is yes she arrives holding the thing
@@ -1598,7 +1638,8 @@ arrives.
   `<vault>/state/inbox.json`, oldest first, capped. `unheard` **MUST** be set by the caller and
   never inferred from subscriber counts: channel adapters subscribe to the hub too, so "no
   subscribers" stops meaning "nobody is home" the moment Telegram is configured. It is set at the
-  mind's two reach-out deliveries and on an unprompted selfie; a **greeting never carries it**,
+  mind's two reach-out deliveries, on an unprompted selfie, and on a timer
+  announcement that found no viewer (§7.5); a **greeting never carries it**,
   because a greeting is answered *to* somebody who has just arrived.
 - §18.4.2 **It is delivery state, not memory, and MUST NOT dirty the Vault.** What she *said* is
   already committed — the mind journals every reach-out — so the file adds only pending-or-seen,
@@ -1753,7 +1794,13 @@ turn** — separate files, separate indexes, separate `inspect()`.
   no utility model the rest of the compact still runs. Preferences about her that
   the compact labels `learned` **MUST** be proposed as a gated `soul/PERSONA.md`
   edit (`## Learned`, `relationship_phase` frontmatter) the same night, not left
-  in USER.md forever.
+  in USER.md forever. What lands in `## Learned` **MUST** be each direction said
+  *of her* — third person, present tense, `{{user}}` for the user, no talk about
+  the asking — never the USER.md bullet itself, which is a note-taker's line about
+  the user and reads as one in her prompt backbone. The restatement is **one
+  utility call** (`restate_learned`), DREAM's to spend, cached per line and stamped
+  with its prompt like the filing pass; a line not yet restated **MUST** wait for
+  the night rather than be proposed raw.
   With learned claims in `USER.md` (beyond the untouched seed), consolidation
   **MUST** expose pending work once per
   calendar night even if its journal backlog is empty. A successful pass records
@@ -1845,7 +1892,10 @@ that set and a poor place to stop.
 - Jobs write to `workspace/` (§34) through `DreamContext.put`, never to `memory/` or `soul/`. A
   nightly job that could append to semantic memory would be a second, unaudited consolidator; one
   that could touch `soul/` would be §23.2 with the gate removed. `consolidate` writes to `memory/`
-  because it *is* the consolidator, through its own long-standing path.
+  because it *is* the consolidator, through its own long-standing path. `put` **MUST** do the
+  write on a worker thread: the write fsyncs, a slow disk makes that seconds, and the loop it would
+  hold is the one every other character on the node runs on. One such stall turned another
+  character's `write_note` into a timeout, although her note had landed.
 - Every model call goes through `DreamContext.ask`, which records it verbatim — the transcript is
   complete by construction, and is what §21.3 serves.
 
@@ -2156,7 +2206,11 @@ reviewably.
   its full content and reason, rendered by the inner-life panel with approve/reject. The decision
   returns as a `selfedit_decision` signal the loop consumes (§16.2) — applied edits are git commits,
   so drift is never silent and `git revert` undoes any of it; the ruling itself is journaled ("you
-  applied/rejected my edit to …").
+  applied/rejected my edit to …"). An approval **MAY** carry your own rewrite of the proposal
+  (`content`), applied in its place: the queue entry stays as she wrote it, and your version rides
+  the ruling. It **MUST** pass the same shape check her proposal did, and the route **MUST** answer
+  a rewrite that fails it with 422 before posting anything, so the refusal reaches you rather than a
+  tick; the journal line says the edit was applied in your words.
 - §23.3 **The door has a caller: `propose_edit`.** A conversational MCP tool (`surface`, `content`,
   `reason`), advertised only where the mind runs — the queue it writes into is only ever read there
   — and rationed by `TOOL_RATE_SELFEDIT`, because a proposal a minute is not deliberation, it is a
@@ -2181,9 +2235,13 @@ The product half of autonomy: what converts an always-on process from creepy to 
   The scenario tests (§27.2) are queries over this file; the "why did she…" answer is always in it.
 - §24.3 **The surface.** `GET /api/mind` (state, cadence, budget, goals, shelf, pending edits),
   `GET /api/mind/journal?days=` (her `[she]` lines by day), `GET /api/mind/trace?n=`,
-  `POST /api/mind/edits/{id}` (`{"approve": bool}` → a signal, §23.2). The browser page's chat column
+  `POST /api/mind/edits/{id}` (`{"approve": bool, "content"?: str}` → a signal, §23.2). Each pending
+  edit in the snapshot **MUST** carry `diff`, its changed lines against the file as it stands: a
+  whole-file proposal whose change is two lines at the bottom must show those two lines, not the
+  file's opening. The browser page's chat column
   grows a second tab — **inner life** (`web/js/mind.js`): right-now state and budget, edits waiting on
-  you (with content and one-click approve/reject), goals with provenance and a one-click control
+  you (what each changes, the whole file folded under it, one-click approve/reject, and an edit
+  control that lets you rewrite it before approving), goals with provenance and a one-click control
   that opens the matching desk file (`workspace/goals/<id>.md`, §22.3) through
   `GET /api/mind/workspace/file`, the shelf, and the journal,
   refreshed live off the same one bus (`journal`/`mind` events). Everything reads *through* the mind's
@@ -2198,6 +2256,27 @@ The product half of autonomy: what converts an always-on process from creepy to 
   (`/characters/{id}/mind`, `web/mind/`) **MUST** attach the bus as
   `GET /api/events?presence=0`: it is inspection, not company, and **MUST NOT**
   post `user_present` / `user_absent` (§10).
+- §24.4 **The joined views.** The debug page's Map, Timeline, Space, Stories, Goals and Ledger
+  sections are six views of one graph, `GET /api/characters/{id}/debug/graph?days=`
+  (`world/debug_graph.py`; `days` defaults to 7, and `0` is everything retained): every record about
+  her in the window — non-REST ticks (REST ticks as hourly density, never as events), the drawn
+  conversation, model calls, utility runs, tool calls, renders, her `[she]` lines, goals, activity
+  transitions and Vault commits — the links between them, and the stories built from them (one
+  decision, one exchange, one reach-out). It reads each log's rolled `.1` generation as well as the
+  live file, and it writes nothing: not a cache file, not the conversation log's one-time upgrade.
+  A link is **recorded** when the files state it — a shared `tick_id` or `corr_id`, the signal ids
+  SENSE wrote down, the goal a tick served, a reply's `turn_id` equal to a call's `messages_ref`, a
+  commit message that names its tick or its turn — and **inferred** when it is matched by time. An
+  inferred link **MUST** carry the reason it was matched, and every view **MUST** draw and label it
+  as inferred, distinct from a recorded one: nearness in time is not proof of cause, and a page that
+  drew the two alike would be stating a fact she never wrote down. The gate-1 line on an appraisal
+  is her effective `MIND_ACT_THRESHOLD`, never a default. A row without an id gets one derived from
+  its content, not its position, so rotation cannot move a bookmark onto a different record; and the
+  single-record lookups (`…/debug/ticks/{id}`, `…/debug/prompts/{id}`) fall back to the `.1`
+  generation, because the graph links into it. A tick's detail **MUST** describe the tick in the
+  same shape and sentence the graph does. The six views share one loaded window, one range, one set
+  of kind filters, one search and one selection, all carried in the hash; a bus event that means new
+  records marks them stale and says so, and **MUST NOT** redraw them under the reader.
 
 ## §25 — Config (the mind's knobs)
 
@@ -2274,7 +2353,9 @@ needs a sandbox.
 - §26.2 **A call is a step of a goal, never free-floating.** A `tool_step` act is reachable only
   from `_act_goal_work`, and every call carries the id of the open goal that wanted it — so
   `goals.md` stays the complete, readable list of what her hands might do. At most **one** call per
-  tick (§15's one-intention rule, applied one level down).
+  tick (§15's one-intention rule, applied one level down). The step's verdict in the tick trace
+  **MUST** be the call's verdict in `calls.jsonl` — `ok`, `denied` or `error` — and a call that
+  did not succeed **MUST NOT** be realised or counted as dispatched.
 - §26.3 **Preconditions are checked in DECIDE, not ACT.** Switches, allowlist membership, the cost
   class against the current activity state, budget pressure against `MIND_TOOL_PRESSURE_CEILING`,
   the daily cap `MIND_TOOL_CALLS_PER_DAY`, and the fingerprint cooldown. A blocked hand **MUST**
@@ -2283,6 +2364,14 @@ needs a sandbox.
   work and is allowed in any state except ENGAGED; **expensive** (`research`, `read_page`,
   `web_search`, the two cameras) is one whole tick's intention and additionally requires its backend
   to be configured, budget pressure under the ceiling, and DORMANT/DREAM **or** the user absent.
+  Her tool server is spawned unawaited (§7.2), so the mind starts before her hands exist, and
+  the first tick after a restart is the one carrying the suspend gap and every overdue wakeup.
+  When her hands could be offered at all, that first tick **MUST** wait for discovery to answer —
+  wired or failed — for at most `HANDS_BOOT_WAIT_S` (60 s), on the mind's own task: boot, the
+  port and the other characters' rooms **MUST NOT** wait with it. A hand blocked because discovery
+  has not answered yet **MUST** say *her hands are still starting*, not that no tool server is
+  running: the second is the answer for a server that is absent or failed, and the trace must not
+  report a restart as an outage.
 - §26.4 **Hard caps, absolute.** `MIND_TOOL_CALLS_PER_DAY` is a cap and not a governor: unlike
   `MIND_DAILY_TOKENS`, which is a post-hoc estimate, it is checked *before* dispatch and refuses.
   It rolls at local midnight beside `MIND_MAX_INTERRUPTS_PER_DAY`. For the mind and only the mind,
@@ -2313,7 +2402,8 @@ brain with fake models.
   bounds, the `take_selfie` slot contract — named template keys render from the
   library, anything else passes through verbatim, the contract refuses nothing); the selfie lab (a started contract becomes a PNG + provenance
   sidecar and an `image_url` message in sim time; the announce cue offered and dropped when busy; a
-  broken forge becomes a quiet message; no key degrades openrouter → mock loudly); timer scheduling
+  broken forge becomes a quiet message; a camera that can't run fails its shot by name and is
+  never swapped for mock); timer scheduling
   and queued announcements; every §4 op's event shape including `rain`/`music`; the hub (typed
   fan-out, sticky replayed last-write-wins, a full queue drops without blocking, thread-safe publish);
   the SSE route and the world `/ws/voice` route (greeting-once, noise-drop, barge-in, ambient

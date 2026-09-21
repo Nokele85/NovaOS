@@ -67,6 +67,11 @@ log = logging.getLogger("mind.loop")
 
 SUSPEND_GAP_S = 2 * 3600.0
 
+# How long the first tick waits for her tool server to answer (SPEC §26.3). A
+# spawn takes 9–18 s on a node booting several characters; past this bound the
+# tick goes ahead handless rather than letting a hung spawn stop her heart.
+HANDS_BOOT_WAIT_S = 60.0
+
 # scene canon, carried over from the idle machine it replaced (SPEC §15.5):
 # when she rain-gazes, this is the window the scene builds — the corner glass on
 # the −x wall (web/js/stage/SanctuaryScene.js), a step inside the pane. The wide
@@ -175,6 +180,9 @@ class MindLoop:
         self.budget = BudgetGovernor(state_dir, clock,
                                      daily_tokens=cfg.mind_daily_tokens)
         self.trace = TickTrace(cfg.trace_dir, clock, max_bytes=cfg.mind_trace_max_bytes)
+        # Set by the runtime once tool discovery has answered (set_hands_boot);
+        # None means nobody is spawning anything for her, so nothing to wait on.
+        self._hands_settled: asyncio.Event | None = None
         # Her hands, in the loop (SPEC §26, as amended — mind/hands.py). Built
         # unconditionally and off by default: `enabled` is one property to read
         # rather than a None to test for at six call sites, and the guard is a
@@ -182,7 +190,9 @@ class MindLoop:
         # never leave the morning's request rate-limited.
         self.hands = Hands(cfg=cfg, clock=clock,
                            guard=build_guard(cfg, clock),
-                           runner=lambda: getattr(self.brain, "runner", None))
+                           runner=lambda: getattr(self.brain, "runner", None),
+                           starting=lambda: (self._hands_settled is not None
+                                             and not self._hands_settled.is_set()))
         # Share the runtime's sink when there is one, so her conversational
         # prompts and her private ones land in one file with one rotation state.
         # A test brain has none; build our own rather than lose the record.
@@ -346,7 +356,12 @@ class MindLoop:
                           source="mind")
         while not self.timers.due.empty():     # landed countdowns become signals
             t = self.timers.due.get_nowait()
-            self.bus.post("timer", {"label": t.label, "id": t.id}, source="host")
+            # `late_s` is ~0 for a timer that landed while she was up, and the
+            # real gap for one restored across a restart (§7.5) — the
+            # announcement must not call that one punctual.
+            self.bus.post("timer", {"label": t.label, "id": t.id,
+                                    "late_s": max(0.0, self.clock.now() - t.due)},
+                          source="host")
         # …and the wakes the loop scheduled for itself (SPEC §16). A goal that
         # said "look at this again after lunch" said something the hourly
         # consider cooldown cannot express, and a run she dispatched and never
@@ -408,11 +423,14 @@ class MindLoop:
                         if note:
                             reflect_notes.append(note)
             elif sig.type == "selfedit_decision":
-                res = self.selfedit.decide(sig.payload.get("id", ""),
-                                           bool(sig.payload.get("approve")))
+                content = sig.payload.get("content")
+                res = self.selfedit.decide(
+                    sig.payload.get("id", ""), bool(sig.payload.get("approve")),
+                    content if isinstance(content, str) else None)
                 if res:
                     reflect_notes.append(
-                        f"you {res.outcome} my edit to {res.surface}")
+                        f"you {res.outcome} my edit to {res.surface}"
+                        + (", in your own words" if res.revised else ""))
             elif sig.type == "goal_decision":
                 goal = self.goals.get(str(sig.payload.get("id", "")))
                 if (goal is not None and sig.payload.get("abandon")
@@ -813,6 +831,35 @@ class MindLoop:
         """
         self.hands.granted = bool(enabled)
 
+    def set_hands_boot(self, settled: asyncio.Event) -> None:
+        """Wire the runtime's "tool discovery has answered" event (SPEC §26.3).
+
+        The server is spawned without being awaited (§7.2), so the mind starts
+        while it is still coming up — and the first tick after a restart is the
+        one carrying the suspend gap and every overdue wakeup. Appraising those
+        against hands that are seconds away is how a goal step got done
+        handless, and traced as "no tool server is running".
+        """
+        self._hands_settled = settled
+
+    async def _await_hands(self) -> None:
+        """Hold the first tick until her hands have an answer, at most
+        HANDS_BOOT_WAIT_S. Only this task waits — boot, the port and the other
+        characters' rooms are already running — and only when the hands could
+        be offered at all: a character whose hands are off has nothing to wait
+        for."""
+        settled = self._hands_settled
+        if settled is None or settled.is_set():
+            return
+        if not (getattr(self.cfg, "mind_tools_enabled", False)
+                and self.hands.granted and self.hands.allowlist):
+            return
+        await self.clock.sleep(HANDS_BOOT_WAIT_S, wake=settled)
+        if not settled.is_set():
+            log.warning("mind: her tool server has not answered after %.0fs — "
+                        "the first tick goes ahead without hands",
+                        HANDS_BOOT_WAIT_S)
+
     def set_goal_filing_enabled(self, enabled: bool) -> None:
         """The same switch, for goals she files herself (§22.1).
 
@@ -852,6 +899,7 @@ class MindLoop:
         """Production loop: tick, then sleep the regulated cadence — woken early
         by any new signal (the bus wake) so a user turn never waits on DORMANT."""
         self.bus.bind_loop()
+        await self._await_hands()
         while True:
             try:
                 await self.tick()
@@ -872,7 +920,7 @@ class MindLoop:
                        "provenance": g.provenance,
                        "desk": self.GOAL_DESK.format(id=g.id)}
                       for g in self.goals.all()][-30:],
-            "pending_edits": self.selfedit.pending(),
+            "pending_edits": self.selfedit.pending_view(),
             # Goals of her own (§22.1), as the inner-life panel reads them.
             # `open` counts only hers against the cap, so the panel can say
             # "2 of 3" rather than leaving you to work out which of the goals

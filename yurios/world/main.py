@@ -130,7 +130,9 @@ class Runtime:
         self.guard = Guard(rates_per_min=runtime.tool_rates(cfg),
                            log_dir=cfg.tool_log_dir, clock=self.clock,
                            max_bytes=cfg.tool_log_max_bytes)
-        self.timers = TimerBoard(self.clock)
+        # …with its pending countdowns read back off disk (§7.5): at a
+        # ceiling of a day, a timer has a whole night to be restarted through.
+        self.timers = TimerBoard(self.clock, vault=cfg.vault_dir)
         # Pictures *in* (SPEC §35): the shelf a photo you send her lands on,
         # and whether the model she is speaking through can be sent one at all.
         # The store is built unconditionally and creates nothing until the first
@@ -215,6 +217,10 @@ class Runtime:
             # sanctuary and the Live2D room count, the text room does not.
             self.brain.set_body_probe(lambda: self.hub.body_viewers > 0)
         self._tool_runner = tool_runner        # injected, or built at startup
+        # Set once tool discovery has an answer — wired, failed, or never
+        # started. The mind's first tick waits on it (bounded) so a restart's
+        # first appraisal is not made against hands that are seconds away.
+        self.tools_settled = asyncio.Event()
         self.tools_status = "off"
         self.tool_count = 0
         # the inbound inbox (SPEC §16): everything that happens to her becomes a
@@ -265,12 +271,32 @@ class Runtime:
         # but a *reconnect* is not a new arrival — and during a voice warm several
         # connections release together, so without this they would all greet.
         self.greeted: set[str] = set()
+        # When the last viewer left. A new session inside GREET_REJOIN_S is a
+        # flap (SSE reconnect, room switch), not someone walking in.
+        self.presence_left_at: float | None = None
 
     # The voice stack used to be four attributes on the Runtime and everything
     # downstream reads them by name (the route, /api/health, the desktop route's
     # shape). It moved behind `self.voice` when it became load-on-demand; these
     # keep every reader working and reading the *current* stack rather than a
     # stale reference to weights that have since been freed.
+
+    #: A page that was here this recently did not leave. SSE reconnects and
+    #: room switches mint a new session_id; without this they greet again.
+    GREET_REJOIN_S = 60.0
+
+    def still_in_the_room(self) -> bool:
+        """True when a greeting would be a reconnect, not an arrival (§9.8).
+
+        Another page is already open, or the last viewer left inside
+        GREET_REJOIN_S. The arriving page is itself a viewer, so the count
+        that means "already company" is more than one.
+        """
+        if self.hub.viewers > 1:
+            return True
+        if self.presence_left_at is None:
+            return False
+        return (self.clock.now() - self.presence_left_at) < self.GREET_REJOIN_S
 
     @property
     def tts(self):
@@ -740,6 +766,8 @@ class Runtime:
         elif self.cfg.tools_backend != "off":
             # declared pending but no runner (e.g. a test brain) — settle it
             self.boot.done("tools", state="skipped", detail="no hands")
+        if runner is None:
+            self.tools_settled.set()           # nothing is on its way
 
         self.controller.set_rain(self.cfg.rain_intensity)   # the room's weather (§6.2)
 
@@ -760,6 +788,7 @@ class Runtime:
                                      post_message=self.post_message,
                                      park_gate=self.park_gate)
                 self.mind.set_hands_enabled(self._hands_granted)
+                self.mind.set_hands_boot(self.tools_settled)
                 self.mind_status = "running"
                 self.boot.done("mind", detail=f"running · {self.mind.activity.state}")
                 self._mind_task = asyncio.create_task(self.mind.run(), name="mind")
@@ -835,6 +864,8 @@ class Runtime:
             self.tool_count = 0
             self._tool_runner = None
             self.boot.done("tools", state="failed", detail=why[:80])
+        finally:
+            self.tools_settled.set()
 
     async def stop_async(self) -> None:
         self.stopping.set()                    # open SSE streams end themselves
@@ -942,6 +973,7 @@ class Runtime:
                     controller=self.controller, timers=self.timers, hub=self.hub,
                     speak=self.speak_ambient, post_message=self.post_message,
                     park_gate=self.park_gate)
+                self.mind.set_hands_boot(self.tools_settled)
             if self._mind_task is None or self._mind_task.done():
                 self._mind_task = asyncio.create_task(self.mind.run(), name="mind")
                 self._tasks.append(self._mind_task)

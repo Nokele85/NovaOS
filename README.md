@@ -43,18 +43,19 @@ read, so "what did you do while I was gone?" is a page you open, not a vibe.
 
 **[The switchboard](docs/characters.md#the-switchboard)** is the front door: one tile per
 companion, her portrait, the rung of the ladder she is actually on — `ENGAGED`, `IDLE`, `DORMANT`,
-`DREAM`, in the mind loop's own words — and her three loop switches on the tile itself, so one
-companion can be a fully autonomous mind while the one beside her stays reactive-only. Enter her
-room, leave it again, and she keeps running: her life doesn't depend on being looked at.
+`DREAM`, in the mind loop's own words — and her four loop switches on the tile itself (`mind`,
+`utility`, `dream`, `hands`), so one companion can be a fully autonomous mind while the one
+beside her stays reactive-only. Enter her room, leave it again, and she keeps running: her life
+doesn't depend on being looked at.
 
 ![The switchboard: two companions, their states and their mind / utility / dream switches.](docs/img/switchboard.png)
 
 **[The card studio](docs/characters.md#the-card-studio)** is where a companion is written.
 **Import** takes a SillyTavern V2/V3 character card — an ordinary `.PNG` with the card JSON in a
 text chunk — reads the card's own section headers to file that wall of description into identity,
-history, appearance and manner, and then leaves any card that isn't already a YuriOS one *disabled*
-until you have read what came in: a card off the internet does not get a mind, tools and a Telegram
-bot before you've looked at it.
+history, appearance and manner, and then leaves **every** imported card *disabled* until you have
+read what came in, including one that declares itself a YuriOS card: a card off the internet does
+not get a mind, tools and a Telegram bot before you've looked at it.
 **Create character** opens the same page on the shape of a working companion instead of eight
 empty boxes. There you write her against a live per-field prompt budget, give her a face, and edit
 her own [selfie library](docs/selfies.md#a-library-of-her-own) — the scenes, framings and outfits
@@ -65,8 +66,9 @@ on the machine.
 ![The card studio: editing Yuri's identity, with her face, prompt budget and what stays local.](docs/img/card-studio.png)
 
 **[The mind debug page](docs/mind.md#the-mind-debug-page)** is the honest one. The inner-life tab
-tells you what she did, in her words; this tells you *why*, in the machine's — every activity
-transition with the rung that fired it, whole tick traces with the scores and the runners-up, every
+tells you what she did, in her words; this tells you *why*, in the machine's — every record she
+left joined into one timeline, with each decision, exchange and reach-out told as a story whose
+links say whether the files record them or only the clock suggests them; whole tick traces with the scores and the runners-up, every
 context window any model was ever handed (self-talk, dreams and reach-outs, not just chat), the
 tool audit with the photo each call produced joined on its correlation id, the Vault's git history
 file by file, her recall index, and what the day cost. It reads files rather than a running mind, so the companion who just crashed is

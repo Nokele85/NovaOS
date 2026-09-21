@@ -8,8 +8,12 @@ budget already said no to, or it keeps going after somebody flipped the switch.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 
+from yurios.kernel.clock import Clock
+from yurios.mind import loop as mind_loop
 from yurios.mind.hands import (CHEAP, EXPENSIVE, HANDS, Hands, describe_hands,
                                klass, parse_intent)
 from yurios.world.tools.fakes import FakeToolRunner
@@ -126,6 +130,39 @@ async def test_a_desk_hand_is_a_step_of_a_goal_and_lands_in_the_audit(
     assert line["tick_id"] == trace["tick_id"]
     # …and the goal that wanted it (principle 7) is the one that advanced
     assert rig.mind.goals.get(goal.id).state == "active"
+    assert rig.mind.goals.get(goal.id).steps == 1
+
+
+class _SlowRunner(FakeToolRunner):
+    """A hand whose answer never comes back in time — the shape a slow disk
+    takes from the host's side of the wire."""
+
+    async def call(self, tool, args):
+        self.calls.append((tool, dict(args)))
+        raise TimeoutError()
+
+
+async def test_a_hand_that_timed_out_says_so_in_the_trace_and_the_audit(
+        cfg, seeded_vault):
+    """One call, two records, and they used to disagree: `error` with a blank
+    result in `calls.jsonl`, `write_note (ok)` in the tick trace, and
+    `error ()` on her desk — a timeout nobody could read as one."""
+    rig = rig_with_hands(
+        cfg, seeded_vault,
+        'use write_note {"path": "goals/shed.md", "text": "measure it first"}',
+        tools=_SlowRunner())
+    goal = rig.mind.goals.add("plan the shed", kind="task", priority=0.95)
+
+    trace = (await work(rig))[0]
+    assert trace["acted"]["verdict"] == "error"
+    assert trace["acted"]["result"].endswith("write_note (error)")
+
+    line = audit_lines(rig)[-1]
+    assert line["verdict"] == "error"
+    assert line["result"].startswith("timed out after ")
+    desk = (seeded_vault / "workspace").rglob("*.md")
+    assert any("error (timed out after " in p.read_text() for p in desk)
+    # a failed step is still a step: the goal advanced, it did not vanish
     assert rig.mind.goals.get(goal.id).steps == 1
 
 
@@ -359,6 +396,93 @@ async def test_revoking_hands_mid_run_denies_the_next_call_and_audits_it(
     # nothing was cancelled and nothing was hidden: the denial is a line
     assert rig.mind.hands.offer(state="IDLE", pressure=0.0,
                                 user_present=False).reason
+
+
+# --- a restart: the mind starts before her hands do (SPEC §26.3) -------------------
+
+def rig_mid_spawn(cfg, vault, **extra):
+    """Her hands configured and granted, the tool server still coming up: the
+    runner is not on the brain yet and discovery has not answered."""
+    rig = rig_with_hands(cfg, vault, **extra)
+    rig.mind.brain.set_tools(None, [])
+    settled = asyncio.Event()
+    rig.mind.set_hands_boot(settled)
+    return rig, settled
+
+
+def first_tick_offer(rig):
+    """Stand in for `tick` and record what the first one would have been
+    offered, then stop the loop — the offer is the thing under test."""
+    seen = []
+
+    async def tick():
+        seen.append(rig.mind.hands.offer(state="DORMANT", pressure=0.0,
+                                         user_present=False))
+        raise asyncio.CancelledError
+    rig.mind.tick = tick
+    return seen
+
+
+async def test_hands_on_their_way_are_starting_not_absent(cfg, seeded_vault):
+    """The trace said "no tool server is running" on the first tick after
+    every restart, about a server that was eighteen seconds from ready."""
+    rig, settled = rig_mid_spawn(cfg, seeded_vault)
+    offer = rig.mind.hands.offer(state="DORMANT", pressure=0.0,
+                                 user_present=False)
+    assert not offer and offer.reason == "her hands are still starting"
+
+    settled.set()                              # discovery answered: it failed
+    offer = rig.mind.hands.offer(state="DORMANT", pressure=0.0,
+                                 user_present=False)
+    assert offer.reason == "no tool server is running"
+
+
+async def test_the_first_tick_waits_for_her_hands_to_arrive(
+        cfg, seeded_vault, monkeypatch):
+    rig, settled = rig_mid_spawn(cfg, seeded_vault)
+    monkeypatch.setattr(rig.clock, "sleep", Clock().sleep)  # a wait that waits
+    seen = first_tick_offer(rig)
+    task = asyncio.create_task(rig.mind.run())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert seen == [], "the first tick must not appraise before discovery answers"
+
+    rig.mind.brain.set_tools(rig.runner, [])   # _start_tools wires, then settles
+    settled.set()
+    try:
+        await asyncio.wait_for(task, timeout=5)
+    except asyncio.CancelledError:
+        pass
+    assert "write_note" in seen[0].tools
+
+
+async def test_a_hung_spawn_does_not_stop_her_heart(cfg, seeded_vault, caplog):
+    """The wait is bounded: past it the tick goes ahead handless, and says why."""
+    rig, _ = rig_mid_spawn(cfg, seeded_vault)
+    seen = first_tick_offer(rig)
+    before = rig.clock.now()
+    with caplog.at_level(logging.WARNING, logger="mind.loop"):
+        try:
+            await rig.mind.run()
+        except asyncio.CancelledError:
+            pass
+    assert rig.clock.now() - before == mind_loop.HANDS_BOOT_WAIT_S
+    assert seen[0].reason == "her hands are still starting"
+    assert "has not answered" in caplog.text
+
+
+async def test_a_character_without_hands_does_not_wait_for_them(
+        cfg, seeded_vault):
+    rig, _ = rig_mid_spawn(cfg, seeded_vault)
+    rig.mind.set_hands_enabled(False)
+    seen = first_tick_offer(rig)
+    before = rig.clock.now()
+    try:
+        await rig.mind.run()
+    except asyncio.CancelledError:
+        pass
+    assert rig.clock.now() == before
+    assert len(seen) == 1
 
 
 # --- the pieces, unit-wise --------------------------------------------------------------
@@ -654,3 +778,76 @@ async def test_a_held_picture_is_never_let_go_of_quietly(cfg, seeded_vault):
         "the picture was let go of quietly — this is the whole failure"
     assert goal.id in {g.id for g in holding} or any(
         g.provenance.startswith("followup:") for g in holding)
+
+
+async def test_a_parked_promise_does_not_park_the_picture_with_it(
+        cfg, seeded_vault):
+    """The exit her own promise actually took, and the one the rule missed.
+
+    `g-6233dc189e71` — "Send the promised near-nude selfie … once the user
+    answers the framing question" — is `single-minded`, `steps: 3`, `waiting`.
+    It never reaches the let-go branch (that is `open-minded` only) and
+    `reconsider` never sweeps it (same reason), so with the picture landed on
+    it, it parks at the horizon holding a finished photograph no `task` goal
+    can send, wakes twelve hours later, and parks again. Found by
+    `scripts/live_check.py`, which drove the real lab and watched it happen.
+    """
+    rig = rig_with_hands(cfg, seeded_vault,
+                         *["think nothing more I can do from here."] * 6,
+                         allow="", mind_goal_max_steps=1)
+    goal = rig.mind.goals.add(
+        "send the one I promised once he answers", kind="task", priority=0.95,
+        commitment="single-minded", provenance="promise:her-own-words",
+        meta={"product": {"image_url": SHOT, "selfie_id": "e3110ba4",
+                          "detail": "the window seat, the lamp on the left"}})
+
+    await work(rig)
+
+    parked = rig.mind.goals.get(goal.id)
+    assert parked.state == "waiting", \
+        f"this test is about the parked exit and she took another: {parked.state}"
+    followup = next((g for g in rig.mind.goals.all()
+                     if g.provenance == f"followup:{goal.id}"), None)
+    assert followup is not None, \
+        "she parked holding the picture and nothing was filed to send it"
+    assert followup.kind == "reach_out"
+    assert followup.product["image_url"] == SHOT
+    assert parked.meta.get("offered") == followup.id, \
+        "the goal that made it should say where the picture went"
+
+
+async def test_the_picture_is_handed_on_once_however_many_exits_it_takes(
+        cfg, seeded_vault):
+    """Parked, sent, woken, finished — and not sent a second time.
+
+    Every way out of a goal files the follow-up now, and one goal can take
+    more than one of them. `already_carrying` dedupes on provenance but only
+    across *open* goals, so once Gate 2 has delivered the picture and closed
+    the errand, nothing would stop the next exit filing another one.
+    """
+    rig = rig_with_hands(cfg, seeded_vault,
+                         "think nothing more I can do from here.",
+                         "think that's it — goal complete.",
+                         *["think nothing more."] * 4,
+                         allow="", mind_goal_max_steps=1)
+    goal = rig.mind.goals.add(
+        "send the one I promised once he answers", kind="task", priority=0.95,
+        commitment="single-minded", provenance="promise:her-own-words",
+        meta={"product": {"image_url": SHOT, "selfie_id": "e3110ba4"}})
+
+    await work(rig)                                   # …parks, and files one
+    heir = next(g for g in rig.mind.goals.all()
+                if g.provenance == f"followup:{goal.id}")
+    rig.mind.goals.set_state(heir.id, "done")         # …Gate 2 sent it
+
+    # …the wake lands (`acts.wake_goal`) and this time she finishes.
+    rig.mind.goals.update(goal.id, state="active")
+    rig.mind.considered.pop(goal.id, None)
+    await work(rig)
+
+    assert rig.mind.goals.get(goal.id).state == "done"
+    heirs = [g for g in rig.mind.goals.all()
+             if g.provenance == f"followup:{goal.id}"]
+    assert len(heirs) == 1, \
+        f"the same photograph was filed to be sent {len(heirs)} times: " \
+        f"{[(g.id, g.state) for g in heirs]}"

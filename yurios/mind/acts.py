@@ -36,6 +36,30 @@ ANNOUNCE_CUE = (
     "((The timer for “{label}” just finished. Tell {user} it's done — one "
     "short, warm spoken line, nothing else.))")
 
+#: The same promise, kept late — a timer set before a restart and restored off
+#: the board (§7.5). She must not call it punctual: "just finished" about a
+#: countdown that ended in the night is the one thing that would make the
+#: whole feature read as broken rather than as diligent.
+LATE_ANNOUNCE_CUE = (
+    "((The timer for “{label}” finished {ago}, while you were away — it's "
+    "only reaching {user} now. Tell them it's done and that you're late with "
+    "it, without making a production of the apology — one short, warm spoken "
+    "line, nothing else.))")
+
+#: Under this a timer is simply "finished": the poll runs a minute apart and
+#: the announcement may queue a while for somebody to tell, so a small gap is
+#: the ordinary path and not a lateness worth narrating.
+LATE_ANNOUNCE_AFTER_S = 300.0
+
+
+def _ago(seconds: float) -> str:
+    """How long ago, in the roundness a person would actually say it."""
+    if seconds < 5400:                                  # under an hour and a half
+        return f"about {max(1, round(seconds / 60))} minutes ago"
+    if seconds < 79200:                                 # under about a day
+        return f"about {round(seconds / 3600)} hours ago"
+    return f"about {max(1, round(seconds / 86400))} days ago"
+
 SELF_TALK_CUES = (
     "((It's been quiet for a while. Murmur one short line to yourself about "
     "the rain on the window — a private thought said softly aloud, not "
@@ -206,33 +230,46 @@ async def promise_review(loop, offer=None) -> tuple[dict, dict, list[str]]:
 
 
 async def announce(loop) -> tuple[dict, dict, list[str]]:
-    """A landed timer — a promise, so it queues until deliverable (the
-    Build #4 rule, kept verbatim).
+    """A landed timer — a promise, so it is delivered, not dropped (SPEC §7.5).
 
     Voice injectors are only the `/ws/voice` socket. A muted text room and
     the terminal never attach one, but they *are* looking (`hub.viewers`).
     Speak first; if that finds no mouth, post the line to chat the same way
-    a SPEAK reach-out does when the room has no audio.
+    a SPEAK reach-out does when the room has no audio. An empty house still
+    gets the line, stamped `unheard`, so the inbox and the doorbell carry it
+    instead of the tick re-queuing it until someone walks in.
     """
     t = loop._pending_announce[0]
     loop.controller.set_expression("surprised", 0.6, reset_ms=4000)
-    cue = ANNOUNCE_CUE.format(label=t.get("label", "your timer"),
-                              user=loop.cfg.user_name)
+    late = float(t.get("late_s") or 0.0)
+    if late >= LATE_ANNOUNCE_AFTER_S:
+        cue = LATE_ANNOUNCE_CUE.format(label=t.get("label", "your timer"),
+                                       user=loop.cfg.user_name, ago=_ago(late))
+    else:
+        cue = ANNOUNCE_CUE.format(label=t.get("label", "your timer"),
+                                  user=loop.cfg.user_name)
     with correlate.scope(kind=correlate.AMBIENT):
         spoken = await loop.speak(cue)
     if spoken:
         loop._pending_announce.pop(0)
         return ({"what": "speak", "result": "announced the timer"}, {},
                 [f"told them the “{t.get('label')}” timer finished"])
-    if loop.hub.viewers:
-        text = await loop._compose(cue)
-        if text:
-            loop.post_message("assistant", text, proactive=True)
-            loop._pending_announce.pop(0)
-            return ({"what": "speak", "result": "announced the timer"}, {},
-                    [f"told them the “{t.get('label')}” timer finished"])
-    return ({"what": "speak", "result": "announce queued (nobody to tell)"},
-            {}, [])
+    text = await loop._compose(cue)
+    if not text:
+        # Only a failed compose lands here now — an empty house is delivered
+        # below — so the trace must not say nobody was home.
+        return ({"what": "speak", "result": "announce queued (no line composed)"},
+                {}, [])
+    # A viewer gets the line in the open room. An empty house still gets it
+    # as `unheard` — inbox and doorbell — so the promise does not sit on
+    # the tick for hours (SPEC §7.5).
+    unheard = not loop.hub.viewers
+    loop.post_message("assistant", text, proactive=True, unheard=unheard)
+    loop._pending_announce.pop(0)
+    return ({"what": "speak",
+             "result": "announced the timer (unheard)" if unheard
+                       else "announced the timer"}, {},
+            [f"told them the “{t.get('label')}” timer finished"])
 
 
 async def self_talk(loop) -> tuple[dict, dict, list[str]]:

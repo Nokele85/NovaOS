@@ -21,17 +21,17 @@ never a crash, and never silence about a promise she made.
 ## Choosing a backend
 
 ```ini
-SELFIE_BACKEND=openrouter         # openrouter | diffusers | krea2 | comfyui | mock | off
+SELFIE_BACKEND=off                # openrouter | diffusers | krea2 | comfyui | mock | off
 ```
 
 | Backend | Where it renders | Needs |
 |---|---|---|
-| **`openrouter`** *(default)* | hosted — the GPU stays free for her voice | `OPENROUTER_API_KEY` |
+| **`off`** *(default)* | no camera at all | — |
+| `openrouter` | hosted — the GPU stays free for her voice | `OPENROUTER_API_KEY` |
 | `diffusers` | **your** GPU, in-process: an SDXL checkpoint | `.[forge-local]` + a checkpoint |
 | `krea2` | **your** GPU, in-process: a Krea 2 transformer, INT4 | `.[forge-krea2]` + a checkpoint + HF access |
 | `comfyui` | remote ComfyUI, typically the gaming PC: Krea2 graph | LAN ComfyUI with the configured model files |
-| `mock` | deterministic placeholder cards | nothing — keyless, offline |
-| `off` | no camera at all | — |
+| `mock` | deterministic placeholder cards | nothing — keyless, offline. Only when this name is set |
 
 With `SELFIE_BACKEND=off` neither tool is advertised to the model: no hand, rather than a dead one.
 
@@ -61,11 +61,17 @@ SELFIE_COMFY_TRIGGER=
 The backend uses only the ComfyUI API and the generic Forge types. It does not
 import Rook code, memory, database, or runtime state.
 
-**Any backend that can't run degrades to `mock` with one loud WARNING** — no key, missing
-dependencies, a missing checkpoint, or no access to a gated repo. She keeps working and
-`/api/health` reports the truth (`"mock (no key — placeholder)"`).
+**A backend that can't run is never swapped for `mock`** — no key, missing dependencies, a
+missing checkpoint (say, on a drive that isn't mounted), or no access to a gated repo. Boot logs
+one loud WARNING and `/api/health` reports the truth (`"diffusers (unavailable — its checkpoint
+isn't there (…))"`). Each shot she takes meanwhile fails with a quiet note in the chat saying why,
+rather than arriving as a placeholder card. The camera asks again before every shot, so fixing
+the cause — mounting the drive, setting the key — brings it back without a restart. `mock` only
+renders when `SELFIE_BACKEND=mock` asks for it. The same holds for `comfyui`: a gaming PC
+that is off at boot means shots fail until ComfyUI answers again, not placeholder cards until
+the next restart.
 
-## OpenRouter (the default)
+## OpenRouter
 
 ```ini
 SELFIE_BACKEND=openrouter
