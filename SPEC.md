@@ -2156,6 +2156,20 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   desk file: clipping the catalog to a sentence is the same failure as truncating the tool, one
   tick later. The horizon is bounded by `MIND_GOAL_MAX_STEPS`
   (`meta.steps`), after which the goal waits or the commitment strategy lets it go.
+- §22.3a **A step that reads gets what it read.** `list_notes` was the first catalog to be kept
+  whole; a read is the other. The desk line clipped every result to 160 characters, and that line
+  was the only way a result reached the next step — so `read_skill` returned the skill's name and
+  the first words of its description and nothing of the method. She opened her own Elecrow skill
+  seven times in three days, each time looking for one parameter name it held, and never saw a
+  line of its body; guessing `app=` for `name=` then cleared the autostart she was trying to set.
+  A read (`read_skill`, `read_note`, `device_read_app`) **MUST** therefore reach the goal's next
+  step whole, up to a bound (16,000 characters), as its own block and not on the desk: the desk
+  keeps the one-line trail, because a file that grew by a whole skill each time she read it would
+  soon be nothing but skills. The block is spent by that next step, after its call — not when the
+  context is assembled, which is also how a page shows a step — and it **MUST** survive a restart,
+  since steps are an hour apart. The conversational path had the same hole one layer up: the
+  Guard's 600-character result cap applied to `read_skill` and `device_read_app` as to any fact,
+  and those two **MUST** take the catalog bound instead, like `read_note`.
 - §22.4 **A working step gets the same context as a conversational turn.** The desk digest, the
   skills catalog, the situation, the durable facts, her other open goals — **and who she is**: the
   identity blocks of §7.1 (voice law, persona backbone, scenario, `USER.md`), rendered by

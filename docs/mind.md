@@ -420,6 +420,14 @@ when-to-reach-for-it — and the body loads only once she has decided this is th
 calls for, through `read_skill`. Twenty skills cost twenty lines of context until one is used. She
 can write her own with `write_skill`; you can drop them in by hand.
 
+**What she reads, she gets whole.** A skill is read to be followed, so `read_skill` — and
+`read_note` and `device_read_app` alongside it — reaches her in full, up to about 16,000
+characters, both when she reads it talking to you and when she reads it working alone. Alone,
+the whole text is handed to the *next* step of that goal once, and her desk keeps only a
+one-line note that she read it. Until this was so, a read reached a working step as its first
+160 characters: she opened her own board skill seven times in three days, looking for one
+parameter name near the end, and saw its title and half a sentence every time. (SPEC §22.3a)
+
 Both live inside the Vault and travel when you copy her folder, but only skills are **versioned**.
 The desk is deliberately not: scratch churns, and a draft rewritten four times while she works
 something out would be four commits of a diff nobody reads — the Vault's `git log` is the diary of

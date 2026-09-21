@@ -31,6 +31,15 @@ from .util import iso_of
 
 log = logging.getLogger("mind.goalwork")
 
+#: Hands whose result *is* the thing she reached for (SPEC §22.3a). Reduced to
+#: the 160-character desk line, a read gave her the header and nothing else:
+#: she opened her own skill for the Elecrow board seven times in three days and
+#: saw only its name and the first words of its description every time.
+READING_HANDS = frozenset({"read_skill", "read_note", "device_read_app"})
+#: How much of a read rides into the next step — a long skill or an app file,
+#: well inside a working step's context, never a whole book.
+READ_CARRY_CHARS = 16_000
+
 
 
 def desk_path(loop, goal: Goal) -> str:
@@ -192,6 +201,13 @@ def context(loop, goal: Goal) -> str:
     desk = desk_read(loop, goal)
     if desk.strip():
         parts.append("WHAT YOU HAVE ALREADY WORKED OUT ON THIS\n\n" + desk.strip())
+    carried = loop.just_read.get(goal.id)
+    if carried:
+        parts.append(
+            f"WHAT YOU READ LAST STEP — {carried.get('tool')} "
+            f"{carried.get('args') or ''}, the whole of it. You have it now; "
+            "work from it rather than reading it again.\n\n"
+            + str(carried.get("text", "")))
     try:
         parts.append("THE SITUATION RIGHT NOW\n\n" + loop.world.situation())
     except Exception:  # noqa: BLE001
@@ -434,6 +450,13 @@ async def tool_step(loop, goal: Goal, intent,
     # happened to her rather than steps she took — and she re-does them.
     why = (intent.text or "").strip()
     desk_write(loop, goal, f"{why}\n\n{note}" if why else note)
+    # A read is the other catalog case, and the note is the wrong place for
+    # it: the desk keeps its one-line trail, and the whole text rides into the
+    # next step of this goal once (SPEC §22.3a).
+    if verdict == "ok" and intent.tool in READING_HANDS:
+        loop.just_read[goal.id] = {"tool": intent.tool, "args": args,
+                                   "at": iso_of(loop.clock.now()),
+                                   "text": result[:READ_CARRY_CHARS]}
     # The trace says what `calls.jsonl` says (§26.2): a step whose call
     # failed is still a step, but it is not an `ok` one.
     return ({"tool": intent.tool, "verdict": verdict,
@@ -483,6 +506,9 @@ async def goal_work(loop, goal: Goal,
             {"role": "system", "content": work_system(loop, goal, offer, last)},
             {"role": "user", "content": context(loop, goal)}],
             soul=True)
+    # What she read last step has now been in front of her once; spent here,
+    # after the call, because `context()` is also how the page shows a step.
+    loop.just_read.pop(goal.id, None)
 
     intent = parse_intent(reply, allowed=tuple(offer.tools) if offer else ())
     used: dict = {}

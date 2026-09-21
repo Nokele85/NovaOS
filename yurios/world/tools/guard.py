@@ -28,6 +28,12 @@ RESULT_MAX_CHARS = 600      # a tool result is a fact for her to speak to, not a
 RESULT_LIMITS = {
     "read_note": 5_000,
     "list_notes": 5_000,
+    # A skill is read so it can be followed, and an app so it can be fixed;
+    # 600 characters of either is the header and nothing else (SPEC §22.3a).
+    # Her Elecrow skill is 11 KB: she opened it again and again and never got
+    # past its description.
+    "read_skill": 16_000,
+    "device_read_app": 16_000,
 }
 
 

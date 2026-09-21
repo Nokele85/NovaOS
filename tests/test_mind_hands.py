@@ -204,6 +204,68 @@ async def test_a_list_notes_catalog_is_kept_whole_on_the_goal_desk(
     assert "count" in desk
 
 
+async def test_a_skill_she_reads_reaches_her_next_step_whole(cfg, seeded_vault):
+    """§22.3a, found live: every read reached the next step as the 160-char desk
+    line — her Elecrow skill's name and the first words of its description.
+    She read it seven times in three days looking for one parameter name, the
+    last line of a body she never saw."""
+    body = ("# Dein Board\n\n" + "Ein ganzer Absatz über das Board. " * 300
+            + "\n\nAutostart: device_set_autostart(name=\"warm_pad\", confirm=true)")
+    skill = json.dumps({"name": "elecrow-playground",
+                        "description": "when the board should show something",
+                        "instructions": body})
+    rig = rig_with_hands(
+        cfg, seeded_vault,
+        'use read_skill {"name": "elecrow-playground"}',
+        "think now I have the parameter name",
+        "think and on from there",
+        allow="read_skill",
+        tools=FakeToolRunner(results={"read_skill": skill}))
+    goal = rig.mind.goals.add("set the autostart", kind="task", priority=0.95)
+    utility = rig.mind.brain.state.utility
+
+    await work(rig, ticks=3)
+    steps = [call[1]["content"] for call in utility.calls
+             if "advancing one of your own goals" in call[0]["content"].lower()]
+    assert len(steps) == 3
+    assert "WHAT YOU READ LAST STEP" not in steps[0]
+    # the step after the read has all of it, down to the last line …
+    assert "WHAT YOU READ LAST STEP" in steps[1]
+    assert 'device_set_autostart(name=\\"warm_pad\\"' in steps[1]
+    # … and the one after that does not: it was spent, not repeated forever
+    assert "WHAT YOU READ LAST STEP" not in steps[2]
+    # the desk keeps its one-line trail; it did not swallow the skill
+    desk = rig.mind.vault.read(f"workspace/goals/{goal.id}.md")
+    assert "reached for read_skill" in desk and len(desk) < 2_000
+
+
+async def test_a_read_survives_a_restart_between_steps(cfg, seeded_vault):
+    """Steps are an hour apart; a restart in between used to cost the read."""
+    rig = rig_with_hands(
+        cfg, seeded_vault, 'use read_note {"path": "notes/plan.md"}',
+        allow="read_note",
+        tools=FakeToolRunner(results={"read_note": "the whole plan, every line"}))
+    goal = rig.mind.goals.add("follow the plan", kind="task", priority=0.95)
+    await work(rig)
+    rig.mind._persist()
+    state = json.loads(rig.mind.state_path.read_text())
+    assert state["just_read"][goal.id]["text"] == "the whole plan, every line"
+    # a goal that is no longer open is not carried
+    rig.mind.goals.update(goal.id, state="done")
+    rig.mind._persist()
+    assert goal.id not in json.loads(rig.mind.state_path.read_text())["just_read"]
+
+
+def test_a_read_in_conversation_is_not_cut_to_a_fact():
+    """§22.3a, the conversational half: the Guard's 600-character cap is for a
+    fact to speak to; a skill or an app is read to be followed or fixed."""
+    from yurios.world.tools.guard import Guard, RESULT_MAX_CHARS
+    long = "x" * 12_000
+    assert Guard.truncate(long, tool="read_skill") == long
+    assert Guard.truncate(long, tool="device_read_app") == long
+    assert len(Guard.truncate(long, tool="web_search")) == RESULT_MAX_CHARS
+
+
 async def test_the_same_call_is_not_re_dispatched_every_tick(cfg, seeded_vault):
     """`Guard.turn()` is one dedupe scope per reply, and the mind has ticks."""
     line = 'use write_note {"path": "n.md", "text": "the same thing"}'

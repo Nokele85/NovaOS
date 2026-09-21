@@ -211,6 +211,13 @@ class MindLoop:
         # hourly consider cooldown cannot express, and a restart that forgot it
         # would quietly turn a scheduled follow-up into an hourly one.
         self.wakeups: dict = st.get("wakeups", {})
+        # goal id -> the whole of what its last step read (SPEC §22.3a), spent
+        # by that goal's next step. Kept across a restart for the same reason
+        # as `wakeups`: steps are an hour apart, and a restart in between
+        # would hand her the 160-character stub again.
+        carried = st.get("just_read", {})
+        self.just_read: dict = {k: v for k, v in carried.items()
+                                if isinstance(v, dict)} if isinstance(carried, dict) else {}
         # Which day's reconsideration has already run (§22.2). Commitment
         # strategies used to apply only after a suspend gap — i.e. only when the
         # machine had slept two hours — so a goal that went stale while she was
@@ -770,12 +777,17 @@ class MindLoop:
     # ------------------------------------------------------------------- misc
 
     def _persist(self) -> None:
+        open_ids = {g.id for g in self.goals.open_goals()}
         write_json(self.state_path, {
             "bus_offset": self.offset, "interrupts": self.interrupts,
             "considered": self.considered, "last_tick_ts": self.last_tick_ts,
             "wakeups": self.wakeups, "reconsidered_on": self.reconsidered_on,
             "bootstrapped_on": self.bootstrapped_on,
             "promise_reviews": self.promise_reviews,
+            # only for goals still open: a read nobody will take up again is
+            # not worth carrying in a file rewritten every tick
+            "just_read": {gid: read for gid, read in self.just_read.items()
+                          if gid in open_ids},
             # the fingerprint ledger and the daily call count, beside
             # `interrupts` and rolling at the same local midnight (§26, amended)
             **self.hands.snapshot()})
