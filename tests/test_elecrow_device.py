@@ -195,6 +195,26 @@ def test_autostart_needs_the_users_yes(monkeypatch):
     assert out["status"] == "confirmation_required"
 
 
+def test_autostart_without_a_name_is_refused_not_cleared(monkeypatch):
+    """She sent app="warm_pad", confirm=true three times: the unknown argument
+    was dropped, name fell back to "", and "" cleared the autostart — each call
+    answering ok. A missing name is now a refusal that names the parameter."""
+    srv, mcp = _server()
+    monkeypatch.setattr(srv, "_device_call", lambda *a, **k: pytest.fail("touched the board"))
+    out = mcp._tool_manager.get_tool("device_set_autostart").fn(confirm=True)
+    assert out["ok"] is False and out["status"] == "name_required"
+    assert "name" in out["message"] and "app" in out["message"]
+
+
+def test_clearing_the_autostart_is_asked_for_by_name(monkeypatch):
+    srv, mcp = _server()
+    sent = []
+    monkeypatch.setattr(srv, "_device_call", lambda port, code, **k: sent.append(code) or {
+        "ok": True, "stdout": '{"autostart": null}'})
+    mcp._tool_manager.get_tool("device_set_autostart").fn(name="", confirm=True)
+    assert sent and "s['autostart'] = None" in sent[0][0]
+
+
 def test_board_output_is_redacted_before_it_leaves(monkeypatch, tmp_path):
     srv, _ = _server()
     secrets = tmp_path / "s.json"

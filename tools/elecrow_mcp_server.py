@@ -593,13 +593,24 @@ def _device_tools(mcp: FastMCP) -> None:
         return _device_call(port, [code])
 
     @mcp.tool()
-    def device_set_autostart(name: str = "", confirm: bool = False,
+    def device_set_autostart(name: str | None = None, confirm: bool = False,
                              port: str = "auto") -> dict:
-        """Choose the app that starts at power-up ("" = none). This changes how
-        the board boots, so it needs confirm=true after the user agreed."""
+        """Choose the app that starts at power-up: name="warm_pad" sets it,
+        name="" clears it. The parameter is `name` — there is no `app`. This
+        changes how the board boots, so it needs confirm=true after the user
+        agreed."""
         if not confirm:
             return {"ok": False, "status": "confirmation_required",
                     "message": "Changing the start-up app needs the user's yes; call again with confirm=true."}
+        if name is None:
+            # A missing name used to mean "clear": on 2026-09-19 she sent
+            # app="warm_pad" three times, the unknown argument was dropped, and
+            # each call cleared the autostart and answered ok. Clearing is now
+            # only ever what name="" asks for.
+            return {"ok": False, "status": "name_required",
+                    "message": 'Say which app: device_set_autostart(name="warm_pad", '
+                               'confirm=true). The parameter is `name`, not `app`. '
+                               'To clear the autostart, pass name="".'}
         value = check_app_name(name, allow_lib=False) if name else None
         code = ("import json, nova\n"
                 "s = nova.state()\n"
