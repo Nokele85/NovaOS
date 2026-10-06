@@ -762,7 +762,10 @@ def discover_promise_candidates(reply: str, user_msg: str) -> list[PromiseCandid
         for match in pattern.finditer(reply):
             if is_quoted(match.start()):
                 continue
-            if _CONDITIONAL.search(reply[:match.start()].rsplit("\n", 1)[-1]):
+            before = reply[:match.start()].rsplit("\n", 1)[-1]
+            if _CONDITIONAL.search(before):
+                continue
+            if before.rstrip()[-1:] in _QUOTE_OPEN:     # „ich meld mich" (§22.1g)
                 continue
             found.append((match.start(), match.group(1),
                           "promise:her-own-words", match.group(0), confidence))

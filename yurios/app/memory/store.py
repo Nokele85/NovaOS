@@ -250,9 +250,12 @@ class FileMemoryStore:
         text = (f"Abgeschlossene Geschichte von Nova und dem Nutzer. "
                 f"Titel: {title}. Thema: {theme}. Story-ID: {story_id}.\n"
                 f"{summary.strip()}\nVolltext: {source_path}")
+        # Off the loop, like every other embed: a host is one process holding
+        # every character, and the embedder answers in its own time.
+        embedding = (await asyncio.to_thread(self.embedder.embed, [text]))[0]
         self.index.upsert(
             id=f"story-{story_id}", kind="story", source_path=source_path,
-            source_span="1-end", text=text, embedding=self.embedder.embed([text])[0],
+            source_span="1-end", text=text, embedding=embedding,
             created_at=now.isoformat(), salience=1.25)
         return WriteResult(journal_path=rel, chunks_indexed=1,
                            user_md_ops=0, quarantined=0)

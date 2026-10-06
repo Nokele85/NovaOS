@@ -33,6 +33,7 @@ class Refusing:
 
         class Msg:
             content = '{"goal": null}'
+            reasoning_content = "is there a promise in this? no."
 
         class Choice:
             message = Msg()

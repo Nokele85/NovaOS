@@ -200,7 +200,7 @@ def test_goal_status_and_hard_limits_both_survive_after_history():
 
     final = prompt.messages[-1]["content"]
     assert "goal status, read after conversation history" in final
-    assert "system note — hard limits, read last" in final
+    assert "hard limits about you" in final and "read last:" in final
     assert final.index("goal status") < final.index("hard limits")
 
 

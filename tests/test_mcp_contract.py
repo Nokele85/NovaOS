@@ -740,8 +740,14 @@ async def test_the_minds_example_of_every_hand_matches_the_tool(tmp_path):
     async with create_connected_server_and_client_session(srv._mcp_server) as s:
         schemas = {t.name: set((t.inputSchema.get("properties") or {}))
                    for t in (await s.list_tools()).tools}
-    assert set(HANDS) <= set(schemas)
+    # This installation's board hands (`elecrow_*`, `device_*`) are served by a
+    # foreign MCP server (tools/elecrow_mcp_server.py, docs/tools.md), so the
+    # built-in server has no schema to hold their examples against.
+    foreign = set(HANDS) - set(schemas)
+    assert all(n.startswith(("elecrow_", "device_")) for n in foreign), foreign
     for name, hand in HANDS.items():
+        if name in foreign:
+            continue
         shown = set(json.loads(hand.args))
         assert shown <= schemas[name], f"{name}'s example names {shown - schemas[name]}"
         unshown = schemas[name] - shown

@@ -66,6 +66,7 @@ class _RT:
         self.signals = SimpleNamespace(post=lambda *a, **k: None)
         self.park_gate = SimpleNamespace(wait=self._open)
         self.uploads = None
+        self.stopping = asyncio.Event()
 
     async def _open(self):
         return None
