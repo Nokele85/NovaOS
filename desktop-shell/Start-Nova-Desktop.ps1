@@ -1,5 +1,5 @@
 param(
-  [string]$ServerUrl = 'https://rook.example.org/characters/nova/live2d?desktop=1',
+  [string]$ServerUrl = 'https://nova.example.org/characters/nova/live2d?desktop=1',
   [int]$Width = 280,
   [int]$Height = 500
 )
