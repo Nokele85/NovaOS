@@ -145,6 +145,9 @@ Rules:
   - If the user only asked a question or stated nothing durable about themselves,
     return {"ops": []}.
   - Ignore ephemeral chit-chat and roleplay stage directions.
+  - Every bullet is about the user. When the companion also appears in one,
+    it must be plain which of the two does what: say "the companion" for her
+    and never let one bullet switch subject halfway.
   - "text" is the bullet itself. Do not prefix it with "-" or any other marker.
 
 Return JSON, nothing else:

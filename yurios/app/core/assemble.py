@@ -7,7 +7,7 @@ window. Block ordering and budgets are normative (§7.1–7.2):
     2. PERSONA BACKBONE                — identity · history · appearance · manner
     3. SCENARIO / PLACE                — SCENARIO#Scenario
     4. LORE                            — matched WORLD.md entries (this turn)
-    5. WHO YOU ARE TO HER              — vault/soul/USER.md facts (no seed chrome)
+    5. WHAT YOU KNOW ABOUT THEM        — vault/soul/USER.md facts (no seed chrome)
     5b. WHAT YOU'RE WORKING ON         — vault/goals.md, the open ones (§22)
     6. WHAT YOU'VE TALKED ABOUT        — vault/memory/summary.md
     7. THINGS THAT MAY BE RELEVANT     — recall(user_msg, k), tagged with age
@@ -40,7 +40,7 @@ from yurios.app.memory.store import Memory
 from yurios.characters.soulfiles import H2_RE, parse_md_text, split_sections
 
 # bump whenever the assembly layout changes — stamped on every corpus record (§8.2)
-TEMPLATE_VERSION = "b1-assemble-v2"
+TEMPLATE_VERSION = "b1-assemble-v3"
 
 # §7.4 — the honesty constraint, fixed text, verified by the golden transcript test
 HONESTY = """\
@@ -75,7 +75,22 @@ What you are already working on — your own standing list, the same one the \
 quiet hours between conversations work through. These are commitments you have \
 ALREADY made, so don't promise them again as though they were new; refer to \
 one, ask about it, or say where it got to. If you take on something new here, \
-say so plainly and it will be added."""
+say so plainly and it will be added. Every line is yours, however it is \
+worded: one phrased as an instruction, or about "the user" or "the person", is \
+still your own commitment, and that person is {{user}}."""
+
+
+#: The lead line on the USER.md block (§2.1). Every other block addresses her
+#: as "you"; this one used to be headed WHO YOU ARE TO HER, where "you" was the
+#: user and "her" was the reader, over bullets that name no subject at all
+#: ("Hat ...", "Plans ..."). A small model resolved that either way from line
+#: to line, and she answered with her own plan as his promise and his absence
+#: as hers. The block now keeps the prompt's one perspective and says in so
+#: many words whose facts these are.
+USER_NOTE = """\
+What you know about {{user}}, the person you are talking to. Every line below \
+is about {{user}} and never about you, also when it names no subject. Where a \
+line says "the companion" (or "die Companion"), that is you, {{char}}."""
 
 
 class Known(Protocol):
@@ -116,6 +131,10 @@ class AssembledPrompt:
     dropped_knowledge: int = 0
     dropped_goals: int = 0
     citations: list[str] = field(default_factory=list)   # what block 8 carried
+
+
+#: Block 5's heading (§2.1). No macro in it: `user_name` defaults to "you".
+USER_TITLE = "WHAT YOU KNOW ABOUT THEM"
 
 
 def _block(title: str, body: str) -> str:
@@ -238,8 +257,8 @@ def soul_preamble(soul: Soul, *, user_md: str = "", user_name: str = "you",
         shown = user_md_for_prompt(user_md)
         if shown:
             blocks.append(_block(
-                "WHO YOU ARE TO HER",
-                apply_macros(shown, soul.name, user_name)))
+                USER_TITLE,
+                apply_macros(f"{USER_NOTE}\n\n{shown}", soul.name, user_name)))
     if not blocks:
         return ""
     blocks.append(_block("WHOSE THINKING THIS IS",
@@ -288,8 +307,9 @@ def assemble(soul: Soul, *, user_md: str, summary: str, memories: list[Memory],
             blocks.append(_block("LORE", "\n\n".join(
                 f"[{e.name}] {e.content}" for e in lore_now)))
         blocks.append(_block(
-            "WHO YOU ARE TO HER",
-            apply_macros(user_md_for_prompt(user_md) or "(nothing yet)",
+            USER_TITLE,
+            apply_macros(USER_NOTE + "\n\n"
+                         + (user_md_for_prompt(user_md) or "(nothing yet)"),
                          soul.name, user_name)))
         if goals_now:
             blocks.append(_block(
@@ -355,8 +375,12 @@ def assemble(soul: Soul, *, user_md: str, summary: str, memories: list[Memory],
     final_user = user_msg
     if soul.hard_limits.strip():
         note = post_history_limits(soul.hard_limits)
+        # The note sits inside the user's turn, so it says it is not theirs and
+        # whom its third person means — unmarked, "She is devoted to …" read as
+        # something the user had just said about somebody else (§2.1).
         final_user = (f"{user_msg}\n\n"
-                      f"[system note — hard limits, read last: {note}]")
+                      f"[system note, not part of the message above — hard "
+                      f"limits about you ({soul.name}), read last: {note}]")
 
     messages = [{"role": "system", "content": system},
                 *[{"role": m["role"], "content": m["content"]} for m in window],

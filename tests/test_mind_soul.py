@@ -203,7 +203,7 @@ def test_the_preamble_is_identity_and_nothing_turn_shaped(tmp_path):
     out = soul_preamble(soul, user_md=(vault / "soul" / "USER.md").read_text(),
                         user_name="Sam")
     assert "VOICE LAW" in out and "PERSONA BACKBONE" in out
-    assert "SCENARIO" in out and "WHO YOU ARE TO HER" in out
+    assert "SCENARIO" in out and "WHAT YOU KNOW ABOUT THEM" in out
     for absent in ("THINGS THAT MAY BE RELEVANT", "WHAT YOU'VE READ",
                    "THE HONESTY CONSTRAINT", "WHAT YOU'RE WORKING ON",
                    "EXAMPLE VOICE"):
@@ -218,7 +218,7 @@ def test_brief_drops_the_placing_blocks_and_keeps_the_person(tmp_path):
     user_md = (vault / "soul" / "USER.md").read_text()
     brief = soul_preamble(soul, user_md=user_md, user_name="Sam", full=False)
     assert "VOICE LAW" in brief and "PERSONA BACKBONE" in brief
-    assert "SCENARIO" not in brief and "WHO YOU ARE TO HER" not in brief
+    assert "SCENARIO" not in brief and "WHAT YOU KNOW ABOUT THEM" not in brief
     assert len(brief) < len(soul_preamble(soul, user_md=user_md, user_name="Sam"))
 
 
@@ -325,7 +325,7 @@ async def test_the_turn_prompt_does_not_move(tmp_path, cfg):
 
 
 def test_user_md_macros_are_applied_on_a_turn(tmp_path):
-    """Found live: WHO YOU ARE TO HER kept `{{user}}` in the heading because
+    """Found live: the USER.md block kept `{{user}}` in the heading because
     USER.md is read raw and assemble stuffed it in without apply_macros."""
     from yurios.app.core.assemble import assemble
     vault = _write_card(tmp_path / "yuri", "yuri")
@@ -340,7 +340,7 @@ def test_user_md_macros_are_applied_on_a_turn(tmp_path):
 
 def test_user_md_seed_chrome_does_not_enter_the_prompt(tmp_path):
     """YAML, the seed heading, and empty `_(…)_` slots are file scaffolding,
-    not facts about the user. They were landing in WHO YOU ARE TO HER."""
+    not facts about the user. They were landing in the USER.md block."""
     from yurios.app.core.assemble import assemble
     vault = _write_card(tmp_path / "yuri", "yuri")
     soul = SoulLoader(vault / "soul", user_name="Sam").load()
@@ -362,7 +362,7 @@ def test_user_md_seed_chrome_does_not_enter_the_prompt(tmp_path):
     assert "fresh card" not in block
     assert "unknown yet" not in block
     assert "Takes tea strong, no sugar." in block
-    assert "WHO YOU ARE TO HER" in block
+    assert "WHAT YOU KNOW ABOUT THEM" in block
 
 
 def test_hard_limits_fusion_stays_a_short_last_read_note(tmp_path):
@@ -380,7 +380,8 @@ def test_hard_limits_fusion_stays_a_short_last_read_note(tmp_path):
     out = assemble(soul, user_md="", summary="", memories=[], lore=[],
                    window=[], user_msg="hey", user_name="Sam")
     last = out.messages[-1]["content"]
-    assert last.startswith("hey\n\n[system note — hard limits, read last:")
+    assert last.startswith("hey\n\n[system note, not part of the message above — "
+                           f"hard limits about you ({soul.name}), read last:")
     assert last.endswith("]")
     note = last.split("read last:", 1)[1].strip().rstrip("]")
     assert len(note) <= POST_HISTORY_LIMIT + 2
@@ -388,3 +389,29 @@ def test_hard_limits_fusion_stays_a_short_last_read_note(tmp_path):
     assert "never \"an AI assistant" in last or "stays in character" in note
     # the user line itself is still the user's words
     assert last.split("[system note", 1)[0].strip() == "hey"
+
+
+def test_the_prompt_keeps_one_perspective(tmp_path):
+    """Found live (2026-10-06): the USER.md block was headed WHO YOU ARE TO HER
+    — "you" the user, "her" the reader — over bullets with no subject, in a
+    prompt that calls the reader "you" everywhere else. She gave back her own
+    plan as his promise. SPEC §2.1: the block says whose facts these are."""
+    from yurios.app.core.assemble import assemble
+    vault = _write_card(tmp_path / "yuri", "yuri")
+    soul = SoulLoader(vault / "soul", user_name="Sam").load()
+    soul.hard_limits = "- She is devoted to Sam.\n"
+    user_md = "## Ongoing\n\n- Plant, dass die Companion ihm etwas vorliest.\n"
+    out = assemble(soul, user_md=user_md, summary="", memories=[], lore=[],
+                   window=[], user_msg="hey", user_name="Sam",
+                   goals=["sich von allein bei der Person melden"])
+    assert "WHO YOU ARE TO HER" not in out.system
+    lead = out.system.split("## WHAT YOU KNOW ABOUT THEM", 1)[1].split("## Ongoing", 1)[0]
+    assert "about Sam and never about you" in lead
+    assert f"that is you, {soul.name}" in lead
+    goals = out.system.split("## WHAT YOU'RE WORKING ON", 1)[1]
+    assert "still your own commitment, and that person is Sam" in goals
+    last = out.messages[-1]["content"]
+    assert "not part of the message above" in last
+    assert f"about you ({soul.name})" in last
+    preamble = soul_preamble(soul, user_md=user_md, user_name="Sam")
+    assert "about Sam and never about you" in preamble

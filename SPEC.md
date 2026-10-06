@@ -163,7 +163,7 @@ reactive body (Part II gates who may edit it, §23).
 2. PERSONA BACKBONE       (CONSTITUTION#Identity/#History + PERSONA#Appearance/#Manner + @personality)
 3. SCENARIO / PLACE       (SCENARIO#Scenario)
 4. LORE (if fired)        (matched WORLD.md entries, keyword-triggered)
-5. WHO YOU ARE TO HER     (vault/soul/USER.md facts — not YAML, seed headings, or empty `_(…)_` slots)
+5. WHAT YOU KNOW ABOUT THEM (vault/soul/USER.md facts — not YAML, seed headings, or empty `_(…)_` slots)
 6. WHAT YOU'VE TALKED ABOUT (vault/memory/summary.md)
 7. THINGS THAT MAY BE RELEVANT (recall(user_msg, k), each tagged with age)
 8. WHAT YOU'VE READ       (knowledge.search(user_msg, k), each with its citation — §20.2)
@@ -176,6 +176,12 @@ followed by the last `RAW_WINDOW_TURNS` raw messages (default 6) and the new use
 history, so it is the last thing read before replying. The fused note **MUST** be a compact
 restatement (a short last-read reminder), not the full constitution section: fusing the
 verbatim bullets onto the user line made a one-word check-in look like a hundred-word ask.
+The system prompt addresses the character as "you" throughout, and no block may turn that
+round: block 5 **MUST** open with a line saying that every fact under it is about the user
+and that "the companion" in such a fact is the reader, and the fused hard-limits note **MUST**
+say that it is not part of the user's message and that its third person is the reader. Both
+are there because unmarked they were read either way from one line to the next, and she
+answered with her own plan as the user's promise.
 The raw window **MUST** stay small
 (long raw context degrades middle recall); the rolling summary carries older context
 cheaply. On overflow, **drop the examples first, then knowledge, then recalled memories, then
