@@ -56,6 +56,11 @@ def tool_rates(cfg: Config) -> dict[str, int]:
              "play_music": cfg.tool_rate_music}
     if cfg.story_enabled:
         rates["tell_story"] = cfg.tool_rate_story
+    if cfg.mind_enabled:
+        rates["create_goal"] = cfg.tool_rate_goal
+        # Not behind the camera: a picture a goal already holds is in the
+        # gallery whether or not the camera is on now (§18.2a).
+        rates["show_held_picture"] = cfg.tool_rate_goal
     if cfg.selfie_backend != "off":
         rates["take_selfie"] = cfg.tool_rate_selfie
         rates["show_picture"] = cfg.tool_rate_picture
@@ -133,6 +138,7 @@ def build_reading(rt) -> tuple[Researcher | None, str]:
     desk = Researcher(
         search, fetcher, clock=rt.clock,
         post=rt.post_message, speak=rt.speak_ambient,
+        max_calls=cfg.research_max_calls,
         knowledge=lambda: rt.mind.knowledge if rt.mind else None,
         notify=rt.hub.publish, signal=rt.post_signal)
     return desk, cfg.search_backend
@@ -183,7 +189,8 @@ def build_brain(rt, *, chat_model, utility_model, embedder) -> ToolBrain:
     brain = ToolBrain.build(
         cfg, guard=rt.guard, timers=rt.timers,
         controller=rt.controller, selfies=rt.selfies,
-        research=rt.research, stories=getattr(rt, "stories", None), chat_model=chat_model,
+        research=rt.research, stories=getattr(rt, "stories", None),
+        post=rt.post_message, chat_model=chat_model,
         utility_model=utility_model, embedder=embedder)
     if ours:
         if getattr(embedder, "ready", True):

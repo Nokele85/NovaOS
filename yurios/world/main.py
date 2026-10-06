@@ -22,6 +22,7 @@ import asyncio
 import datetime
 import json
 import logging
+import re
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -36,6 +37,7 @@ from yurios.desktop.voice.emotion import speakable
 from yurios.desktop.voice.fillers import FillerBank
 from yurios.desktop.voice.ws_limits import VoiceConnectionLimiter, uvicorn_ws_options
 
+from yurios.mind.hands import permits
 from yurios.mind.loop import MindLoop
 from yurios.mind.promptlog import PromptLog
 from yurios.mind.signals import SignalBus
@@ -47,13 +49,14 @@ from .boot import BootBoard
 from .brain_protocol import AutonomousBrain
 from .channels.manager import ChannelManager
 from yurios.app.conversation import ConversationLog
+from yurios.app.corpus import CorpusLogger, UnratableLine
 from ..kernel.clock import Clock
 from .config import Config
 from . import runtime
 from .context import ContextMeter
 from ..kernel.hub import EventHub
 from .inbox import Inbox
-from .turns import TextTurns
+from .turns import RuntimeStopping, TextTurns
 from .selfies import SelfieLab
 from .qwenvoice import QwenVoice
 from .stories import StoryLab
@@ -69,6 +72,60 @@ WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
 DIST_DIR = WEB_DIR / "dist"   # Vite build output (cd web && npm run build); served at / (§3)
 #: How much of the conversation the in-memory ring holds (SPEC §2.6).
 RING_SIZE = 200
+#: Correlate kinds whose tool calls are made in something she is saying to you
+#: — a reply, a greeting, a murmur, a reach-out. Anything else is her working on
+#: her own, and its notice is drawn quieter (`post_tool_notice`).
+REPLY_ORIGINS = frozenset({"chat_turn", "greeting", "ambient", "compose"})
+
+#: The argument that says what a call was *about*, in the order worth showing.
+_NOTICE_ARGS = ("path", "query", "url", "label", "topic", "name", "surface",
+                "text", "look", "subject", "folder", "action")
+
+
+#: A page's place in its note, from the head of a `read_note` answer — which
+#: is all an audit line keeps (200 characters), and why `read_note` puts its
+#: line numbers ahead of its text.
+_PAGE_FIELD = re.compile(r'"(start_line|end_line|line_count)":\s*(\d+)')
+
+
+def _lines_read(args: object, result: str) -> str:
+    """`lines 49–142 of 206` — what a `read_note` covered, so three reads of
+    one long note look like reading on rather than reading the same thing
+    three times. The answer says what was served; the request is the fallback,
+    for a refused read or a head too long to reach the numbers."""
+    got = {k: int(v) for k, v in _PAGE_FIELD.findall(result or "")}
+    if {"start_line", "end_line", "line_count"} <= set(got) and got["end_line"]:
+        return f"lines {got['start_line']}–{got['end_line']} of {got['line_count']}"
+    if not isinstance(args, dict):
+        return ""
+    try:
+        start, end = int(args.get("start_line") or 1), int(args.get("end_line") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if end:
+        return f"lines {start}–{end}"
+    return f"from line {start}" if start > 1 else ""
+
+
+def tool_notice_text(tool: str, args: object, result: str = "") -> str:
+    """`read_note · goals/g-1.md` — the tool and the one argument that says what
+    it touched, short enough for a chip. A read says which lines as well."""
+    detail = ""
+    if isinstance(args, dict):
+        for key in _NOTICE_ARGS:
+            value = args.get(key)
+            if value not in (None, ""):
+                detail = " ".join(str(value).split())
+                break
+        if not detail and args.get("minutes") is not None:
+            detail = f"{args['minutes']} min"
+    if len(detail) > 60:
+        detail = detail[:59].rstrip() + "…"
+    if tool == "read_note" and (lines := _lines_read(args, result)):
+        detail = f"{detail} · {lines}" if detail else lines
+    return f"{tool} · {detail}" if detail else tool
+
+
 #: What one `GET /api/history` hands a page that asks for no particular window.
 HISTORY_PAGE = 100
 #: The most one call may ask for — a client cannot turn this route into a dump.
@@ -112,15 +169,21 @@ class Runtime:
         # line, and keeping two files in step was a bug waiting to happen.
         self.chatlog = ConversationLog(cfg.vault_dir)
         self.transcript: list[dict] = self.chatlog.tail(RING_SIZE)
+        # …and the corpus her replies are filed in, for the one thing a room
+        # writes there: what you thought of a reply (SPEC §37). The brain keeps
+        # its own handle for the turns; both only ever append.
+        self.corpus = CorpusLogger(cfg.corpus_dir)
         # how full her context window is (SPEC §11): the masthead readout, fed by
         # the chat provider on every model pass and published as a sticky
         # `context` event. CONTEXT_LENGTH names the initial ceiling; a direct GGUF
         # provider or LM Studio probe replaces it with the window actually in use.
         self.context = ContextMeter(self.hub, limit=cfg.context_length,
-                                    reserve=cfg.max_reply_tokens,
+                                    reply_max=cfg.max_reply_tokens,
                                     trace_dir=cfg.trace_dir,
                                     max_trace_bytes=cfg.mind_trace_max_bytes)
         self.stopping = asyncio.Event()        # ends open SSE streams on shutdown
+        self._live_tasks: set[asyncio.Task] = set()
+        self._committing: set[asyncio.Task] = set()   # live, and past her reply
         # the boot log the UI shows while she wakes (SPEC §6.4). Voice services
         # are declared here and resolved on the warm-up thread; tools/mind on
         # the event loop (start_async) — tools without holding the rest of
@@ -133,6 +196,7 @@ class Runtime:
         # …with its pending countdowns read back off disk (§7.5): at a
         # ceiling of a day, a timer has a whole night to be restarted through.
         self.timers = TimerBoard(self.clock, vault=cfg.vault_dir)
+        self.timers.on_change = self._publish_timers
         # Pictures *in* (SPEC §35): the shelf a photo you send her lands on,
         # and whether the model she is speaking through can be sent one at all.
         # The store is built unconditionally and creates nothing until the first
@@ -216,6 +280,13 @@ class Runtime:
             # Is her body on a screen right now? (SPEC §2.5) The hub knows: the
             # sanctuary and the Live2D room count, the text room does not.
             self.brain.set_body_probe(lambda: self.hub.body_viewers > 0)
+            # One rule for every call she makes (§26.1): the house switch, her
+            # own, and the allowlist — a reply's hands and a tick's are the
+            # same hands.
+            self.brain.set_hands_policy(self.hands_permit)
+        # Every call, from every door, is a small line in the chat (§7.3).
+        self.guard.observe(self.post_tool_notice)
+        self.guard.observe(self.tell_mind_of_call)
         self._tool_runner = tool_runner        # injected, or built at startup
         # Set once tool discovery has an answer — wired, failed, or never
         # started. The mind's first tick waits on it (bounded) so a restart's
@@ -235,6 +306,7 @@ class Runtime:
         # because the host seeds it from her record before there is a mind to
         # tell, and because a revoke has to survive the mind being rebuilt.
         self._hands_granted = True
+        self._tools_detail = ""        # the boot panel's tools line, once discovered
         # the channel seam (SPEC §10.5): one text-turn runner shared by every
         # non-voice medium, and the manager that runs the in-process channel
         # adapters (Telegram now; WhatsApp / a game-engine NPC API later).
@@ -284,6 +356,10 @@ class Runtime:
     #: A page that was here this recently did not leave. SSE reconnects and
     #: room switches mint a new session_id; without this they greet again.
     GREET_REJOIN_S = 60.0
+
+    def _publish_timers(self) -> None:
+        """Keep every room's pending-countdown view current (SPEC §7.5, §10)."""
+        self.hub.publish("timers", self.timers.snapshot(), sticky="timers")
 
     def still_in_the_room(self) -> bool:
         """True when a greeting would be a reconnect, not an arrival (§9.8).
@@ -484,6 +560,11 @@ class Runtime:
             entry["session_id"] = session_id
         if corr_id:
             entry["corr_id"] = corr_id
+        if (drawn or {}).get("turn_id"):
+            # Filed before it was drawn — a voice reply persists before the
+            # socket posts it — so it can be rated from the moment it lands
+            # (SPEC §37.1). A text reply is the other order: `turn_filed`.
+            entry["rateable"] = True
         self.transcript.append(entry)
         del self.transcript[:-RING_SIZE]
         # …and the same entry to disk, so the column survives the next restart
@@ -500,6 +581,53 @@ class Runtime:
             # before the publish: the notification channel and an open page both
             # react to the event, and both want a badge that already exists.
             self.inbox.add(entry)
+        self.hub.publish("message", entry)
+        return entry
+
+    def hands_permit(self, tool: str) -> bool:
+        """May she use `tool` right now — in a reply, a greeting, a reach-out or
+        her own work? The one rule (SPEC §26.1), read live: the house switch,
+        her switchboard toggle, and `MIND_TOOL_ALLOWLIST`."""
+        return bool(self.cfg.mind_tools_enabled and self._hands_granted
+                    and permits(self.cfg, tool))
+
+    def tell_mind_of_call(self, line: dict) -> None:
+        """Every audit line, from both guards, to whichever mind is live now —
+        looked up per call, so a mind switched on later still hears replies'."""
+        if self.mind is not None:
+            self.mind.tool_called(line, talking=line.get("origin") in REPLY_ORIGINS)
+
+    def post_tool_notice(self, line: dict) -> dict | None:
+        """One audit line as a small notice in the chat (SPEC §7.3).
+
+        A row of its own, `role: "tool"`, so it lands in the column where the
+        call happened — above the reply it was made for, or on its own when she
+        was working alone — and survives a reload. It is never in a prompt's
+        window (only a turn admits a line to that, app/conversation.py), never
+        in the inbox, and the channels only forward `assistant` lines.
+        `background` is a call she made on her own rather than in something she
+        was saying: the page draws those quieter.
+        """
+        tool = str(line.get("tool") or "")
+        if not tool or tool.startswith("("):
+            return None                            # "(unparsed marker)" is not a call
+        verdict = str(line.get("verdict") or "")
+        entry: dict = {
+            "id": uuid.uuid4().hex[:8], "role": "tool",
+            "text": tool_notice_text(tool, line.get("args"),
+                                     str(line.get("result") or "")),
+            "ts": datetime.datetime.fromtimestamp(
+                self.clock.now()).isoformat(timespec="seconds"),
+            "tool": tool,
+            "verdict": verdict.split(":", 1)[0] or "ok",
+        }
+        if verdict.startswith("denied"):
+            entry["why"] = verdict.partition(":")[2].strip()
+        if line.get("origin") not in REPLY_ORIGINS:
+            entry["background"] = True
+        self.transcript.append(entry)
+        del self.transcript[:-RING_SIZE]
+        self.chatlog.add(entry)
         self.hub.publish("message", entry)
         return entry
 
@@ -528,8 +656,59 @@ class Runtime:
                 return {"messages": [], "has_more": False}
             entries = entries[:cut]
         limit = max(1, min(int(limit), HISTORY_MAX))
-        window = entries[-limit:]
+        window = self._with_ratings(entries[-limit:])
         return {"messages": window, "has_more": len(window) < len(entries)}
+
+    def _with_ratings(self, entries: list[dict]) -> list[dict]:
+        """Say which lines can be rated, and how (SPEC §37.1): a line of hers
+        with a corpus record behind it is `rateable`, and carries `thumbs` when
+        a rating stands on it. Copies — the ring's entries are the live ones."""
+        if not any(e.get("turn_id") for e in entries):
+            return entries
+        standing = self.corpus.standing()
+        out = []
+        for e in entries:
+            if e.get("turn_id") and e.get("role") == "assistant":
+                e = {**e, "rateable": True}
+                if (rating := standing.get(e["turn_id"])):
+                    e["thumbs"] = rating["thumbs"]
+            out.append(e)
+        return out
+
+    def turn_filed(self, message_id: str) -> bool:
+        """A reply already on the page now has its corpus record — the text
+        turn's order, where the stream ends and is drawn before the turn
+        persists. Says so on the bus, so every open room can offer the 👍/👎
+        on a line it drew a moment ago without a reload (SPEC §37.1)."""
+        row = self.chatlog.line(message_id)
+        if not row or not row.get("turn_id") or row.get("role") != "assistant":
+            return False
+        for e in self.transcript:
+            if e.get("id") == message_id:
+                e["rateable"] = True
+        self.hub.publish("rating", {"id": message_id, "thumbs": 0})
+        return True
+
+    def rate(self, message_id: str, thumbs: int) -> dict:
+        """What you thought of one of her replies (SPEC §37.2). By transcript
+        id, never by corpus id: the page names the line it drew and this
+        resolves the record, so nothing that is not a reply of hers can be
+        filed as one. `0` takes a rating back.
+
+        Raises `KeyError` for a line this conversation does not hold and
+        `UnratableLine` for one with nothing behind it to rate — a greeting, a
+        reach-out, a selfie, your own words. Reads the log whole: call it off
+        the event loop."""
+        row = self.chatlog.line(message_id)
+        if row is None:
+            raise KeyError(message_id)
+        turn_id = row.get("turn_id")
+        if row.get("role") != "assistant" or not turn_id:
+            raise UnratableLine(message_id)
+        self.corpus.log_rating(turn_id, thumbs)
+        rating = {"id": message_id, "thumbs": thumbs}
+        self.hub.publish("rating", rating)
+        return rating
 
     def _visible(self) -> list[dict]:
         """The whole conversation a page may draw, oldest first: the archive,
@@ -548,6 +727,17 @@ class Runtime:
         # Both are oldest-first, and anything the ring holds that the archive
         # does not is newer than all of it — the log only ever fails forward.
         return entries + [e for e in self.transcript if e.get("id") not in known]
+
+    def spoke_first_today(self) -> int:
+        """How many lines she opened on her own today — every row the chat
+        column tags "she spoke first": a greeting, a reach-out, a timer, a
+        night's report. Counted off the conversation itself, because Gate 2's
+        tally (`interrupts_today`) is only the reach-outs it let through, and
+        a panel quoting that under this name disagreed with the column beside
+        it. Reads the log whole: call it off the event loop."""
+        today = datetime.datetime.fromtimestamp(self.clock.now()).date().isoformat()
+        return sum(1 for e in self._visible()
+                   if e.get("proactive") and str(e.get("ts", "")).startswith(today))
 
     def spoken_line(self, message_id: str) -> str | None:
         """The words of one line **she** said, by transcript id (SPEC §9.11).
@@ -771,6 +961,10 @@ class Runtime:
 
         self.controller.set_rain(self.cfg.rain_intensity)   # the room's weather (§6.2)
 
+        # Publish the restored board before its scheduler can land anything.
+        # This is startup state, not constructor work: bare runtimes in tests and
+        # embedders have not opened the outbound event lifecycle yet.
+        self._publish_timers()
         self._tasks.append(asyncio.create_task(self.timers.run(),
                                                name="timer-board"))
         # the mind (SPEC §15): built over the real brain's stores. An injected
@@ -781,14 +975,7 @@ class Runtime:
             self.boot.done("mind", state="skipped", detail="choose a language model")
         elif self.cfg.mind_enabled and self.autonomous:
             try:
-                self.mind = MindLoop(self.cfg, self.clock, bus=self.signals,
-                                     brain=self.brain, controller=self.controller,
-                                     timers=self.timers, hub=self.hub,
-                                     speak=self.speak_ambient,
-                                     post_message=self.post_message,
-                                     park_gate=self.park_gate)
-                self.mind.set_hands_enabled(self._hands_granted)
-                self.mind.set_hands_boot(self.tools_settled)
+                self.mind = self._build_mind()
                 self.mind_status = "running"
                 self.boot.done("mind", detail=f"running · {self.mind.activity.state}")
                 self._mind_task = asyncio.create_task(self.mind.run(), name="mind")
@@ -817,6 +1004,13 @@ class Runtime:
         from .tools.client import start_failure
         try:
             specs = await runner.start()
+            # `GOALS_ENABLED` gets the spawned server ready while the mind is
+            # still booting. If that boot failed (or the fake runner advertised
+            # everything), do not tell the model it has a hand with no GoalStore
+            # behind it.
+            if getattr(self.brain, "goals", None) is None:
+                specs = [spec for spec in specs
+                         if spec.name not in ("create_goal", "show_held_picture")]
             # Discovery is the allowlist for tools nobody here could name in
             # advance (§7.3) — that is, a third-party server's. Hers are
             # deliberately NOT admitted this way: the rates in __init__ are
@@ -850,7 +1044,8 @@ class Runtime:
                 detail += f" · {len(runner.started)} servers"
                 for name, why in runner.failures.items():
                     log.warning("tools: %s is not mounted (%s)", name, why)
-            self.boot.done("tools", detail=detail)
+            self._tools_detail = detail
+            self.boot.done("tools", detail=self._tools_line())
         except asyncio.CancelledError:
             for key in self.boot.unresolved(("tools",)):
                 self.boot.done(key, state="skipped", detail="stopped")
@@ -867,8 +1062,37 @@ class Runtime:
         finally:
             self.tools_settled.set()
 
+    def start_live_task(self, coroutine, *, name: str) -> asyncio.Task:
+        """Admit and track a turn or voice room before it can touch this
+        runtime's stores; Stop cancels or finishes it (SPEC §29.5)."""
+        if self.stopping.is_set():
+            coroutine.close()
+            raise RuntimeStopping("character is stopping")
+        task = asyncio.create_task(coroutine, name=name)
+        self._live_tasks.add(task)
+        task.add_done_callback(self._live_tasks.discard)
+        return task
+
+    def committing(self) -> None:
+        """The calling turn has posted her reply: Stop finishes it, not cancels it.
+
+        Past this point the turn is in the transcript. Cancelling the rest would
+        only turn a turn that happened into an error for whoever asked (SPEC §29.5)."""
+        task = asyncio.current_task()
+        if task in self._live_tasks:
+            self._committing.add(task)
+            task.add_done_callback(self._committing.discard)
+
     async def stop_async(self) -> None:
         self.stopping.set()                    # open SSE streams end themselves
+        # HTTP turns and voice connections are request tasks, not background
+        # tasks. They must finish before the memory index and voice are closed:
+        # cancelled if they have not posted her reply yet, waited out if they have.
+        live = list(self._live_tasks)
+        for task in live:
+            if task not in self._committing:
+                task.cancel()
+        await asyncio.gather(*live, return_exceptions=True)
         await self.voice.close()               # cancel a pending unload; free the weights
         await self.channels.stop_all()
         if self.selfies is not None:
@@ -884,6 +1108,12 @@ class Runtime:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        if self.autonomous:
+            # A turn cancelled above may have been committing: its post-turn
+            # writes are shielded and hold this lock until the last worker
+            # lands. Wait them out, so the index closes under no writer.
+            async with self.brain.state.vault_lock:
+                pass
         if self._tool_runner is not None:
             try:
                 await self._tool_runner.close()
@@ -896,6 +1126,15 @@ class Runtime:
                 index.close()
             except Exception:
                 log.exception("memory index close failed")
+        # A server embedder keeps one pooled connection open (providers/http.py).
+        # Closing is safe even for an embedder another character shares: the
+        # client is rebuilt on its next call.
+        close = getattr(getattr(store, "embedder", None), "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:
+                log.exception("embedder close failed")
 
     # ---- her brain settings, changed while she is talking (SPEC §31.4) ----
 
@@ -968,22 +1207,43 @@ class Runtime:
             if self.mind is None:
                 if not self.autonomous:
                     raise RuntimeError("this brain has no autonomy state")
-                self.mind = MindLoop(
-                    self.cfg, self.clock, bus=self.signals, brain=self.brain,
-                    controller=self.controller, timers=self.timers, hub=self.hub,
-                    speak=self.speak_ambient, post_message=self.post_message,
-                    park_gate=self.park_gate)
-                self.mind.set_hands_boot(self.tools_settled)
+                self.mind = self._build_mind()
             if self._mind_task is None or self._mind_task.done():
                 self._mind_task = asyncio.create_task(self.mind.run(), name="mind")
                 self._tasks.append(self._mind_task)
             self.mind_status = "running"
+            # The room's boot panel is read long after boot; a line still
+            # saying "skipped" about a mind that is running is a panel that lies.
+            if "mind" in self.boot:
+                self.boot.done("mind", detail=f"running · {self.mind.activity.state}")
             return
         if self._mind_task is not None and not self._mind_task.done():
             self._mind_task.cancel()
             await asyncio.gather(self._mind_task, return_exceptions=True)
         self._mind_task = None
         self.mind_status = "paused"
+        if "mind" in self.boot:
+            self.boot.done("mind", state="skipped", detail="paused")
+
+    def _build_mind(self) -> MindLoop:
+        """The one way a mind is made — at boot and when switched on live.
+
+        Two copies of this drifted once: the live switch built a mind that never
+        heard her hands were revoked (`granted` defaults to on) and never told
+        the room about a tool call, so a character with hands off whose mind was
+        turned on from the board had her hands back until the next restart."""
+        mind = MindLoop(self.cfg, self.clock, bus=self.signals,
+                        brain=self.brain, controller=self.controller,
+                        timers=self.timers, hub=self.hub,
+                        speak=self.speak_ambient,
+                        post_message=self.post_message,
+                        park_gate=self.park_gate)
+        mind.set_hands_enabled(self._hands_granted)
+        mind.set_hands_boot(self.tools_settled)
+        if mind.hands.guard is not None:
+            mind.hands.guard.observe(self.post_tool_notice)
+            mind.hands.guard.observe(self.tell_mind_of_call)
+        return mind
 
     def set_hands_enabled(self, enabled: bool) -> None:
         """Grant or revoke this character's autonomous hands, live (§26, amended).
@@ -1001,6 +1261,15 @@ class Runtime:
         self._hands_granted = bool(enabled)
         if self.mind is not None:
             self.mind.set_hands_enabled(enabled)
+        if self._tools_detail and "tools" in self.boot:
+            self.boot.done("tools", detail=self._tools_line())
+
+    def _tools_line(self) -> str:
+        """The tool server's boot line, and whether she may use it. The server
+        is spawned whatever her switch says, so that granting hands is instant;
+        a line that only said "17 tools" read as hands on when they were off."""
+        hands = self.cfg.mind_tools_enabled and self._hands_granted
+        return self._tools_detail + ("" if hands else " · hands off")
 
 
 # uvicorn waits this long for open connections to drain on Ctrl+C before it
@@ -1119,7 +1388,7 @@ def create_app(cfg: Config | None = None, *, brain=None, chat_model=None,
     from yurios.desktop.routes import settings as b2_settings
 
     from .routes import channels, chat, events, health, live2d, mind, voice_ws
-    from .routes import camera, gallery, inbox, onboarding, uploads
+    from .routes import camera, gallery, inbox, onboarding, rate, uploads
     app.include_router(health.router)
     app.include_router(onboarding.router)
     app.include_router(events.router)
@@ -1136,6 +1405,9 @@ def create_app(cfg: Config | None = None, *, brain=None, chat_model=None,
     # …and the picture that can come with one (SPEC §35): the composer puts the
     # file here first, then names it in the turn.
     app.include_router(uploads.router)
+    # …and what you thought of her answer (SPEC §37): 👍/👎 on a reply, filed
+    # beside the corpus record it is about, for the export to join.
+    app.include_router(rate.router)
     # the inner-life surface (SPEC §24.3): journal, goals, pending self-edits,
     # the tick trace — what converts autonomy from creepy to an inner life.
     app.include_router(mind.router)

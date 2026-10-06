@@ -88,7 +88,10 @@ CURATED: list[dict] = [
                  "Loads the LM Studio model at this size and sets the ceiling the "
                  "masthead gauge measures against; raise it if turns start failing"},
         {"key": "CHAT_THINKING", "attr": "chat_thinking", "type": "bool",
-         "help": "reply <think> pass — OFF for real-time voice (a reasoning model would stall)"},
+          "help": "reply <think> pass — OFF for real-time voice (a reasoning model would stall)"},
+        {"key": "CHAT_REASONING_EFFORT", "attr": "chat_reasoning_effort", "type": "select",
+         "options": ["", "low", "medium", "high"],
+         "help": "reply reasoning effort when thinking is on — blank uses the provider default"},
         {"key": "UTILITY_THINKING", "attr": "utility_thinking", "type": "bool",
          "help": "extraction/summary <think> pass — ON (off the hot path, quality matters)"},
         {"key": "UTILITY_MAX_TOKENS", "attr": "utility_max_tokens", "type": "number",
@@ -295,7 +298,7 @@ def _hands_field(field: dict, cfg: Any) -> dict:
     installation can offer it at all. `.env.example` gives this key no trailing
     comment to derive help from, deliberately, so the help is here too.
     """
-    from yurios.mind.hands import describe_hands       # local: mind imports world
+    from yurios.mind.hands import EVERY_HAND, describe_hands  # local: mind imports world
 
     catalogue = describe_hands(cfg)
     return {**field, "type": "multi",
@@ -307,24 +310,35 @@ def _hands_field(field: dict, cfg: Any) -> dict:
                    else {"note": f"needs {hand['needs']}, which is off"}),
             } for hand in catalogue},
             "option_groups": dict(CLASS_NOTES),
+            # ticking every box saves this, so a hand a later build adds is
+            # admitted too; unticking every box saves "", which is none
+            "all": EVERY_HAND,
             "help": field.get("help") or
-                    "the hands she may reach for unasked — tick them explicitly; "
-                    "empty means none, even with MIND_TOOLS_ENABLED on"}
+                    "the hands she may use — in a reply, and on her own; "
+                    "all ticked means every hand, including new ones; "
+                    "none ticked means none, even with MIND_TOOLS_ENABLED on"}
 
 
 #: What ticking a box in each class actually commits to. One sentence at the head
 #: of each half, rather than the word "cheap" repeated down fifteen rows.
 CLASS_NOTES = {
-    "cheap": "a step in her goal work, any time she is not talking to you",
-    "expensive": "a whole tick's intention: only with the room empty, the budget "
-                 "under the ceiling, and days between repeats",
+    "cheap": "any time — in a reply, and in her own work, including while she "
+             "is talking unless her utility model is on this machine",
+    "expensive": "in a reply whenever you ask; on her own, only with the room "
+                 "empty, the budget under the ceiling, and days between repeats",
 }
+
+
+def _during_chat_field(field: dict, _cfg: Any) -> dict:
+    """`MIND_TOOLS_DURING_CHAT` is three words, not a sentence you type."""
+    return {**field, "type": "select", "options": ["auto", "on", "off"]}
 
 
 #: key -> a function that replaces the derived field with a better one. Not a
 #: second curated table: the field keeps its `.env.example` section and its
 #: neighbours, and only the control changes.
-ENRICHED = {"MIND_TOOL_ALLOWLIST": _hands_field}
+ENRICHED = {"MIND_TOOL_ALLOWLIST": _hands_field,
+            "MIND_TOOLS_DURING_CHAT": _during_chat_field}
 
 
 def _derived_type(annotation: Any, name: str) -> tuple[str, dict[str, str]]:

@@ -1088,10 +1088,27 @@ def _follow_log(log_path: Path) -> int:
 
 
 def command_doctor(args) -> int:
-    """Report whether the configured optional backends are installed."""
+    """Report configured backends and optionally check model connections."""
     from yurios.doctor import main
 
-    return main()
+    return main(probe_models=True) if args.probe_model else main()
+
+
+# Where install.sh also links the launcher when ~/.local/bin wasn't on the
+# installing shell's PATH, so `yurios` works in that terminal at once. Keep in
+# step with install_launcher's list.
+_EXTRA_LAUNCHER_DIRS = ("/opt/homebrew/bin", "/usr/local/bin",
+                        "/home/linuxbrew/.linuxbrew/bin")
+
+
+def _extra_launchers(expected: Path) -> list[Path]:
+    """The extra launcher links that point at this venv's yurios — only those."""
+    found = []
+    for d in [*map(Path, _EXTRA_LAUNCHER_DIRS), Path.home() / "bin"]:
+        link = d / "yurios"
+        if link.is_symlink() and link.resolve() == expected:
+            found.append(link)
+    return found
 
 
 def command_uninstall(args) -> int:
@@ -1129,6 +1146,8 @@ def command_uninstall(args) -> int:
         print("YuriOS is still serving requests; refusing to uninstall.", file=sys.stderr)
         return 1
     launcher.unlink(missing_ok=True)
+    for extra in _extra_launchers(expected_launcher):
+        extra.unlink(missing_ok=True)
     print("Removed the YuriOS launcher. Removing the virtual environment.")
     print("Project files, .env, .yurios, and downloaded models were preserved.")
     sys.stdout.flush()
@@ -1338,6 +1357,8 @@ def main(argv: list[str] | None = None) -> int:
                      help="keep printing new lines until Ctrl+C")
     log.set_defaults(func=command_log)
     doctor = sub.add_parser("doctor", help="check configured backends and dependencies")
+    doctor.add_argument("--probe-model", action="store_true",
+                        help="check selected model endpoints (3-second timeout per request)")
     doctor.set_defaults(func=command_doctor)
     tray = sub.add_parser("tray", help="her tray icon: status, on, off, or remove")
     tray.add_argument("action", nargs="?", default="status",
@@ -1366,7 +1387,8 @@ def main(argv: list[str] | None = None) -> int:
     # beside it, the relative settings it holds (`VAULT_DIR=./vault`,
     # `DATA_DIR=./data`) resolve against it, and `start --foreground` runs the
     # whole server in this process. So enter the installation before dispatch.
-    # Nothing the user typed changes meaning: no subcommand takes a path.
+    # Nothing the user typed changes meaning: a subcommand that takes a path
+    # resolves it while parsing, above (`yurios.ctl.util.here`).
     root = _root()
     try:
         os.chdir(root)

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 
-from yurios.world.tooltags import MAX_MARKER_LEN, ToolTagParser
+import pytest
+
+from yurios.world.tooltags import MAX_MARKER_LEN, ToolTagParser, native_to_markers
 
 
 def push_all(parser: ToolTagParser, tokens: list[str]):
@@ -257,3 +259,78 @@ def test_a_positional_list_longer_than_the_schema_still_drops():
     p = ToolTagParser(arg_names=SET_TIMER_NAMES)
     _, calls = push_all(p, ['[[set_timer(10, "tea", "extra")]]'])
     assert calls == [] and p.dropped == 1
+
+
+# ---- DeepSeek's own call markup (SPEC §7.4) ---------------------------------
+
+#: Verbatim from a live test, 24 Sep 23:47: the first call of the reply was a
+#: marker, the second — in the continuation pass — was DSML, bars doubled.
+LIVE_DSML = ('<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name="list_notes">\n'
+             '<｜｜DSML｜｜ parameter name="folder" string="true">diary'
+             '</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n'
+             '</｜｜DSML｜｜ calls>')
+
+
+@pytest.mark.parametrize("size", [1, 2, 5, 1000])
+def test_the_stream_reads_native_markup_as_a_call_and_never_says_it(size):
+    text = "I'll look.\n\n" + LIVE_DSML
+    parser = ToolTagParser()
+    said, calls = "", []
+    for i in range(0, len(text), size):
+        out, closed = parser.push(text[i:i + size])
+        said, calls = said + out, calls + closed
+    said += parser.finish()
+    assert said.strip() == "I'll look."
+    assert [(c.tool, c.args) for c in calls] == [("list_notes", {"folder": "diary"})]
+
+
+def test_single_bars_an_unwrapped_invoke_and_a_stray_closer():
+    parser = ToolTagParser()
+    out, calls = parser.push(
+        'ok <｜DSML｜invoke name="set_timer"><｜DSML｜parameter name="minutes" '
+        'string="false">5</｜DSML｜parameter></｜DSML｜invoke> and </｜DSML｜ calls>done')
+    assert out + parser.finish() == "ok  and done"
+    assert [(c.tool, c.args) for c in calls] == [("set_timer", {"minutes": 5})]
+
+
+def test_a_native_block_cut_off_by_the_stream_is_salvaged_not_said():
+    parser = ToolTagParser()
+    out, calls = parser.push('ok <｜DSML｜ calls>\n<｜DSML｜ invoke name="read_note">\n'
+                             '<｜DSML｜ parameter name="path" string="true">a.md'
+                             '</｜DSML｜ parameter>\n')
+    assert out + parser.finish() == "ok "
+    assert calls == [] and [c.tool for c in parser.salvaged] == ["read_note"]
+
+
+def test_an_ordinary_angle_bracket_is_still_speech():
+    parser = ToolTagParser()
+    out, calls = parser.push("<3 you, and 2 < 3. [[set_timer {\"minutes\": 1}]]")
+    assert out + parser.finish() == "<3 you, and 2 < 3. "
+    assert [c.tool for c in calls] == ["set_timer"]
+
+
+def test_the_record_she_reads_back_says_it_the_way_she_was_shown():
+    assert native_to_markers("ok " + LIVE_DSML) == \
+        'ok [[list_notes {"folder": "diary"}]]'
+
+
+def test_the_parser_says_where_in_a_chunk_the_call_closed():
+    """`said_before`: how much of this push's speech came before its first call —
+    what a caller that ends its pass on that call may keep (SPEC §7.4)."""
+    parser = ToolTagParser()
+    text, calls = parser.push('Sure. [[set_timer {"minutes": 2}]]((set_timer')
+    assert calls and text[:parser.said_before] == "Sure. "
+    assert text == "Sure. ((set_timer", "the parser itself still hands it all on"
+
+    text, calls = parser.push("no call here")
+    assert not calls and parser.said_before is None
+
+    # a `<` that turned out to be words, before a call in the same chunk
+    parser = ToolTagParser()
+    text, calls = parser.push('a <3 for you [[set_timer {"minutes": 2}]] then')
+    assert calls and text[:parser.said_before] == "a <3 for you "
+
+    # …and a call in a model's own markup
+    parser = ToolTagParser()
+    text, calls = parser.push("Looking. " + LIVE_DSML + "((list_notes")
+    assert calls and text[:parser.said_before] == "Looking. "

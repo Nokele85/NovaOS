@@ -31,6 +31,7 @@ import re
 from typing import AsyncIterator, Callable, Optional
 
 from yurios.app.core import assemble as asm
+from yurios.app.providers.usage import ACTED
 from yurios.characters.setting import read_place
 from yurios.desktop.brain import BrainAdapter
 from yurios.desktop.config import Config
@@ -38,12 +39,13 @@ from yurios.mind.workspace import DESK_WRITE_TOOLS
 
 from ..kernel import correlate
 from .avatar.controller import VrmController
+from .gallery import Unsent
 from .situation import render_situation
 from .tools.client import (
     ToolRunner, ToolSpec, arg_names_from_specs, build_directive)
 from .tools.guard import Guard, Turn, failure
 from .tools.timers import TimerBoard
-from .tooltags import ToolCall, ToolTagParser
+from .tooltags import ToolCall, ToolTagParser, native_to_markers
 
 log = logging.getLogger("world.brain")
 
@@ -175,7 +177,8 @@ class ToolBrain(BrainAdapter):
 
     def __init__(self, state, cfg: Config, *, guard: Guard,
                  timers: TimerBoard, controller: VrmController,
-                 selfies=None, research=None, stories=None):
+                 selfies=None, research=None, stories=None,
+                 post: Optional[Callable[..., dict]] = None):
         super().__init__(state, cfg)
         self.guard = guard
         self.timers = timers
@@ -183,6 +186,9 @@ class ToolBrain(BrainAdapter):
         self.selfies = selfies                 # SelfieLab | None (§7.6)
         self.research = research               # Researcher | None (§7.7)
         self.stories = stories
+        # Runtime.post_message — how a picture a goal is holding reaches the
+        # chat when she shows it mid-reply (§18.2a). None: no hand to show it.
+        self.post = post
         # Whether a page with her body on it is open right now (§2.5). The
         # runtime wires the hub's count in; unset means "assume so", which is
         # Build #4's behaviour and what the desktop app gets.
@@ -192,20 +198,33 @@ class ToolBrain(BrainAdapter):
         self.selfedit = None
         self.runner: Optional[ToolRunner] = None
         self.world = None                      # WorldModelStore, wired by the mind
-        self._directive: str = ""
+        self._specs: list[ToolSpec] = []
+        self._directives: dict[tuple[str, ...], str] = {}
+        #: (tool) -> may she use it right now? The one rule (§26.1): the house
+        #: switch, her own switch and the allowlist, asked per call rather than
+        #: once at boot, because the switchboard flips hers live. Unset (tests,
+        #: the desktop app) admits every discovered tool.
+        self.permits: Optional[Callable[[str], bool]] = None
+        self._goal_tool = False
         self._arg_names: dict[str, tuple[str, ...]] = {}
         # model-verbatim record per session (markers + results), for persist():
         # the corpus should see what the model actually did, not the cleaned speech
         self._raw: dict[str, str] = {}
+        # Structured evidence for REFLECT's promise review. Kept beside `_raw`
+        # because it has the same lifetime: commit hands it off, abandon drops it.
+        self._tool_outcomes: dict[str, list[dict]] = {}
+        self._unsent_shelf: Optional[Unsent] = None
 
     @classmethod
     def build(cls, cfg, *, guard: Guard, timers: TimerBoard,
-              controller: VrmController, selfies=None, research=None, stories=None,
-              chat_model=None, utility_model=None, embedder=None) -> "ToolBrain":
+              controller: VrmController, selfies=None, research=None,
+              stories=None, post=None, chat_model=None, utility_model=None,
+              embedder=None) -> "ToolBrain":
         base = BrainAdapter.build(cfg, chat_model=chat_model,
                                   utility_model=utility_model, embedder=embedder)
         return cls(base.state, base.cfg, guard=guard, timers=timers,
-                   controller=controller, selfies=selfies, research=research, stories=stories)
+                   controller=controller, selfies=selfies, research=research,
+                   stories=stories, post=post)
 
     def set_body_probe(self, probe: Callable[[], bool]) -> None:
         """Wire "is her body on a screen right now?" (SPEC §2.5) — the hub's
@@ -216,14 +235,114 @@ class ToolBrain(BrainAdapter):
         """Wire the discovered hands (SPEC §7.2). None/empty → she has no hands
         here — never an error, the directive simply isn't appended."""
         self.runner = runner
-        if runner and specs:
-            self._directive = build_directive(
+        self._specs = list(specs) if runner and specs else []
+        self._directives = {}
+        self._arg_names = arg_names_from_specs(self._specs)
+        self.goal_creation_available = any(
+            spec.name == "create_goal" for spec in self._specs)
+
+    def set_hands_policy(self, permits: Optional[Callable[[str], bool]]) -> None:
+        """Wire the one rule (§26.1) — see `permits` in `__init__`."""
+        self.permits = permits
+
+    def _permitted(self, tool: str) -> bool:
+        if self.permits is None:
+            return True
+        try:
+            return bool(self.permits(tool))
+        except Exception:  # noqa: BLE001 — a broken policy is no hands, not a dead turn
+            log.warning("hands policy failed; offering no tools", exc_info=True)
+            return False
+
+    def offered(self) -> list[ToolSpec]:
+        """The discovered tools she may use right now, in discovery order."""
+        if self.runner is None:
+            return []
+        return [spec for spec in self._specs if self._permitted(spec.name)]
+
+    def directive(self) -> str:
+        """The ## TOOLS block for what she may use now, or "" for no hands."""
+        specs = self.offered()
+        if not specs:
+            return ""
+        key = tuple(spec.name for spec in specs)
+        if key not in self._directives:
+            self._directives[key] = build_directive(
                 specs, user_name=self.cfg.user_name,
                 max_calls=self.cfg.tool_max_calls_per_turn)
-            self._arg_names = arg_names_from_specs(specs)
-        else:
-            self._directive = ""
-            self._arg_names = {}
+        return self._directives[key]
+
+    @property
+    def goal_creation_available(self) -> bool:
+        return self._goal_tool and self._permitted("create_goal") \
+            and self.runner is not None
+
+    @goal_creation_available.setter
+    def goal_creation_available(self, value: bool) -> None:
+        self._goal_tool = bool(value)
+
+    @property
+    def held_picture_showable(self) -> bool:
+        """Whether `show_held_picture` is offered right now (§18.2a) — which is
+        what decides if a goal line names it."""
+        return (self.post is not None and self.goals is not None
+                and any(s.name == self.SHOW_HELD for s in self.offered()))
+
+    #: What PICTURES YOU HAVEN'T SENT opens with (§18.2a). The last sentence is
+    #: for the night of 5 Oct, when she wrote "Selfie shown. Message sent with
+    #: it." on her desk about a picture nobody was ever shown.
+    PICTURES_NOTE = (
+        "Every picture you made that {user} has never been shown in the chat, "
+        "oldest first — whatever you made it for, and whether or not a goal "
+        "still remembers it. Each one is finished and in your gallery; there is "
+        "nothing to take again. To show one, call `{hand}` with its "
+        "`picture_id` (the id in brackets) and it appears in the chat as you "
+        "answer. Whether and when is yours to decide. Until that call answers "
+        "`shown`, none of these has reached {user}, whatever your notes say.")
+
+    def _unsent(self) -> Optional[Unsent]:
+        """Her shelf's unsent reader, built on first use: `cfg.selfie_dir` is
+        the world's, and a brain with no shelf has nothing to list."""
+        if self._unsent_shelf is None:
+            shelf = getattr(self.cfg, "selfie_dir", None)
+            if shelf is None:
+                return None
+            chatlog = getattr(self.state.sessions, "log", None)
+            self._unsent_shelf = Unsent(shelf, getattr(chatlog, "path", None))
+        return self._unsent_shelf
+
+    async def _pictures_block(self) -> str:
+        """PICTURES YOU HAVEN'T SENT (§18.2a), or "" — every one, while the hand
+        that sends them is hers to use; a list she can do nothing about would
+        only be something to describe.
+
+        Off the loop: the first read of a long conversation is a few hundred
+        milliseconds on a slow drive, and a host holds every character's room.
+        """
+        unsent = self._unsent()
+        if unsent is None or not self.held_picture_showable:
+            return ""
+        try:
+            shots = await asyncio.to_thread(unsent.pictures)
+            held = {g.held_picture: g.id for g in self.goals.open_goals()
+                    if g.held_picture}
+        except Exception:       # noqa: BLE001 — the shelf's rule: never a lost turn
+            log.warning("unsent pictures failed; assembling without them",
+                        exc_info=True)
+            return ""
+        if not shots:
+            return ""
+        lines = []
+        for shot in shots:
+            line = f"- [{shot['ref']}] {shot['kind']}, {shot['when']}"
+            if shot["caption"]:
+                line += f" — {shot['caption']}"
+            if shot["url"] in held:
+                line += f" (goal [{held[shot['url']]}] is holding it too)"
+            lines.append(line)
+        note = self.PICTURES_NOTE.format(user=self.cfg.user_name,
+                                         hand=self.SHOW_HELD)
+        return "## PICTURES YOU HAVEN'T SENT\n\n" + note + "\n\n" + "\n".join(lines)
 
     def set_selfedit(self, selfedit) -> None:
         """Wire the §23 self-edit door, so `propose_edit` has somewhere to land.
@@ -259,15 +378,16 @@ class ToolBrain(BrainAdapter):
                                proactive=proactive)
 
     # -- prompt assembly: the blocks + the situation (SPEC §19.2) ------
-    def _assemble(self, session_id: str, text: str, *, window: list[dict],
-                  lore) -> object:
+    async def _assemble(self, session_id: str, text: str, *, window: list[dict],
+                        lore) -> object:
         """B2's assembly, then the present tense appended — so every prompt
         (reply, greeting, ambient self-talk) knows when and where she is. With
         the mind running, the block is the world model's live stage (presence,
         threads, expectations included); mindless, it degrades to Build #4's
         rendering of host state. The clock is the guard's injected one, never
         the wall clock."""
-        soul, prompt = super()._assemble(session_id, text, window=window, lore=lore)
+        soul, prompt = await super()._assemble(session_id, text, window=window,
+                                               lore=lore)
         if self.world is not None:
             situation = self.world.situation()
         else:
@@ -287,13 +407,17 @@ class ToolBrain(BrainAdapter):
         # (B2 §2.2 — the base body streams directly, so the override restates it)
         from yurios.desktop.brain import _Pending
         turn_index = self.state.sessions.get(session_id)["turn_count"]
-        soul, prompt = self._assemble(
+        soul, prompt = await self._assemble(
             session_id, text,
             window=self.state.sessions.window(session_id, self.cfg.raw_window_turns),
             lore=self.state.soul_loader.load().lorebook_hits(text))
-        if self._directive:                        # the tools directive (§7.4); the
+        goal_status = asm.is_goal_status_request(text)
+        goal_mutation = asm.is_goal_mutation_request(text)
+        directive = self.directive()
+        if directive and (not goal_status or goal_mutation):
+                                                   # the tools directive (§7.4); the
                                                    # situation block rides _assemble (§2.5)
-            prompt.messages[0]["content"] += f"\n\n## TOOLS\n\n{self._directive}"
+            prompt.messages[0]["content"] += f"\n\n## TOOLS\n\n{directive}"
         if image:                                  # a picture you sent (§35)
             asm.mark_picture(prompt.messages)
 
@@ -302,36 +426,51 @@ class ToolBrain(BrainAdapter):
         self._pending[session_id] = _Pending(prompt, turn_index, soul)
 
         raw: list[str] = []
+        outcomes: list[dict] = []
         # The image part goes on the wire only (`with_image` copies): the
         # continuation passes below carry it too, so a tool she reaches for
         # halfway through does not cost her the picture she was looking at.
         messages = asm.with_image(prompt.messages, image) if image \
             else prompt.messages
         try:
-            async for token in self._stream_with_tools(messages, raw):
+            blocked = {"list_notes", "read_note", "count_note_lines"} \
+                if goal_status else set()
+            async for token in self._stream_with_tools(
+                    messages, raw, outcomes, blocked_tools=blocked,
+                    goal_about=text):
                 yield token
         finally:
             self._raw[session_id] = "".join(raw)
+            self._tool_outcomes[session_id] = outcomes
 
     def abandon(self, session_id: str) -> None:
         """B1's rollback, plus this subclass's own half-turn state: the verbatim
         record of a turn that didn't happen must not survive to be persisted
         against the next one (§7.4)."""
         self._raw.pop(session_id, None)
+        self._tool_outcomes.pop(session_id, None)
         super().abandon(session_id)
 
-    async def persist(self, session_id: str, user_text: str, reply: str) -> None:
+    async def persist(self, session_id: str, user_text: str,
+                      reply: str) -> list[dict]:
         """B1's post-turn pipeline, but the corpus gets the model-verbatim record
         — markers and tool results included — so the training log reflects what
         actually happened in the turn, not just what was spoken (§7.4)."""
+        pending = session_id in self._pending
         raw = self._raw.pop(session_id, None)
+        if raw:
+            # A call she wrote in her model's own markup was run like a marker;
+            # the record she reads back next turn says it the way she was shown.
+            raw = native_to_markers(raw)
+        outcomes = self._tool_outcomes.pop(session_id, [])
         await super().persist(session_id, user_text, raw or reply)
+        return outcomes if pending else []
 
     # -- ambient speech (SPEC §8.3): the greeting pattern, with any cue ---------
     async def stream_ambient(self, session_id: str, cue: str) -> AsyncIterator[str]:
         """Self-talk / timer announcements. Self-contained like stream_greeting
         (B2 §7): window=[], the cue never enters the transcript, never persisted."""
-        _soul, prompt = self._assemble(session_id, cue, window=[], lore=[])
+        _soul, prompt = await self._assemble(session_id, cue, window=[], lore=[])
         # Never persisted anywhere else, by design — which is exactly why the
         # prompt log has to see it, or half of what she says in a day is a line
         # in the journal with no reasoning behind it (SPEC §24.2). The caller's
@@ -341,9 +480,7 @@ class ToolBrain(BrainAdapter):
             else correlate.AMBIENT
         said: list[str] = []
         try:
-            async for token in self.state.chat.stream(
-                    prompt.messages, temperature=self.cfg.temperature,
-                    max_tokens=self.cfg.max_reply_tokens):
+            async for token in self._stream_unprompted(prompt.messages):
                 said.append(token)
                 yield token
         finally:
@@ -353,10 +490,30 @@ class ToolBrain(BrainAdapter):
                     model=self.cfg.chat_model, cue=cue,
                     template_version=prompt.template_version)
 
+    async def _stream_unprompted(self, messages: list[dict]) -> AsyncIterator[str]:
+        """A greeting, a murmur, an announcement or a reach-out, with her hands.
+
+        The same loop and the same directive as a reply (§7.4): the one rule
+        (§26.1) decides what she may reach for, not which door she came in by.
+        The directive is added to `messages` in place so the prompt log records
+        the prompt that was actually sent. Nothing here is persisted, so the
+        verbatim record is dropped with the call; the audit and the chat notice
+        are what say a hand was used.
+        """
+        directive = self.directive()
+        if directive and messages:
+            messages[0]["content"] += f"\n\n## TOOLS\n\n{directive}"
+        async for token in self._stream_with_tools(messages, []):
+            yield token
+
     # -- the loop of passes (SPEC §7.4) -----------------------------------------
-    async def _stream_with_tools(self, messages: list[dict],
-                                 raw: list[str]) -> AsyncIterator[str]:
+    async def _stream_with_tools(self, messages: list[dict], raw: list[str],
+                                  outcomes: list[dict] | None = None, *,
+                                  blocked_tools: set[str] | None = None,
+                                  goal_about: str = ""
+                                  ) -> AsyncIterator[str]:
         messages = list(messages)
+        blocked_tools = blocked_tools or set()
         calls_made = 0
         retried = False                # one re-emit per turn for a broken marker
         prev_spoken = ""               # the last pass's speech, for the echo skip
@@ -380,6 +537,10 @@ class ToolBrain(BrainAdapter):
                 async for token in stream:
                     raw.append(token)
                     speak, closed = parser.push(token)
+                    if closed and armed:
+                        # The pass ends at the call, so nothing after it in
+                        # this chunk is hers to say yet (tooltags.said_before).
+                        speak = speak[:parser.said_before]
                     if speak and echo is not None:
                         speak = echo.push(speak)
                     if speak:
@@ -389,8 +550,12 @@ class ToolBrain(BrainAdapter):
                         call = closed[0]           # first closed marker ends the pass
                         break
                     for extra in closed:           # markers past the cap: denied, dropped
-                        self.guard.audit(extra.tool, extra.args,
-                                         "denied: per-turn cap", 0.0, "")
+                        verdict = "denied: per-turn cap"
+                        result = "denied (per-turn cap)"
+                        self.guard.audit(extra.tool, extra.args, verdict, 0.0, result)
+                        if outcomes is not None:
+                            outcomes.append({"tool": extra.tool, "args": extra.args,
+                                             "verdict": verdict, "result": result})
             finally:
                 await stream.aclose()
 
@@ -436,15 +601,53 @@ class ToolBrain(BrainAdapter):
 
             calls_made += 1
             prev_spoken = "".join(spoken_this_pass)
-            result = await self._execute(call, turn)
+            blocked = call.tool in blocked_tools
+            refused = not blocked and not self._permitted(call.tool)
+            if blocked or refused:
+                if blocked:
+                    verdict = "denied: goal status uses the standing list"
+                    result = ("denied (the authoritative open-goal list is already "
+                              "in this prompt; workspace/goals contains historical notes)")
+                else:
+                    # Switched off, or off the allowlist, since the prompt was
+                    # built — or a name she was never shown. Same answer.
+                    verdict = "denied: not one of her hands right now"
+                    result = f"denied ({call.tool} is not one of your hands right now)"
+                self.guard.audit(call.tool, call.args, verdict, 0.0, result)
+                if outcomes is not None:
+                    outcomes.append({"tool": call.tool, "args": call.args,
+                                     "verdict": verdict, "result": result})
+            else:
+                result = await self._execute(
+                    call, turn, outcomes=outcomes, goal_about=goal_about)
             raw.append(f'\n[[{call.tool} → {result}]]\n')
             # the continuation: her partial reply + the result, back to the model
             # as the SAME turn (§7.4). The partial must be in the messages or she
             # restarts the sentence.
+            index_warning = ""
+            if blocked:
+                index_warning = (
+                    " Answer from the COMPLETE or PARTIAL authoritative open-goal "
+                    "list on the final user turn. Do not inspect desk files for "
+                    "this status request."
+                )
+            elif call.tool == "list_notes":
+                try:
+                    payload = json.loads(result)
+                    if isinstance(payload, dict) and isinstance(payload.get("files"), list):
+                        index_warning = (
+                            " This result is only an index of paths and sizes, not "
+                            "the contents of any file. Do not say you read or reviewed "
+                            "those files. Call read_note for a file you actually need; "
+                            "if the requested scope exceeds this turn, say exactly what "
+                            "you did and did not inspect."
+                        )
+                except ValueError:
+                    pass
             messages = messages + [
                 {"role": "assistant", "content": prev_spoken},
                 {"role": "user", "content":
-                    f"(({call.tool} returned: {result}. Continue the same spoken "
+                    f"(({call.tool} returned: {result}.{index_warning} Continue the same spoken "
                     "reply from where you left off — weave the result in "
                     "naturally, never read data formats aloud"
                     + (", and your tool budget for this turn is now spent — "
@@ -452,14 +655,21 @@ class ToolBrain(BrainAdapter):
                     + ".))"},
             ]
 
-    async def _execute(self, call: ToolCall, turn: Turn | None = None) -> str:
+    async def _execute(self, call: ToolCall, turn: Turn | None = None, *,
+                       outcomes: list[dict] | None = None,
+                       goal_about: str = "") -> str:
         """Guard → MCP → audit → host-side realisation. Never raises: a denied or
         failed call becomes a short result string the model can speak to (§7.3)."""
         t0 = self.guard.clock.now()
         ok, reason = self.guard.check(call.tool, call.args, turn=turn)
         if not ok:
-            self.guard.audit(call.tool, call.args, f"denied: {reason}", 0.0, "")
-            return f"denied ({reason})"
+            verdict = f"denied: {reason}"
+            result = f"denied ({reason})"
+            self.guard.audit(call.tool, call.args, verdict, 0.0, result)
+            if outcomes is not None:
+                outcomes.append({"tool": call.tool, "args": call.args,
+                                 "verdict": verdict, "result": result})
+            return result
         try:
             text = await asyncio.wait_for(
                 self.runner.call(call.tool, call.args),
@@ -468,7 +678,27 @@ class ToolBrain(BrainAdapter):
             dt = (self.guard.clock.now() - t0) * 1000
             why = failure(e, self.cfg.tool_timeout_s)
             self.guard.audit(call.tool, call.args, "error", dt, why)
-            return f"error ({why})"
+            result = f"error ({why})"
+            if outcomes is not None:
+                outcomes.append({"tool": call.tool, "args": call.args,
+                                 "verdict": "error", "result": result})
+            return result
+        goal_created = False
+        if call.tool in ("create_goal", self.SHOW_HELD):
+            try:
+                if call.tool == "create_goal":
+                    text, goal_created = self._create_goal(text, about=goal_about)
+                else:
+                    text = self._show_held_picture(text)
+            except Exception as e:                     # malformed contract/store failure
+                dt = (self.guard.clock.now() - t0) * 1000
+                why = failure(e, self.cfg.tool_timeout_s)
+                self.guard.audit(call.tool, call.args, "error", dt, why)
+                result = f"error ({why})"
+                if outcomes is not None:
+                    outcomes.append({"tool": call.tool, "args": call.args,
+                                     "verdict": "error", "result": result})
+                return result
         # Host realization needs the complete machine-readable contract. A
         # detailed selfie `look` can push that JSON beyond the model-facing
         # result cap; truncating first makes it invalid JSON and silently skips
@@ -477,8 +707,140 @@ class ToolBrain(BrainAdapter):
         text = self.guard.truncate(full_text, tool=call.tool)
         dt = (self.guard.clock.now() - t0) * 1000
         self.guard.audit(call.tool, call.args, "ok", dt, text)
+        if outcomes is not None:
+            outcomes.append({"tool": call.tool, "args": call.args,
+                              "verdict": "ok", "result": text})
+        ACTED.set(True)                    # a wordless reply is still a turn (usage.py)
         self._realise(call, full_text)
+        if goal_created:
+            # The write, event and audit above have no await between them: a
+            # barge-in cannot leave a real goal with no audit line. The git
+            # process stays off-loop, but once started is allowed to finish so
+            # the user's named edit gets its own history entry.
+            commit = asyncio.create_task(asyncio.to_thread(
+                self.goals.vault.commit_if_dirty,
+                f"goal: add {json.loads(full_text)['text'][:60]}", now=True))
+            try:
+                await asyncio.shield(commit)
+            except asyncio.CancelledError:
+                await asyncio.shield(commit)
+                raise
         return text
+
+    def _create_goal(self, result: str, *, about: str = "") -> tuple[str, bool]:
+        """Realise the MCP contract against the host-owned GoalStore (SPEC §7.5).
+
+        `goals.md` is one read-modify-write lifecycle store, so its owning process
+        performs the mutation rather than the spawned tool server. The returned
+        payload replaces the validation contract in the continuation: Yuri sees
+        the actual id and whether an equivalent open goal already existed.
+        """
+        data = json.loads(result)
+        if data.get("status") != "ready" or self.goals is None:
+            raise RuntimeError("the standing goal store is unavailable")
+        text = " ".join(str(data.get("text") or "").split())
+        kind = str(data.get("kind") or "task")
+        if not text or len(text) > 200 or "|" in text:
+            raise ValueError("invalid standing goal text")
+        if kind not in ("task", "reach_out"):
+            raise ValueError("invalid standing goal kind")
+        before = {goal.id for goal in self.goals.open_goals()}
+        goal = self.goals.add(
+            text, kind=kind,
+            priority=0.7, commitment="single-minded", provenance="user:chat",
+            meta={"about": about} if about else None)
+        created = goal.id not in before
+        if created:
+            if self._on_goal_write is not None:
+                self._on_goal_write(goal)
+        payload = json.dumps({"status": "created" if created else "existing",
+                              "id": goal.id, "text": goal.text, "kind": goal.kind,
+                              "state": goal.state}, ensure_ascii=False)
+        return payload, created
+
+    def _show_held_picture(self, result: str) -> str:
+        """Put the picture a goal is holding into the chat, and close the goal.
+
+        The mind's renders land on the goal and wait for Gate 2 (§18.2a), and
+        Gate 2 asks whether *she* should interrupt. Mid-reply, nobody is being
+        interrupted: they are here, and showing them the picture is the answer.
+        So the conversation hands it over itself, as the same one entry a
+        Gate 2 delivery posts, and the goal ends kept. The product is re-marked
+        `deliver: chat`, which is what stops every later exit of this goal
+        from filing a follow-up that sends it a second time.
+
+        Raises on anything that is not a held picture; `_execute` turns that
+        into an error she reads, so she cannot say she showed a picture that
+        never posted.
+        """
+        data = json.loads(result)
+        if data.get("status") == "ready" and self.post is not None \
+                and str(data.get("picture_id") or "").strip():
+            return self._show_unsent(str(data["picture_id"]).strip())
+        if data.get("status") != "ready" or self.goals is None or self.post is None:
+            raise RuntimeError("the standing goal store is unavailable")
+        goal_id = str(data.get("goal_id") or "").strip()
+        goal = self.goals.get(goal_id) if goal_id else None
+        if goal is None or goal.state not in ("pending", "active", "waiting"):
+            raise ValueError(f"no open goal {goal_id or '(none)'}")
+        shot = goal.held_picture
+        if not shot:
+            raise ValueError(f"goal {goal.id} isn't holding a picture they "
+                             "haven't seen")
+        origin = correlate.current()
+        post_kw: dict = {"image_url": shot,
+                         "selfie_id": str(goal.product.get("selfie_id") or "")}
+        if origin is not None and origin.channel:
+            post_kw["channel"] = origin.channel
+        if origin is not None and origin.client_id:
+            post_kw["client_id"] = origin.client_id
+        self.post("assistant", "", **post_kw)
+        self.goals.update(
+            goal.id, state="done",
+            meta={"product": {**goal.product, "deliver": "chat"},
+                  "completed_by": self.SHOW_HELD})
+        # A follow-up already filed to send this same picture would otherwise
+        # send it a second time through Gate 2.
+        self.goals.picture_shown(shot)
+        if self._on_goal_write is not None:
+            self._on_goal_write(goal)
+        return json.dumps({"status": "shown", "goal_id": goal.id,
+                           "note": "the picture is in the chat now, above "
+                                   "what you are saying; the goal is done"},
+                          ensure_ascii=False)
+
+    def _show_unsent(self, ref: str) -> str:
+        """Put one picture from PICTURES YOU HAVEN'T SENT into the chat (§18.2a).
+
+        The other door of the same hand: by the picture rather than by a goal,
+        because a picture no goal holds — a night job's, a let-go follow-up's —
+        has no goal to name. Every goal holding it learns it was delivered
+        (`picture_shown`), so an errand already filed to send it closes instead
+        of sending it again. Raises on anything not on the list, for
+        `_show_held_picture`'s reason: she must never talk over a `shown` that
+        did not post.
+        """
+        unsent = self._unsent()
+        shot = unsent.find(ref) if unsent is not None else None
+        if shot is None:
+            raise ValueError(f"{ref} isn't a picture they haven't seen — use a "
+                             "picture_id from PICTURES YOU HAVEN'T SENT")
+        origin = correlate.current()
+        post_kw: dict = {"image_url": shot["url"],
+                         "selfie_id": shot["selfie_id"]}
+        if origin is not None and origin.channel:
+            post_kw["channel"] = origin.channel
+        if origin is not None and origin.client_id:
+            post_kw["client_id"] = origin.client_id
+        self.post("assistant", "", **post_kw)
+        closed = self.goals.picture_shown(shot["url"]) if self.goals is not None else []
+        if self._on_goal_write is not None:
+            for goal in closed:
+                self._on_goal_write(goal)
+        return json.dumps({"status": "shown", "picture_id": shot["ref"],
+                           "note": "the picture is in the chat now, above "
+                                   "what you are saying"},
+                          ensure_ascii=False)
 
     def realise(self, tool: str, result: str, *, extra: dict | None = None) -> None:
         """`_realise` for a caller that has a tool name and a result string
@@ -517,6 +879,10 @@ class ToolBrain(BrainAdapter):
             self.timers.add(id=data.get("id", "t"),
                             label=data.get("label", "your timer"),
                             seconds=float(data["seconds"]))
+            # A synchronous operation may be the final requirement of a
+            # standing goal. Close only after host realisation succeeded, and
+            # only on the explicit id+flag contract the model supplied.
+            self._complete_goal(data, completed_by="set_timer")
         elif call.tool == "play_music":
             if data.get("playing"):
                 self.controller.music("play", track=data.get("track"),
@@ -564,6 +930,10 @@ class ToolBrain(BrainAdapter):
             # start-don't-await (§7.6): the render happens off-turn; the photo
             # arrives in the chat as a `message` event when it's done.
             if self.selfies is not None:
+                if data.get("goal_id"):
+                    data["_goal_id"] = data["goal_id"]
+                if data.get("completes_goal"):
+                    data["_complete_goal"] = True
                 origin = correlate.current()
                 data["_channel"] = origin.channel if origin else None
                 data["_client_id"] = origin.client_id if origin else None
@@ -577,3 +947,16 @@ class ToolBrain(BrainAdapter):
                 # as one she volunteered (§15.5).
                 data["_proactive"] = not correlate.answering()
                 self.selfies.start(data)
+
+    def _complete_goal(self, data: dict, *, completed_by: str) -> None:
+        """Close one explicitly-linked goal after its synchronous effect lands."""
+        if not data.get("completes_goal") or self.goals is None:
+            return
+        goal_id = str(data.get("goal_id") or "")
+        goal = self.goals.get(goal_id) if goal_id else None
+        if goal is None or goal.state not in ("pending", "active", "waiting"):
+            return
+        self.goals.update(
+            goal.id, state="done",
+            meta={"completed_by": completed_by,
+                  "completion_id": str(data.get("id") or "")})

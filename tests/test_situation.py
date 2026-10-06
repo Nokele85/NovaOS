@@ -11,7 +11,8 @@ import datetime
 
 from yurios.world.avatar.controller import VrmController
 from yurios.kernel.clock import VirtualClock
-from yurios.world.situation import EMBODIMENT, TEXT_EMBODIMENT, refer_user, render_situation
+from yurios.world.situation import (EMBODIMENT, NO_TIMERS, TEXT_EMBODIMENT, refer_user,
+                                    render_situation)
 from yurios.world.tools.timers import TimerBoard
 
 
@@ -42,6 +43,22 @@ def test_embodiment_truth_is_present_and_names_the_user():
     # and the answer-shaped law: "can you blink?" is answered yes, not denied
     assert "the answer is always yes" in text
     assert "never call it pretending" in text
+
+
+def test_the_fixed_laws_say_what_to_answer_not_how_to_feel():
+    """The embodiment truth and the honesty constraint ride in every prompt of
+    every character, so a temperament in either is the house companion's
+    leaking into all of them — "yes and warm … plainly and warmly" and "say so
+    warmly and plainly" did, for a reserved card as much as for Yuri (SPEC
+    §2.5, §7.4)."""
+    from yurios.app.core.assemble import HONESTY
+    for name, law in (("embodiment", EMBODIMENT), ("text", TEXT_EMBODIMENT),
+                      ("honesty", HONESTY)):
+        for word in ("warm", "gentle", "tender", "sweet"):
+            assert word not in law.lower(), f"{word!r} in the {name} law"
+    # …nor a sentence to say: the one it quoted came back word for word from
+    # three of four characters on the first live check (SPEC §7.4).
+    assert "told me that yet" not in HONESTY
 
 
 def test_scene_state_follows_the_sticky_commands():
@@ -78,8 +95,20 @@ def test_timers_are_listed_with_time_left():
     assert "laundry" in text
 
 
-def test_no_timers_no_timer_line():
-    assert "Timers you have running" not in _render(VirtualClock())
+def test_no_timers_says_so():
+    """An empty board is stated, not left out — the window still holds the
+    turn that set the timer, and silence let her keep counting down to one
+    that landed days ago."""
+    text = _render(VirtualClock())
+    assert "Timers you have running" not in text
+    assert NO_TIMERS in text
+    clock = VirtualClock()
+    board = TimerBoard(clock)
+    board.add(id="t1", label="kiss", seconds=180)
+    assert NO_TIMERS not in _render(clock, timers=board)
+    clock.advance(200)
+    board.poll()
+    assert NO_TIMERS in _render(clock, timers=board)
 
 
 def test_default_you_is_the_user_not_her():

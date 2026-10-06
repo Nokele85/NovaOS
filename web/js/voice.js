@@ -20,6 +20,7 @@
  */
 
 import '../shared/runtime.js';
+import { detailMessage } from '../shared/http.js';
 
 const FRAME = 512;              // samples per mic frame @16k ≈ 32 ms
 const SPEECH_RMS = 0.02;        // energy gate (tune to your mic)
@@ -281,9 +282,18 @@ export function initVoice({ viseme, els }) {
         if (!m.client_id || m.client_id === requestId) finishProcessing();
         break;
       case 'error':
-        setStatus('error', 'error');
-        if (m.message) els.caption.textContent = m.message;
         console.warn('server:', m.message);
+        if (m.client_id) {
+          // A turn that failed on a socket that did not: the line reached her
+          // and the answer is what is missing, same as the HTTP path. Marked on
+          // the line and said in the composer — `.caption` is display:none in
+          // the browser room, so a reason written only there is never seen.
+          window.WorldChat?.failPending?.(m.client_id, 'no reply');
+          if (m.message) notice(m.message);
+        } else {
+          setStatus('error', 'error');
+          if (m.message) els.caption.textContent = m.message;
+        }
         finishProcessing();
         break;
     }
@@ -689,7 +699,7 @@ export function initVoice({ viseme, els }) {
                                    { method: 'POST', body });
       const data = await response.json().catch(() => ({}));
       if (mine !== pictureSeq) return;       // …until a later one takes it over
-      if (!response.ok) throw new Error(data.detail || 'that picture was refused');
+      if (!response.ok) throw new Error(detailMessage(data, 'that picture was refused'));
       picture = { id: data.id, url: data.url };
       pictureBusy = false;
       showChip(preview, false);
@@ -731,7 +741,7 @@ export function initVoice({ viseme, els }) {
       });
       reached = true;
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || `request failed: ${response.status}`);
+      if (!response.ok) throw new Error(detailMessage(data, `request failed: ${response.status}`));
       if (data.session_id) {
         sessionId = data.session_id;
         window.localStorage?.setItem(sessionKey, sessionId);

@@ -34,6 +34,8 @@ from typing import AsyncIterator
 
 import numpy as np
 
+from yurios.app.providers.usage import ACTED, LAST_STREAM, StreamTally, unanswered
+
 from .emotion import EmotionParser
 from .fillers import FillerBank
 from .latency import TurnTrace
@@ -51,6 +53,9 @@ class OutEvent:
     audio: AudioChunk | None = None
     text: str | None = None
     detail: dict | None = None
+    # Internal handoff to the host's SignalBus; encode_event never puts this on
+    # the websocket wire because results may contain private note/page content.
+    tool_outcomes: list[dict] = field(default_factory=list)
 
     @staticmethod
     def filler(chunk: AudioChunk) -> "OutEvent":
@@ -136,10 +141,19 @@ class TurnController:
             self.brain.stream_reply(session_id, text, image=image) if image
             else self.brain.stream_reply(session_id, text))
 
+        silence: StreamTally | None = None  # why the model said nothing, if it didn't
+        acted = False                       # …or whether a hand ran instead (usage.ACTED)
+
         async def produce() -> None:
             """Drain brain tokens → expression events + sentences onto the queue."""
+            nonlocal silence, acted
             buf = ""
             prev_events = 0
+            # The provider leaves its tally in the context of the task iterating
+            # it — this one, not the controller's (usage.LAST_STREAM) — so it is
+            # read here, where it lands.
+            LAST_STREAM.set(None)
+            ACTED.set(False)
             try:
                 async for token in source:
                     if self._cancel.is_set():
@@ -161,6 +175,8 @@ class TurnController:
                 parser.finish()
                 if buf.strip() and not self._cancel.is_set():
                     await sentence_q.put(("say", buf.strip()))
+                silence = LAST_STREAM.get()
+                acted = ACTED.get()
             except Exception as e:                      # brain blew up mid-stream
                 await sentence_q.put(("error", str(e)))
             finally:
@@ -168,6 +184,7 @@ class TurnController:
 
         producer = asyncio.create_task(produce())
         errored: str | None = None
+        said = False                                    # a sentence reached the voice
         try:
             while True:
                 item = await sentence_q.get()
@@ -180,6 +197,7 @@ class TurnController:
                 if kind == "expr":
                     yield OutEvent.expr(payload)         # face leads the voice
                     continue
+                said = True
                 # kind == "say": synthesize this sentence (off the event loop) and
                 # emit its audio. The producer keeps pulling tokens meanwhile —
                 # sentence two is written while sentence one is spoken (§4.2).
@@ -201,13 +219,28 @@ class TurnController:
             trace.finish(barged_in=True, trace_dir=self.trace_dir)
             yield OutEvent("cancelled")
             return
+        if not said and not acted and tokens is None:
+            # A reply with nothing in it is a turn that didn't happen (SPEC
+            # §10.5), not a clean one: persisting it would file an empty answer
+            # in her memory, and the room would draw nothing and say nothing.
+            # An opener or a murmur that comes out empty is just quiet, and a
+            # reply whose hand ran is the act, committed like any turn.
+            why = (silence.reason() if silence else "") \
+                or "her reply had nothing in it to say"
+            log.warning("voice turn came back empty: %s %s",
+                        why, silence.detail() if silence else "")
+            yield OutEvent("error", detail={"message": unanswered(why)})
+            return
 
         rep = trace.finish(barged_in=False, trace_dir=self.trace_dir)
         # persist off the hot path (Build #1's post-turn pipeline), verbatim reply
+        tool_outcomes: list[dict] = []
         if persist:
-            await self.brain.persist(session_id, text, "".join(raw_reply))
+            tool_outcomes = await self.brain.persist(
+                session_id, text, "".join(raw_reply))
         yield OutEvent("done", detail={"latency": rep,
-                                       "expression": parser.current_expression()})
+                                       "expression": parser.current_expression()},
+                       tool_outcomes=tool_outcomes)
 
     def speak(self, text: str) -> AsyncIterator[OutEvent]:
         """Say a line that is already written — a replay of something she said.

@@ -70,6 +70,11 @@ class Goal:
             return False
         return (ts_of_iso(self.due) - clock.now()) / 3600 <= horizon_hours
 
+    @property
+    def dated(self) -> bool:
+        """Whether `due` is a real time, not a filer's shelf life (SPEC §18.2)."""
+        return self.due is not None and not self.provenance.startswith(SHELF_LIFE)
+
     def is_stale(self, clock: Clock) -> bool:
         """Past due — whether it is defended or dropped is the commitment's call."""
         return self.due is not None and ts_of_iso(self.due) < clock.now()
@@ -111,6 +116,19 @@ class Goal:
         """
         p = self.meta.get("product")
         return p if isinstance(p, dict) else {}
+
+    @property
+    def held_picture(self) -> str:
+        """The `image_url` of a picture this goal holds and nobody has seen, or "".
+
+        A product marked `deliver: chat` is already in the conversation; every
+        other one — a vault product, or a legacy one with no marker — is still
+        waiting to be shown (SPEC §18.2a).
+        """
+        p = self.product
+        if p.get("deliver") == "chat":
+            return ""
+        return str(p.get("image_url") or "")
 
 
 def _echo_words(text: str) -> set[str]:
@@ -166,6 +184,63 @@ def echoes(text: str, existing: Iterable[Goal]) -> Goal | None:
     return None
 
 
+#: How long a goal she files with `create_goal` may be (SPEC §22.1d). It is a
+#: title on her list, one line of `goals.md`; the reasons behind it are the
+#: `think` line she writes above the call, which is kept beside it.
+GOAL_TEXT_MAX = 200
+
+
+def goal_shape_refused(args: dict | None) -> str:
+    """Why `create_goal`'s arguments are not a goal's shape, or "" (§22.1d).
+
+    The one refusal she can fix by writing the same call again, which is why
+    `handwork` lets her do that without spending one of the step's calls.
+    """
+    text = " ".join(str((args or {}).get("text") or "").split())
+    kind = str((args or {}).get("kind") or "task")
+    if not text:
+        return "a goal needs text saying what you'll do"
+    if len(text) > GOAL_TEXT_MAX:
+        return (f"a goal is one line of at most {GOAL_TEXT_MAX} characters and "
+                f"this one is {len(text)} — write just what you'll do, and put "
+                "why in the `think` line above it")
+    if "|" in text:
+        return "a goal's text cannot contain '|'"
+    if kind not in ("task", "reach_out"):
+        return 'kind is "task" or "reach_out"'
+    return ""
+
+
+#: Provenance of a goal a goal step filed with `create_goal` (SPEC §22.1c): the
+#: step's own goal is the parent, and it has at most one such goal open.
+STEP_GOAL = "goal:"
+
+#: Provenance of a goal she filed in her free time (SPEC §22.7): nothing on her
+#: list was ready, she looked back over her days, and this is what she chose.
+MUSE_GOAL = "muse:"
+
+#: Provenance of a goal she filed after reading a document you handed her
+#: (SPEC §34.6): `handed:<desk path>`. Not one of her own-judgement goals — it
+#: traces back to something you did, so neither the filing switch nor the cap
+#: on goals of her own applies to it.
+HANDED_GOAL = "handed:"
+
+#: Goals she filed on her own judgement rather than for a parent goal — the
+#: night's stock-take (`strategy:<day>`, §22.1b) and her free time. These are
+#: what `MIND_SELF_GOALS_MAX` counts and what the inner-life panel marks hers.
+OWN_JUDGEMENT = ("strategy:", MUSE_GOAL)
+
+#: Goals whose `due` is a shelf life, not an appointment (SPEC §18.2). Nothing
+#: she files names a date — `create_goal` takes none — so the one these carry
+#: is only when an untouched goal lets go of itself. Gate 2 scores them as
+#: undated: a three-day expiry read as a deadline denied her the waiting
+#: credit and held the reach-out under the threshold until its last six hours.
+SHELF_LIFE = (STEP_GOAL, HANDED_GOAL, *OWN_JUDGEMENT)
+
+#: Provenance prefixes that name a parent goal, deduplicated on the parent.
+PARENTED = ("followup:", "told:", STEP_GOAL)
+
+
 def already_carrying(text: str, provenance: str,
                      existing: Iterable[Goal]) -> Goal | None:
     """Is this a goal she is already carrying? Two questions, not one.
@@ -190,10 +265,20 @@ def already_carrying(text: str, provenance: str,
     For these the honest question is whether this parent already has one —
     which is an exact test, and idempotent. Everything else asks the original
     question: is this the same intention, rephrased (`echoes`)?
+
+    A message she decided to send from a goal step (`told:<id>`, §18.2b) is
+    the same shape for the same reason: it quotes the goal it came from, and
+    the rewording test would fold her words back into the goal they finish.
+
+    A goal a step filed (`goal:<id>`) is exact on its parent here because that
+    is the cap — one open at a time per parent; the rewording test against
+    every *other* open goal is `acts.file_from_step`'s, which can say which
+    goal she is already carrying rather than handing one back unexplained.
     """
-    if provenance.startswith("followup:"):
+    if provenance.startswith(PARENTED):
         return next((g for g in existing if g.provenance == provenance), None)
     return echoes(text, existing)
+
 
 
 LINE_RE = re.compile(r"^- \[(?P<done>[ x~])\] \((?P<id>[\w-]+)\) (?P<text>.*?)"
@@ -237,6 +322,18 @@ class GoalStore:
 
     def open_goals(self) -> list[Goal]:
         return [g for g in self.all() if g.state in ("pending", "active", "waiting")]
+
+    def desk_labels(self, desk: str = "goals/{id}.md", *,
+                    this: str = "") -> dict[str, str]:
+        """Which goal each desk file belongs to, for the desk digest (§22.3).
+
+        By id alone, `goals/g-8c6059baa064.md` and four others like it named
+        nothing — live, 4 Oct, a skill goal's step took the newest of them,
+        the finished diary goal's, for its own. `this` marks the goal asking.
+        """
+        return {desk.format(id=g.id):
+                ("this goal" if g.id == this else f"“{trim(g.text, 60)}” ({g.state})")
+                for g in self.all()}
 
     def get(self, goal_id: str) -> Goal | None:
         return next((g for g in self.all() if g.id == goal_id), None)
@@ -311,6 +408,37 @@ class GoalStore:
             self._save(goals)
         return found
 
+    def picture_shown(self, image_url: str) -> list[Goal]:
+        """A picture reached the chat: no goal holding it may send it again.
+
+        One photo rides on two goals once it is handed on — the goal that made
+        it and the follow-up `offer_the_picture` files to send it (§18.2a) —
+        and whichever delivered it only marked itself. Live, 5 Oct: the
+        follow-up sent the picture at 09:01, the parent went on telling chat
+        "the picture is already taken; Grant hasn't seen it yet", and at 09:04
+        she showed it again. Every holder is re-marked `deliver: chat`; an
+        open follow-up holding it is done, its whole errand having happened.
+        Returns the goals changed.
+        """
+        if not image_url:
+            return []
+        goals = self.all()
+        changed = []
+        for g in goals:
+            if str(g.product.get("image_url") or "") != image_url:
+                continue
+            if g.product.get("deliver") != "chat":
+                g.meta = {**g.meta, "product": {**g.product, "deliver": "chat"}}
+                changed.append(g)
+            if (g.state in ("pending", "active", "waiting")
+                    and g.provenance.startswith("followup:")):
+                g.state = "done"
+                if g not in changed:
+                    changed.append(g)
+        if changed:
+            self._save(goals)
+        return changed
+
     def reconsider(self) -> list[Goal]:
         """Apply commitment strategies to stale goals (SPEC §22.2): blind is
         defended, open-minded drops the moment it stops being timely.
@@ -378,7 +506,7 @@ PROMISE_RES = (
 )
 REMIND_RE = re.compile(r"\bremind me to\s+(.{4,100}?)(?:[.!?\n]|$)", re.I)
 
-# --- the same scan in German (SPEC §22.1c) -------------------------------------
+# --- the same scan in German (SPEC §22.1g) -------------------------------------
 #
 # Every opener above is English, so a companion who answers in German could make
 # no promise the store would keep: "Ich mach's fertig und meld mich" filed
@@ -481,6 +609,11 @@ _TRAILING_OFFER = re.compile(
     r"|(?:wenn|falls)\s+du\s+(?:(?:das|es)\s+)?(?:willst|magst|m[öo]chtest"
     r"|lust\s+hast))\b.*$", re.I)
 
+# Quoted examples are evidence about what somebody said, not a new commitment in
+# the reply that quotes them. Straight/curly double quotes and Markdown code spans
+# cover the live false positive without treating the apostrophe in "I'll" as a quote.
+_QUOTED = re.compile(r'"[^"\n]*"|“[^”\n]*”|`[^`\n]*`')
+
 
 def _clean(text: str) -> str:
     return text.strip().rstrip(",;:").strip()
@@ -529,7 +662,14 @@ another task or invent work. If every candidate is framing, return null.
 
 The final state at the END of the assistant reply controls. If the reply later gives
 the result, confirmation, answer, artifact, or explicitly says the work is complete,
-return null even when an earlier sentence said "I will" or "let me" do that work.
+return null even when an earlier sentence said "I will" or "let me" do that work —
+but only when completion is supported by the supplied exchange or tool outcomes.
+Do not treat the assistant's own narration as proof that an action happened. An `ok`
+tool outcome proves only what that tool returned: `list_notes` proves an index of paths
+and sizes, not that any file was read; `read_note` proves only the returned file and
+line range; and quantified work such as "read them all" requires outcomes covering the
+claimed scope. An error or denial proves nothing completed. A result whose status is
+`started` proves dispatch, not that the resulting work finished.
 
 Return exactly one JSON object and no prose:
 {"goal": null}
@@ -581,6 +721,12 @@ PROMISE_REVIEW_RESPONSE_FORMAT = {
 
 def discover_promise_candidates(reply: str, user_msg: str) -> list[PromiseCandidate]:
     """Find possible commitments in source order; make no semantic decision."""
+    reply = reply or ""
+    quoted = [(match.start(), match.end()) for match in _QUOTED.finditer(reply)]
+
+    def is_quoted(start: int) -> bool:
+        return any(left <= start < right for left, right in quoted)
+
     raw: list[tuple[int, str, str, str, str]] = []
     seen: set[tuple[str, str]] = set()
 
@@ -613,11 +759,10 @@ def discover_promise_candidates(reply: str, user_msg: str) -> list[PromiseCandid
     )
     found: list[tuple[int, str, str, str, str]] = []
     for pattern, confidence in patterns:
-        for match in pattern.finditer(reply or ""):
-            before = (reply or "")[:match.start()].rsplit("\n", 1)[-1]
-            if _CONDITIONAL.search(before):
+        for match in pattern.finditer(reply):
+            if is_quoted(match.start()):
                 continue
-            if before.rstrip()[-1:] in _QUOTE_OPEN:
+            if _CONDITIONAL.search(reply[:match.start()].rsplit("\n", 1)[-1]):
                 continue
             found.append((match.start(), match.group(1),
                           "promise:her-own-words", match.group(0), confidence))
@@ -641,13 +786,45 @@ def fallback_promises(candidates: list[PromiseCandidate]) -> list[PromiseCandida
             if candidate.confidence in ("explicit", "strong")][:1]
 
 
+_TIMER_PROMISE_RE = re.compile(
+    r"\b(?:timer|countdown|clock|remind|seconds?|minutes?|hours?|"
+    r"goes? off|fires?|rings?|when (?:it(?:'s| is)?|the) time)\b", re.I)
+
+
+def timer_for_promise(tool_outcomes: list[dict] | None,
+                      *evidence: str) -> dict | None:
+    """Return the successful timer contract that owns this promise, if any.
+
+    The timer board and the goal store are deliberately separate, but a turn can
+    create both: "say hi in five minutes" schedules the countdown and REFLECT
+    files the future delivery as a promise. The timer id is their stable join.
+    """
+    text = " ".join(str(item or "") for item in evidence)
+    for outcome in tool_outcomes or []:
+        if outcome.get("tool") != "set_timer" or outcome.get("verdict") != "ok":
+            continue
+        try:
+            result = json.loads(str(outcome.get("result") or ""))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(result, dict) or not result.get("id"):
+            continue
+        label = str(result.get("label") or outcome.get("args", {}).get("label") or "")
+        if (_TIMER_PROMISE_RE.search(text)
+                or (label.strip() and label.strip().lower() in text.lower())):
+            return result
+    return None
+
+
 def promise_review_messages(*, user_text: str, reply: str,
-                            candidates: list[dict], capabilities: list[str]) -> list[dict]:
+                             candidates: list[dict], capabilities: list[str],
+                             tool_outcomes: list[dict] | None = None) -> list[dict]:
     payload = {
         "user_request": user_text,
         "assistant_reply": reply,
         "candidates": candidates,
         "available_capabilities": capabilities,
+        "tool_outcomes": tool_outcomes or [],
     }
     return [{"role": "system", "content": PROMISE_REVIEW_SYSTEM},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]

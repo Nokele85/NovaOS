@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from yurios.app.providers.admission import inference_admission
+from yurios.app.providers.usage import StreamTally
 
 
 log = logging.getLogger(__name__)
@@ -669,10 +670,17 @@ class GGUFChatModel:
             set_limit = getattr(self.meter, "set_limit", None)
             if callable(set_limit):
                 set_limit(loaded.context_length, "direct gguf")
+            max_tokens = asked = params.get("max_tokens", 1024)
+            room = getattr(self.meter, "reply_room", None)
+            if callable(room):
+                # llama.cpp trims an oversized ask itself; asking for what fits
+                # keeps the tally's "whole N-token budget" honest (usage.py).
+                max_tokens = room(max_tokens)
             try:
                 args = {"messages": messages,
                         "temperature": params.get("temperature", self.temperature),
-                        "max_tokens": params.get("max_tokens", 1024), "stream": True}
+                        "max_tokens": max_tokens, "stream": True}
+                tally = StreamTally(max_tokens, window_bound=max_tokens < asked)
                 handler = getattr(loaded, "no_think_handler", None)
                 if not self.thinking and handler is not None:
                     response = await asyncio.to_thread(handler,
@@ -683,9 +691,11 @@ class GGUFChatModel:
                 for_more, chunk = await asyncio.to_thread(_next, response)
                 while for_more:
                     text = _stream_content(chunk)
+                    tally.note(chunk, text)
                     if text:
                         yield text
                     for_more, chunk = await asyncio.to_thread(_next, response)
+                tally.settle()                # why, if that was nothing (usage.py)
             finally:
                 loaded.lock.release()
 

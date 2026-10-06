@@ -46,14 +46,18 @@ so it must work knowing nothing but a path.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 import yaml
 
 from yurios.app.vaultgit import atomic_write
+
+from .util import closing
 
 log = logging.getLogger("mind.workspace")
 
@@ -121,6 +125,55 @@ class Entry:
     def as_dict(self) -> dict:
         return {"path": self.path, "bytes": self.bytes,
                 "mtime": self.mtime, "dir": self.is_dir}
+
+
+#: A desk file named for a day — the diary's and the stock-take's shape.
+DATED_RE = re.compile(r"(?:^|/)\d{4}-\d{2}-\d{2}\.md$")
+
+#: The §34.5 block's bounds. Whole sentences up to these, so the block costs a
+#: few hundred tokens a turn however long the night's writing ran.
+ON_MIND_DIARY_CHARS = 500
+ON_MIND_STRATEGY_CHARS = 500
+ON_MIND_GOAL_CHARS = 240
+ON_MIND_GOALS = 4
+
+#: A goal desk entry that only records a hand's result. The step's own words
+#: sit beside it (goalwork.journal_reach); the result line is not thinking.
+#: Entries written before one-entry-a-step still read this way.
+_TOOL_LOG = ("reached for ", "wanted to ", "goal complete")
+
+#: The line a step's desk entry lists its calls under (SPEC §22.3), below her
+#: own words. Readers that want the words stop at it (`desk_words`).
+DESK_DONE = "done in this step:"
+
+
+def desk_words(entry: str) -> str:
+    """A desk entry's words, without the list of calls under them."""
+    head, found, _ = (entry or "").partition(f"\n{DESK_DONE}\n")
+    if not found and (entry or "").startswith(f"{DESK_DONE}\n"):
+        return ""
+    return head
+
+
+def _body(text: str) -> str:
+    """A desk note without its `# heading` lines."""
+    return "\n".join(line for line in (text or "").splitlines()
+                     if not line.lstrip().startswith("#")).strip()
+
+
+def last_entry(desk: str, limit: int) -> str:
+    """The last words she left on a goal's desk file, minus the tool log."""
+    for body in reversed(re.split(r"^## .*$", desk or "", flags=re.MULTILINE)):
+        kept = []
+        for line in desk_words(body.strip()).splitlines():
+            line = line.strip()
+            if line.lower().startswith("think "):
+                line = line[6:].strip()
+            if line and not line.lower().startswith(_TOOL_LOG):
+                kept.append(line)
+        if kept:
+            return closing(" ".join(kept), limit)
+    return ""
 
 
 class Workspace:
@@ -378,21 +431,93 @@ class Workspace:
 
     # --------------------------------------------------------------- for DREAM
 
-    def digest(self, *, limit: int = 40) -> str:
+    def digest(self, *, limit: int = 40,
+               labels: Mapping[str, str] | None = None) -> str:
         """A compact index of the desk for a prompt: path, size, last touched.
 
         Dream jobs and the prompt's workspace slot both want "what is on the
         desk" without any of the contents; this is that, cheap enough to build
-        every time it's asked for.
+        every time it's asked for. `labels` says what a path is when its name
+        cannot — a goal's desk file is `goals/<id>.md`, and five of those
+        unlabelled were five files nobody could tell apart (`GoalStore.desk_labels`).
         """
         entries = [e for e in self.list() if not e.is_dir]
         if not entries:
             return ""
         entries.sort(key=lambda e: e.mtime, reverse=True)
-        lines = [f"- {e.path} ({e.bytes}b)" for e in entries[:limit]]
+        labels = labels or {}
+        lines = [f"- {e.path} ({e.bytes}b)"
+                 + (f" — {labels[e.path]}" if e.path in labels else "")
+                 for e in entries[:limit]]
         if len(entries) > limit:
             lines.append(f"- …and {len(entries) - limit} more")
         return "\n".join(lines)
+
+    def latest_dated(self, folder: str) -> tuple[str, str]:
+        """`(day, text)` of the newest `<folder>/YYYY-MM-DD.md`, or `("", "")`.
+
+        By name, not mtime: the night writes yesterday's entry today, and a
+        folder's README sorts after every date.
+        """
+        try:
+            entries = self.list(folder, recursive=False)
+        except (OutsideTheDesk, OSError):
+            return "", ""
+        days = sorted(e.path for e in entries
+                      if not e.is_dir and DATED_RE.search(e.path))
+        if not days:
+            return "", ""
+        try:
+            text = self.read(days[-1], default="") or ""
+        except (OutsideTheDesk, OSError):
+            return "", ""
+        return Path(days[-1]).stem, text
+
+    def on_your_mind(self, goals, *, user_name: str = "them",
+                     goal_desk: str = "goals/{id}.md") -> str:
+        """The chat prompt's window onto her own recent thinking (SPEC §34.5).
+
+        The digest above is paths; the goal list is titles. Neither carries
+        what she *thought* — the close of last night's diary, where the
+        stock-take landed, the last line she left on each goal she is working
+        — so the self that talks to you never met the self that writes. This
+        is that, bounded, and labelled as what it is: her writing, which is
+        not a record of events. The desk has held a diary entry describing a
+        conversation that never happened; shown unlabelled, she would have
+        spoken as though it had.
+        """
+        lines: list[str] = []
+        day, text = self.latest_dated("diary")
+        words = closing(_body(text), ON_MIND_DIARY_CHARS)
+        if words:
+            lines.append(f"From your diary ({day}): {words}")
+        day, text = self.latest_dated("strategy")
+        words = closing(_body(text), ON_MIND_STRATEGY_CHARS)
+        if words:
+            lines.append(f"From your last stock-take ({day}): {words}")
+        working = []
+        for goal in list(goals)[-ON_MIND_GOALS:]:
+            try:
+                desk = self.read(goal_desk.format(id=goal.id), default="") or ""
+            except (OutsideTheDesk, OSError):
+                continue
+            left = last_entry(desk, ON_MIND_GOAL_CHARS)
+            if left:
+                working.append(f"- {goal.text}: {left}")
+        if working:
+            lines.append("Where you left your goals:\n" + "\n".join(working))
+        if not lines:
+            return ""
+        return ("## ON YOUR MIND\n\n"
+                "Your own private writing from between conversations: the end "
+                "of your last diary entry, your last stock-take, and where you "
+                "left the goals you are working on. It is what you were "
+                "thinking, not a record of what happened — if it says you told "
+                f"{user_name} something or did something with them, only this "
+                "conversation and the memory blocks can say whether that "
+                "happened. Let it shape what you care about and what you bring "
+                "up; never present it as something that took place.\n\n"
+                + "\n".join(lines))
 
     def gather(self, paths: list[str], *, max_chars: int = 6000) -> str:
         """Several desk files concatenated under their names, capped whole.
@@ -449,6 +574,12 @@ class Skill:
 
 
 SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,48}$")
+
+def _yaml_str(value: str) -> str:
+    """One frontmatter value as a double-quoted scalar. JSON's string syntax is
+    YAML's, so this round-trips anything — colons, `#`, quotes, unicode."""
+    return json.dumps(value, ensure_ascii=False)
+
 
 SKILL_TEMPLATE = """---
 name: {name}
@@ -558,9 +689,14 @@ class SkillStore(Workspace):
             raise ValueError("a skill needs a description — it is the only "
                              "part she reads before deciding to open it")
         existing = self.get(name)
+        # Quoted, not pasted: the description is free text she writes, and a
+        # bare `when they ask: set a timer` is a YAML mapping error — the
+        # frontmatter then fails to parse, the description reads as empty and
+        # `catalog()` drops the skill she has just been told was saved. A
+        # ` #` truncated it the same way, silently.
         text = SKILL_TEMPLATE.format(
-            name=name, description=" ".join(description.split()),
-            author=author or (existing.author if existing else "her"),
+            name=name, description=_yaml_str(" ".join(description.split())),
+            author=_yaml_str(author or (existing.author if existing else "her")),
             body=body.strip())
         self.write(f"{name}/SKILL.md", text)
         return self.get(name)

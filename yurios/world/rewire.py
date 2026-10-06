@@ -35,7 +35,7 @@ log = logging.getLogger("world.rewire")
 BRAIN_FIELDS: tuple[str, ...] = (
     "chat_model", "utility_model",
     "lmstudio_base_url", "ollama_base_url", "openrouter_api_key", "connection_api_key",
-    "chat_thinking", "utility_thinking", "utility_max_tokens",
+    "chat_thinking", "chat_reasoning_effort", "utility_thinking", "utility_max_tokens",
     "temperature", "max_reply_tokens", "context_length",
 )
 
@@ -45,8 +45,8 @@ BRAIN_FIELDS: tuple[str, ...] = (
 # they land on the Config.
 _PROVIDER_FIELDS = frozenset({
     "chat_model", "utility_model", "lmstudio_base_url", "ollama_base_url",
-    "openrouter_api_key", "connection_api_key", "chat_thinking", "utility_thinking",
-    "utility_max_tokens",
+    "openrouter_api_key", "connection_api_key", "chat_thinking", "chat_reasoning_effort",
+    "utility_thinking", "utility_max_tokens",
 })
 
 
@@ -62,6 +62,9 @@ OVERRIDE_SCHEMA: tuple[dict[str, Any], ...] = (
      "help": "her summaries and fact extraction (off the hot path)"},
     {"key": "chat_thinking", "store": "options", "type": "bool",
      "help": "her reply <think> pass — off keeps a reasoning model real-time"},
+    {"key": "chat_reasoning_effort", "store": "options", "type": "select",
+     "options": ["", "low", "medium", "high"],
+     "help": "how much reply reasoning to request when her think pass is on"},
     {"key": "utility_thinking", "store": "options", "type": "bool",
      "help": "the utility model's <think> pass"},
     {"key": "temperature", "store": "options", "type": "number", "step": "0.05",
@@ -76,6 +79,28 @@ OVERRIDE_SCHEMA: tuple[dict[str, Any], ...] = (
 def snapshot(cfg) -> dict[str, Any]:
     """Every brain field as this Config currently holds it."""
     return {field: getattr(cfg, field) for field in BRAIN_FIELDS}
+
+
+def model_route(value: Any) -> str:
+    """A submitted model id, checked for shape before it can reach her record.
+
+    Not a probe — whether the server has that model is only known by asking it,
+    which a save must not wait on. But a route with a space in it, or an empty
+    `provider//model` segment, is one no provider will ever answer, and taking it
+    means every turn after the save fails with LiteLLM's error instead of the
+    form saying no. Blank is still *inherit* (§31.2). Raises `ValueError`."""
+    route = "" if value is None else str(value).strip()
+    if not route:
+        return ""
+    if len(route) > 200:
+        raise ValueError("model route is too long")
+    if any(ch.isspace() or not ch.isprintable() for ch in route):
+        raise ValueError(f"model route {route!r} contains a space; "
+                         "expected provider/model, e.g. openrouter/z-ai/glm-5.2")
+    if "" in route.split("/"):
+        raise ValueError(f"model route {route!r} has an empty segment; "
+                         "expected provider/model, e.g. openrouter/z-ai/glm-5.2")
+    return route
 
 
 def coerce(cfg, field: str, value: Any) -> Any:

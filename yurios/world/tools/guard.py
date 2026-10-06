@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Callable
 
 from yurios.mind.util import jsonl_append, new_id
 
@@ -21,10 +22,14 @@ log = logging.getLogger("world.guard")
 
 RESULT_MAX_CHARS = 600      # a tool result is a fact for her to speak to, not a payload
 
-#: Catalog tools: the listing or the note IS the result. Mid-JSON truncation
-#: of `list_notes` is how a diary folder became a days-long loop — she never
-#: saw `count`. `read_note` already had the higher bound in ToolBrain; this
-#: table is that exception in one place (SPEC §7.3).
+#: Catalog tools: the listing, the note or the skill IS the result. Mid-JSON
+#: truncation of `list_notes` is how a diary folder became a days-long loop —
+#: she never saw `count`. Each of these tools sizes its own answer to fit its
+#: number here (world/tools/server.py), so this cut never lands inside one; and
+#: every place that hands a result back to her reads this table, a goal step's
+#: included (`mind/hands.bounded`). `read_skill` was left on the default: 600
+#: characters of a 2,000-character skill, under a description telling her to
+#: read the skill BEFORE following it (SPEC §7.3).
 RESULT_LIMITS = {
     "read_note": 5_000,
     "list_notes": 5_000,
@@ -35,6 +40,13 @@ RESULT_LIMITS = {
     "read_skill": 16_000,
     "device_read_app": 16_000,
 }
+
+#: Hands that only look at her own desk. Reading a note twice changes nothing
+#: and costs nothing, and reading it again after writing to it is how she checks
+#: the write landed — so neither dedupe may refuse a read that follows a change
+#: (SPEC §7.3). A repeat with nothing in between is still a repeat.
+READ_ONLY = frozenset({"read_note", "list_notes", "count_note_lines",
+                       "read_skill"})
 
 
 def _fingerprint(tool: str, args: dict | None) -> str:
@@ -84,6 +96,14 @@ class Guard:
         now = clock.now()
         self._buckets = {t: {"tokens": float(r), "at": now}
                          for t, r in self._rates.items()}
+        #: Called with every audit line after it is written — the chat's tool
+        #: notices (world/main.py). The audit is the one place every call, from
+        #: every door, already passes through.
+        self._observers: list[Callable[[dict], object]] = []
+
+    def observe(self, fn: Callable[[dict], object]) -> None:
+        """Hear every audit line this guard writes (see `_observers`)."""
+        self._observers.append(fn)
 
     # ---- policy ----
 
@@ -126,7 +146,8 @@ class Guard:
         # reaches for the camera again. The rate limit can't catch it (a burst
         # of two is what the bucket is *for*), and the per-turn cap only bounds
         # how many duplicates land. Checked before the bucket, so a repeat costs
-        # her nothing but the answer.
+        # her nothing but the answer. A read is only a repeat until something
+        # else runs (`READ_ONLY`).
         fp = _fingerprint(tool, args) if turn is not None else ""
         if turn is not None and fp in turn.seen:
             return False, "already done this turn"
@@ -139,6 +160,11 @@ class Guard:
             return False, "rate limit"
         b["tokens"] -= 1.0
         if turn is not None:          # only a call she actually got to make
+            if tool not in READ_ONLY:
+                # Anything else may have changed what a read would return, so
+                # the reads before it stop counting as already done.
+                turn.seen = {seen for seen in turn.seen
+                             if seen.partition("\0")[0] not in READ_ONLY}
             turn.seen.add(fp)
         return True, ""
 
@@ -172,3 +198,8 @@ class Guard:
             # An audit line is an observation. It must never be the reason the
             # turn it is observing fails.
             log.exception("audit write failed")
+        for fn in self._observers:
+            try:
+                fn(line)
+            except Exception:  # noqa: BLE001 — same rule as the write above
+                log.exception("audit observer failed")

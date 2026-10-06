@@ -13,13 +13,16 @@ import asyncio
 import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from yurios.mind.dreamjobs import (BUILTIN_NAMES, JOB_KINDS, JOB_NAME_RE,
                                   DreamRunner, load_job_files,
                                   validate_job_file)
 from yurios.mind.journal import canonical_day
+from yurios.mind.documents import (MAX_UPLOAD_BYTES, DocumentRefused, read_document,
+                                   shelf_document)
+from yurios.mind.handed import INBOX
 from yurios.mind.selfedit import SoulShapeError
 from yurios.mind.workspace import DeskFull, OutsideTheDesk, Workspace
 
@@ -70,7 +73,17 @@ def _research_file(request: Request, name: str) -> Path:
 @router.get("/api/mind")
 async def mind_state(request: Request) -> dict:
     """Activity state, cadence, budget, goals, the shelf, pending self-edits."""
-    return _mind(request).snapshot()
+    snap = _mind(request).snapshot()
+    snap["spoke_first_today"] = await asyncio.to_thread(
+        request.app.state.rt.spoke_first_today)
+    return snap
+
+
+@router.get("/api/timers")
+async def timer_state(request: Request, response: Response) -> dict:
+    """Pending countdowns exist independently of whether the mind is running."""
+    response.headers["Cache-Control"] = "no-store"
+    return request.app.state.rt.timers.snapshot()
 
 
 @router.get("/api/mind/workspace")
@@ -109,6 +122,45 @@ async def workspace_write(request: Request) -> dict:
     return {"file": entry.as_dict()}
 
 
+@router.post("/api/mind/workspace/inbox")
+async def workspace_inbox(request: Request, file: UploadFile = File(...)) -> dict:
+    """Hand her a document: onto her desk, for her to read and decide about (SPEC §34.6).
+
+    Not the shelf — nothing here is indexed or searched. The file lands in
+    `inbox/` on her desk (a PDF as the `.md` of its text), and a `handed` signal
+    tells her mind it arrived; when she sits down with it is `MIND_INBOX_WAKE`.
+    With the mind off it is still on the desk, where her hands can reach it if
+    you mention it — `noticed` says which.
+    """
+    desk = _workspace(request)
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        # Off the loop: a PDF is converted here, and a book is seconds of CPU.
+        doc, text = await asyncio.to_thread(read_document, file.filename or "", data)
+    except DocumentRefused as e:
+        raise HTTPException(e.status, str(e)) from None
+    path = f"{INBOX}/{doc}"
+    try:
+        replaced = desk.resolve(path).is_file()
+        entry = await asyncio.to_thread(desk.write, path, text)
+    except DeskFull as e:
+        raise HTTPException(413, f"too big for her desk ({e}) — the shelf "
+                                 "takes larger documents") from None
+    except OutsideTheDesk as e:
+        raise HTTPException(400, str(e)) from None
+    rt = request.app.state.rt
+    rt.hub.publish("workspace", {"action": "write", **entry.as_dict()})
+    mind = getattr(rt, "mind", None)
+    noticed = mind is not None
+    if noticed:
+        rt.post_signal("handed", {"path": entry.path,
+                                  "name": file.filename or doc,
+                                  "bytes": entry.bytes}, source="user")
+    return {"path": entry.path, "name": doc, "bytes": entry.bytes,
+            "replaced": replaced, "noticed": noticed,
+            "wakes": noticed and bool(rt.cfg.mind_inbox_wake)}
+
+
 @router.get("/api/mind/research")
 async def research_list(request: Request) -> dict:
     """Durable source documents on the research shelf, newest first."""
@@ -119,6 +171,32 @@ async def research_list(request: Request) -> dict:
     files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return {"files": [{"name": path.name, "bytes": path.stat().st_size,
                         "mtime": path.stat().st_mtime} for path in files]}
+
+
+@router.post("/api/mind/research")
+async def research_add(request: Request, file: UploadFile = File(...)) -> dict:
+    """Hand her a document to read: the drop folder, from a browser (SPEC §20.1).
+
+    It lands on the shelf and nothing more — SENSE reads it on a tick, as it
+    would a file copied into `knowledge/reference/` — so this answers at once
+    with what the read will cost rather than waiting out minutes of model
+    calls. A PDF goes on as the `.md` of its text. The shelf belongs to the
+    mind, so with the mind off this is a 503.
+    """
+    mind = _mind(request)
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        # Off the loop: a PDF is converted here, and a book is seconds of CPU.
+        doc, text = await asyncio.to_thread(shelf_document, file.filename or "", data)
+    except DocumentRefused as e:
+        raise HTTPException(e.status, str(e)) from None
+    shelved = await asyncio.to_thread(mind.knowledge.shelve, doc, text)
+    # Something a person did: commit it under its own name now, not swept into
+    # whichever tick trips the daily window next (AGENTS.md, SPEC §2.1).
+    await asyncio.to_thread(mind.vault.commit_if_dirty,
+                            f"user: put {doc} on the shelf", now=True)
+    request.app.state.rt.hub.publish("shelf", {"action": "add", **shelved})
+    return shelved
 
 
 @router.get("/api/mind/research/file")
@@ -427,6 +505,23 @@ async def decide_edit(edit_id: str, request: Request) -> dict:
         decision["content"] = content
     request.app.state.rt.signals.post("selfedit_decision", decision, source="user")
     return {"queued": True, "id": edit_id, "revised": "content" in decision}
+
+
+@router.post("/api/mind/budget/reset")
+async def reset_budget(request: Request) -> dict:
+    """Zero today's token ledger (SPEC §17.3).
+
+    Applied straight to the running governor, like the goal-filing switch: it
+    is a ruling on her allowance, not a decision for her to weigh. It does not
+    move the ladder — nothing but a user turn moves her up it (§17.2) — so a
+    day held DORMANT by pressure resumes IDLE the next time she comes down
+    from ENGAGED, not this second.
+    """
+    mind = _mind(request)
+    snapshot = mind.budget.reset()
+    mind.hub.publish("mind", {"state": mind.activity.state,
+                              "intention": "budget_reset"})
+    return snapshot
 
 
 @router.post("/api/mind/goals/filing")

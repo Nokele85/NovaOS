@@ -46,8 +46,9 @@ class ConversationalBrain(Protocol):
         """The continuity opener. Not a turn, so it is never persisted."""
         ...
 
-    async def persist(self, session_id: str, user_text: str, reply: str) -> None:
-        """Commit the turn: corpus line, journal, index, USER.md, one git commit."""
+    async def persist(self, session_id: str, user_text: str,
+                      reply: str) -> list[dict]:
+        """Commit the turn and return its structured tool outcomes."""
         ...
 
     def abandon(self, session_id: str) -> None:
@@ -87,6 +88,10 @@ class AutonomousBrain(ConversationalBrain, Protocol):
         """The discovered hands (SPEC §7.2). None or empty means no hands here."""
         ...
 
+    def set_hands_policy(self, permits: Any) -> None:
+        """The one rule (SPEC §26.1): `(tool) -> bool`, asked per call."""
+        ...
+
     def set_world(self, world: Any) -> None:
         """The mind's `WorldModelStore` — the §19.2 seam swap."""
         ...
@@ -99,7 +104,7 @@ class AutonomousBrain(ConversationalBrain, Protocol):
         """Her desk and her skills (SPEC §34.3)."""
         ...
 
-    def set_goals(self, store: Any) -> None:
+    def set_goals(self, store: Any, on_write: Any = None) -> None:
         """Her standing list, into the conversational prompt (SPEC §22)."""
         ...
 

@@ -23,6 +23,10 @@ class FakeShelf:
         self.docs: dict[str, str] = {}
         self.fail = fail
 
+    def estimate(self, text, *, name=""):
+        return {"passages": 1, "calls": 2, "digested": False,
+                "chars": len(text)}
+
     async def ingest(self, name, text=None):
         if self.fail:
             raise RuntimeError("no embedder backend")
@@ -205,11 +209,9 @@ async def _drain(r: Researcher) -> None:
         await asyncio.sleep(0)
 
 
-async def test_a_research_run_is_retrievable_afterwards(clock, tmp_path):
-    """Against the **real** KnowledgeStore, not the recording fake: the point of
-    shelving is that the same text comes back out of `search()` later. This is
-    the half of §20.2 that lives on the research side; test_knowledge_slot.py
-    carries it the rest of the way, from the index into the prompt."""
+async def test_raw_sources_are_archived_but_only_the_topic_page_is_retrieved(
+        clock, tmp_path):
+    """The old web rows may exist, but only the compiled topic page reaches RAG."""
     from yurios.mind.knowledge import KnowledgeStore
     from yurios.mind.vaultio import MindVault
 
@@ -231,17 +233,21 @@ async def test_a_research_run_is_retrievable_afterwards(clock, tmp_path):
     assert shelved, "the run put documents on the shelf"
     assert all(name.startswith("web-") for name in shelved)
 
-    hits = store.search("chanoyu matcha whisked", k=3)
-    assert hits, "and they come back out of the index"
-    assert hits[0].citation.startswith("web-")
-    # the provenance header rode along, so a citation traces back to a URL
-    doc = (store.reference / hits[0].doc).read_text()
+    assert store.search("chanoyu matcha whisked", k=3) == []
+    doc = (store.reference / shelved[0]).read_text()
     assert "Source: http" in doc
+    note = ("# Tea ceremony\n\nChanoyu whisks matcha, according to "
+            "https://example.invalid/overview.\n")
+    assert await r.publish_research_note("tea-ceremony", note) == (
+        "research-tea-ceremony.md")
+    assert r.research_note("tea-ceremony") == note
+    hits = store.search("chanoyu matcha whisked", k=3)
+    assert hits and all(hit.doc == "research-tea-ceremony.md" for hit in hits)
 
 
-async def test_a_page_she_read_herself_is_retrievable(clock, tmp_path):
-    """`read_page` shelves through the same door — fire-and-forget from a turn
-    that is still streaming — so it must end up equally retrievable."""
+async def test_a_page_she_read_herself_is_archived_without_entering_rag(
+        clock, tmp_path):
+    """A direct read is kept on disk for verification, outside the prompt."""
     import asyncio
 
     from yurios.mind.knowledge import KnowledgeStore
@@ -255,8 +261,66 @@ async def test_a_page_she_read_herself_is_retrievable(clock, tmp_path):
               "text": "Sencha is steamed rather than pan-fired."})
     await asyncio.gather(*r._tasks)
 
-    hits = store.search("sencha steamed", k=2)
-    assert hits and "steamed" in hits[0].text
+    assert store.search("sencha steamed", k=2) == []
+    (doc,) = [p for p in store.reference.glob("web-*.md")]
+    assert "Sencha is steamed" in doc.read_text()
+    assert store.inspect(doc.name) == []            # kept, never embedded
+    assert store.pending_docs() == []               # …and no tick will read it
+
+
+async def test_a_research_run_spends_no_model_calls_on_its_sources(clock, tmp_path):
+    """§20.2 never retrieves a raw page, so reading one into the index is calls
+    spent on chunks nothing can find. The run keeps them for nothing — which is
+    also why its ceiling never has a page to hold back."""
+    from yurios.mind.knowledge import KnowledgeStore
+    from yurios.mind.vaultio import MindVault
+
+    from .conftest import FakeEmbedder
+
+    embedder = FakeEmbedder()
+    embedded = []
+    real = embedder.embed
+    embedder.embed = lambda texts: embedded.extend(texts) or real(texts)
+    store = KnowledgeStore(MindVault(tmp_path / "vault"), embedder, clock)
+    r, post, _speak = make(clock, shelf=store)
+    r.max_calls = 0
+    await r._job(dict(CONTRACT))
+
+    assert embedded == []
+    assert len(store.shelf()) == 2
+    assert "2 of 2 shelved" in post.messages[0]["text"]
+    assert "ceiling" not in post.messages[0]["text"]
+
+
+async def test_a_held_source_resumed_is_kept_not_read(clock, tmp_path):
+    from yurios.mind.knowledge import KnowledgeStore
+    from yurios.mind.vaultio import MindVault
+
+    from .conftest import FakeEmbedder
+
+    store = KnowledgeStore(MindVault(tmp_path / "vault"), FakeEmbedder(), clock)
+    doc = store.park("web-sencha-0123456789.md", "# Sencha\n\nSteamed, not fired.\n")
+    (held,) = store.holds()
+    assert held["remaining_calls"] == 0             # nothing to spend on it
+    assert store.resume(doc)
+    (result,) = await store.scan()
+    assert result.doc == doc and result.chunks == 0
+    assert store.holds() == [] and store.pending_docs() == []
+
+
+async def test_dream_archives_a_source_without_embedding_it(clock, tmp_path):
+    from yurios.mind.knowledge import KnowledgeStore
+    from yurios.mind.vaultio import MindVault
+
+    from .conftest import FakeEmbedder
+
+    store = KnowledgeStore(MindVault(tmp_path / "vault"), FakeEmbedder(), clock)
+    r, _post, _speak = make(clock, shelf=store)
+    doc = await r.archive_source({"url": "https://example.invalid/sencha",
+                                  "title": "Sencha", "text": "Sencha is steamed."})
+    assert doc in store.shelf()
+    assert store.inspect(doc) == []
+    assert store.pending_docs() == []
 
 
 # ------------------------------------------------- watching it, stopping it
@@ -279,12 +343,12 @@ class StoreFake(FakeShelf):
         self.parked: dict[str, str] = {}
         self.stops = 0
 
-    def estimate(self, text):
+    def estimate(self, text, *, name=""):
         passages = max(1, len(text) // 400)
         return {"passages": passages, "calls": passages * 2,
                 "digested": len(text) > 40_000, "chars": len(text)}
 
-    def park(self, name, text):
+    def park(self, name, text, *, reason="you stopped it before she read it"):
         self.parked[name] = text
         return name
 
@@ -311,6 +375,152 @@ async def test_a_run_says_what_it_is_doing_and_what_it_will_cost(clock):
     assert run["found"] == 2 and run["read"] == len(run["pages"])
     assert all(p["calls"] > 0 and p["state"] == "read" for p in run["pages"])
     assert run["calls"] == sum(p["calls"] for p in run["pages"])
+
+
+async def test_run_ceiling_parks_pages_before_their_calls_begin(clock):
+    shelf = StoreFake()
+    r, post, _speak = make(clock, shelf=shelf)
+    r.max_calls = 2
+    r.start(CONTRACT)
+    await drain(r)
+
+    (run,) = r.runs()
+    assert len(shelf.docs) == 1
+    assert len(shelf.parked) == 1
+    assert run["budget_calls"] == 2
+    assert run["calls"] == 2, "the panel must not count held calls as admitted"
+    assert sorted(p["state"] for p in run["pages"]) == ["held", "read"]
+    assert "1 more page held" in post.messages[0]["text"]
+
+
+async def test_concurrent_pages_cannot_reserve_the_same_remaining_calls(clock):
+    class SlowShelf(StoreFake):
+        def __init__(self):
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def ingest(self, name, text=None):
+            self.entered.set()
+            await self.release.wait()
+            return await super().ingest(name, text)
+
+    shelf = SlowShelf()
+    r, _post, _speak = make(clock, shelf=shelf)
+    r.max_calls = 2
+    r.start(CONTRACT)
+    await asyncio.wait_for(shelf.entered.wait(), timeout=2)
+    await asyncio.sleep(0)  # let the other fetched page attempt its reservation
+    assert len(shelf.parked) == 1
+    assert r.runs()[0]["budget_calls"] == 2
+    shelf.release.set()
+    await drain(r)
+    assert len(shelf.docs) == 1
+
+
+async def test_page_over_ceiling_is_held_while_smaller_page_can_be_read(clock):
+    class PricedShelf(StoreFake):
+        def estimate(self, text, *, name=""):
+            calls = 8 if "overview" in text else 2
+            return {"passages": calls // 2, "calls": calls,
+                    "digested": False, "chars": len(text)}
+
+    shelf = PricedShelf()
+    r, post, _speak = make(clock, shelf=shelf)
+    r.max_calls = 2
+    r.start(CONTRACT)
+    await drain(r)
+
+    (run,) = r.runs()
+    assert run["budget_calls"] == 2
+    assert len(shelf.docs) == len(shelf.parked) == 1
+    assert "overview" in next(iter(shelf.parked.values()))
+    assert "current" in next(iter(shelf.docs.values()))
+
+
+async def test_when_every_page_exceeds_ceiling_run_reports_held_pages(clock):
+    shelf = StoreFake()
+    r, post, _speak = make(clock, shelf=shelf)
+    r.max_calls = 0
+    r.start(CONTRACT)
+    await drain(r)
+
+    (run,) = r.runs()
+    assert run["stage"] == "done" and run["budget_calls"] == 0
+    assert len(shelf.parked) == 2 and shelf.docs == {}
+    assert "model-call ceiling" in post.messages[0]["text"]
+
+
+async def test_a_fully_held_run_wakes_the_goal_that_dispatched_it(clock):
+    signals = []
+    shelf = StoreFake()
+    r, _post, _speak = make(clock, shelf=shelf)
+    r.max_calls = 0
+    r.signal = lambda kind, payload, **kw: signals.append((kind, payload))
+    r.start({**CONTRACT, "_goal_id": "goal-1", "_deliver": "vault"})
+    await drain(r)
+
+    assert len(signals) == 1
+    assert signals[0][0] == "task_completion"
+    assert signals[0][1]["goal_id"] == "goal-1"
+    assert signals[0][1]["held"] == 2
+    assert signals[0][1]["error"]
+
+
+async def test_unpriceable_page_is_held_without_starting_its_read(clock):
+    class Unpriceable(StoreFake):
+        def estimate(self, text, *, name=""):
+            raise ValueError("cannot plan this document")
+
+    shelf = Unpriceable()
+    r, _post, _speak = make(clock, shelf=shelf)
+    r.start(CONTRACT)
+    await drain(r)
+
+    assert shelf.docs == {}
+    assert len(shelf.parked) == 2
+
+
+async def test_unpriceable_pages_are_not_blamed_on_the_ceiling(clock):
+    class Unpriceable(StoreFake):
+        def estimate(self, text, *, name=""):
+            raise ValueError("cannot plan this document")
+
+    signals = []
+    r, post, _speak = make(clock, shelf=Unpriceable())
+    r.signal = lambda kind, payload, **kw: signals.append(payload)
+    r.start(CONTRACT)
+    await drain(r)
+
+    text = post.messages[0]["text"]
+    assert "couldn't estimate what reading them would cost" in text
+    assert "ceiling" not in text
+    assert signals[0]["held"] == 2 and signals[0]["error"]
+
+
+async def test_a_read_stopped_from_the_shelf_is_not_counted_as_held_by_the_run(clock):
+    """The reading panel's stop (no run id) is store-wide: it ends whatever read
+    is in flight, research page or not, and that page comes back held. It was
+    read in part and it is listed; the ceiling had nothing to do with it."""
+    class StoppedMidRead(StoreFake):
+        async def ingest(self, name, text=None):
+            self.parked[name] = text      # what ingest does when the flag is up
+
+            class R:
+                doc = name
+            return R()
+
+    signals = []
+    r, post, _speak = make(clock, shelf=StoppedMidRead())
+    r.signal = lambda kind, payload, **kw: signals.append(payload)
+    r.start(CONTRACT)
+    await drain(r)
+
+    (run,) = r.runs()
+    assert [p["state"] for p in run["pages"]] == ["held", "held"]
+    text = post.messages[0]["text"]
+    assert "more page" not in text and "ceiling" not in text
+    assert signals[0]["held"] == 0
 
 
 async def test_stopping_before_she_reads_costs_nothing(clock):

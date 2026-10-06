@@ -101,8 +101,10 @@ job. The ledger rolls at local midnight and is rendered in the inner-life tab.
 number is an *estimate* of tokens, not a bill; pressure changes what the loop chooses to do next
 rather than stopping work already under way, so it will not abort a long read in flight; and it
 does not stand between a tool call and the run it starts — a `research` call you provoked in
-conversation goes ahead at any pressure. The hard bounds are `RESEARCH_MAX_PAGES`,
-`TOOL_RATE_RESEARCH`, and the stop button on the inner-life tab.
+conversation goes ahead at any pressure. A separate `RESEARCH_MAX_CALLS` ceiling checks each
+fetched page's estimated model calls before reading starts; pages that do not fit wait unread on
+the shelf. `RESEARCH_MAX_PAGES`, `TOOL_RATE_RESEARCH`, and the stop button on the inner-life tab
+bound the rest of the run.
 
 ## The two gates
 
@@ -117,7 +119,19 @@ bonus from violated expectations. Below `MIND_ACT_THRESHOLD` (0.4) the tick rest
 **Gate 2 — salience to interrupt** is scored *only* when a reach-out goal has already crossed gate
 1. It's built from named factors the trace records verbatim: relevance, time-sensitivity, hours
 since she last reached out, inferred availability by hour, and a welcome term that decays with
-each interruption today.
+each interruption today. An undated reach-out also earns up to 0.20 for waiting,
+linearly over 24 hours from creation. Without that term, even maximum priority
+could never clear the threshold without a due date. Dated goals keep their
+actual timing; retries earn no extra credit. The trace names the reason for silence.
+
+A goal she filed herself (from a goal step, her free time, a document you handed her, or the
+night's stock-take) carries a three-day expiry so an untouched one lets go of itself. That expiry
+is not a deadline. Both gates score such a goal as undated: it earns the waiting credit, and it
+does not jump the list as "due soon" in its last hours.
+
+Each goal keeps its last six attempt outcomes across restarts. Working prompts and
+reach-out composition see that brief history, including gate refusals, so an attempt
+is not mistaken for completed work or a delivered message.
 
 Two things are **hard gates, not weights**:
 
@@ -133,6 +147,37 @@ Three outcomes, in ascending imposition:
 | **SPEAK** | aloud through the ambient seam if a page is open; a `proactive` chat line if the room is empty. A picture she made for you is posted ahead of the line so what she says over it is already true |
 
 Both dials are yours, in `.env`. You cannot tune the dial against someone who holds it.
+
+**When she has already decided.** Working a goal, she can write `tell_them` with the exact words
+she wants you to read. That files a reach-out goal (`told:<goal>`) carrying those words, and Gate 2
+treats it differently in one way: the score no longer rules on it, because she has already made
+the judgement it stands in for. Your two hard gates still do. Inside quiet hours or past today's
+cap it waits, parked, until 09:00, and then it arrives as a chat line in her words, never re-composed
+and never spoken aloud. The goal she was working waits for the message to land, and closes only once
+it has.
+
+**Getting ready first.** A reach-out about something she has to *make* — "send him a new
+selfie" — used to be ruled on with nothing in hand, because Gate 2 can only write a sentence. Now,
+while her hands are on, a reach-out gets a preparing step before the gate: the same hands a task
+step gets, less `tell_them` and `create_goal`. She takes the picture, or looks the thing up, and
+writes `ready to send`. A render she starts comes back onto the goal, and Gate 2 then sends the
+picture with her line. Ready, it goes to the gate on the same tick; not ready, it waits for its
+next turn rather than going without what it was about; out of steps, it goes as it is. If the
+tool it needs is held back (the camera while you're in the room, a web tool once today's budget is
+past `MIND_TOOL_PRESSURE_CEILING`), a step that isn't ready uses none of its steps, and a budget
+hold waits for the morning. A follow-up,
+a decided `tell_them` message, and a goal already holding a picture skip the step.
+
+A reach-out with a real date gets the step even with her hands off, as a moment to think. Early is
+fine when she decides it is, but the score can't tell "remind him before Thursday" from "ask how
+Tuesday's interview went". If it's about something that hasn't happened yet, she writes `not yet`
+and it comes back to her six hours before its date. With her hands off, an undated reach-out goes
+straight to the gate as before.
+
+The journal line for each outcome says what actually happened: the words she sent, or what held
+the message back (quiet hours, today's cap, "not pressing enough to interrupt yet"). It never says
+she *chose* silence. Her diary and her stock-take read the journal back, and a week of "chose not to
+interrupt" about a threshold she couldn't clear read to them as her own avoidance.
 
 ### Where a reach-out actually goes
 
@@ -184,6 +229,14 @@ Drop a `.md` or `.txt` file into her Vault's `knowledge/reference/`:
 ```bash
 cp notes.md data/characters/yuri/vault/knowledge/reference/
 ```
+
+Or hand it over without finding the folder: **add a document** on the shelf volume in the files
+tab (or drop the file onto it), or `yurios shelf add yuri notes.md` from a terminal. Both land the
+file in the same place, and both say why when they won't take one — a non-UTF-8 file, a scanned
+PDF with no text layer, or a `web-`/`research-` name, which belong to her own research. Those two
+also take a **PDF**: it goes on the shelf as the `.md` of its text (paragraphs rebuilt, one
+`[page N]` marker per page), and the PDF itself isn't kept. A PDF copied straight into the folder
+is ignored, like any other file that isn't `.md`/`.txt` — hand it over instead.
 
 Within a heartbeat she notices it (a cheap size+mtime scan), ingests it — chunked by paragraph
 budget, each chunk situated with a short blurb, embedded, and hybrid-indexed (vector similarity
@@ -339,6 +392,14 @@ conversation needs it, because a day nobody talked is not a day her journal has.
 chat, the way a dream selfie arrives; only the newest waits, so a week away is one report and not
 seven.
 
+**`max_hands:`** is how many of her hands a job may use before it answers, and it is the dial for
+what a night costs. Each use resends everything so far, so fourteen of them — which is what the
+stock-take once did, rereading her desk page by page — cost thirty times the answer. `0` gives a
+job none; leaving it out means the house's `TOOL_MAX_CALLS_PER_TURN`, which is also the most a file
+may ask for. `diary` and `strategy` ship with `4`. She is told her limit before she starts and how
+many she has left after each result, so she can plan them. A goal the stock-take files is worked by
+day under `MIND_GOAL_MAX_HANDS` (`4`) instead — the job's own cap does not follow it.
+
 ```yaml
 ---
 name: market-brief
@@ -401,6 +462,24 @@ reads and writes freely through `list_notes` / `read_note` / `count_note_lines` 
 `append_note` / `edit_note` / `delete_note`. Drafts, research scratch, the middle of a thought.
 You can drop files in too.
 
+**Handing her a document.** The shelf is for documents she looks things up in; the desk's
+**inbox** is for one you *give* her. Use **add a document** on the workspace volume in the files
+tab (or drop the file onto it), or `yurios desk add yuri paper.pdf`. It lands in
+`workspace/inbox/` — a PDF as the `.md` of its text — and is never indexed or searched. Her mind
+notices at once (a journal line, no model), then sits down with it: reads the start of it, looks at
+her list and her desk, and decides in her own voice what it means for what she's doing. That
+usually ends in one goal — "work the Q3 numbers in inbox/q3.md into my quarterly report" — which
+she then works on its own turns with all her hands, each step shown the document again. It can
+also end in a thought and nothing more. A goal filed this way is yours, not hers: it doesn't count
+against `MIND_SELF_GOALS_MAX`, and the goal-filing switch doesn't stop it.
+
+`MIND_INBOX_WAKE` decides *when* she sits down with it. `true` (the default) wakes her the moment
+it arrives, whatever the hour, and spends the model calls then. `false` notices it and waits until
+she's next active — once you're back. Never mid-reply, and never on a day whose budget is spent.
+The inner-life panel's **plans** page lists what you've handed her under **handed to her**: unread
+ones marked, read ones with when she read them and what came of it, each openable in place.
+The per-file desk limit is 256 KB of text; the shelf takes bigger documents.
+
 **`vault/skills/`** is the same primitive pointed at instructions. One folder per skill, each with
 a `SKILL.md`:
 
@@ -423,9 +502,9 @@ can write her own with `write_skill`; you can drop them in by hand.
 **What she reads, she gets whole.** A skill is read to be followed, so `read_skill` — and
 `read_note` and `device_read_app` alongside it — reaches her in full, up to about 16,000
 characters, both when she reads it talking to you and when she reads it working alone. Alone,
-the whole text is handed to the *next* step of that goal once, and her desk keeps only a
-one-line note that she read it. Until this was so, a read reached a working step as its first
-160 characters: she opened her own board skill seven times in three days, looking for one
+the whole text comes back to her inside the same step, as the hand's own answer, and her desk
+keeps only a one-line note that she read it. Until this was so, a read reached a working step as
+its first 160 characters: she opened her own board skill seven times in three days, looking for one
 parameter name near the end, and saw its title and half a sentence every time. (SPEC §22.3a)
 
 Both live inside the Vault and travel when you copy her folder, but only skills are **versioned**.
@@ -434,6 +513,14 @@ something out would be four commits of a diff nobody reads — the Vault's `git 
 how she grew. A skill, by contrast, is a durable statement about how she does something, and worth
 being able to read back and revert. `workspace/.gitignore` carries the rule from inside the folder,
 so existing vaults get it without a migration.
+
+**What's on her mind reaches the conversation.** Every turn gets the desk as a list of paths, plus
+one small labelled block, `ON YOUR MIND`: the close of her latest diary entry, where her latest
+stock-take landed, and the last words she left on each goal she's working. It is a few hundred
+tokens, and it is labelled as her own writing, not a record of events. Only the conversation and her
+memories say what actually happened, and the block tells her so. The night's jobs do the same for
+recall: the diary ends with a `takeaway:` line, and the journal (which recall indexes and the desk
+isn't) gets that line rather than "wrote a diary entry".
 
 The sandbox is dull and absolute: relative paths only, no `..`, no dotfiles, symlinks resolved
 *before* the containment check, and per-file/whole-tree/file-count ceilings. Nothing in there
@@ -452,7 +539,7 @@ cat data/characters/yuri/vault/goals.md
 Each goal carries a kind, a priority, an optional due time, its **provenance**, and a **commitment
 strategy**, and moves `pending → active → waiting → done | abandoned`.
 
-Goals come from four designed sources:
+Goals come from five designed sources:
 
 | Provenance | Where it came from |
 |---|---|
@@ -460,6 +547,7 @@ Goals come from four designed sources:
 | `promise:her-own-words` | **her own promises** — REFLECT scans every committed reply for first-person commitments ("I'll look into that") and files each as a reach-out goal with a due time |
 | maintenance | DREAM backlog, shelf drops |
 | `strategy:<day>` | **her own judgement** — the night's stock-take, below |
+| `goal:<id>` | **a goal step's** — `create_goal` while working goal `<id>`, below |
 
 A companion who forgets her own promises is worse than one who forgets yours. Near-duplicate open
 goals merge rather than multiply.
@@ -486,7 +574,7 @@ steps of a job, so it counts too — with the same working verbs, never "Jetzt s
 "ich meld mich nicht, bis es steht" is a promise, not a refusal: *not until* names the moment.
 
 Until this existed, a companion who spoke German could promise nothing the mind would keep: the
-turn ended and the work she had just taken on was gone. (SPEC §22.1c)
+turn ended and the work she had just taken on was gone. (SPEC §22.1g)
 
 ### Goals she files herself
 
@@ -519,6 +607,15 @@ Four things keep that from turning the list into landfill, and one keeps it hone
 
 The point of the default being *on*: a companion whose every intention traces back to something you
 said is a queue with a voice.
+
+**From a goal step.** `create_goal` is one of her hands, so a step working one goal can split
+another off onto the list. The mind files it itself: the tool server only checks the text, and
+until this was fixed a step that used it read back *ready*, journalled *ok*, and nothing was ever
+filed. Now she reads back the real `g-…` ID, or the goal she's already carrying under another
+wording. These are filed like the night's: `open-minded` with a due date, marked hers, and off with
+the same switch. Each goal may have one of these open at a time, a goal filed this way can't file
+another, and DREAM's own work is refused. Night jobs aren't offered the hand — the stock-take is how
+a night files a goal.
 
 **Commitment governs staleness.** `blind` is defended past due (a birthday is a birthday);
 `single-minded` drops only when it's moot; `open-minded` is abandoned the moment it stops being
@@ -561,20 +658,22 @@ queries over this file, and the answer to "why did she…" is always in it.
 
 ## The inner-life tab
 
-The chat column's second tab, refreshed live off the same event bus:
+The chat column's second tab, refreshed live off the same event bus and divided into three views:
 
-- her activity state and heartbeat,
-- today's token budget,
-- the goals on her mind, with where each came from, and a control that opens the desk file she has been writing against,
-- the shelf,
-- edits waiting on your approval, with content and one-click approve/reject,
-- and the journal.
+- **Now** — her activity state and heartbeat, today's token budget, pending timers, reading in
+  progress or held, and edits waiting on your approval.
+- **Plans** — the goals on her mind, where each came from, controls for the desk files she has
+  been writing against, system upkeep, and the shelf.
+- **History** — completed research and the journal.
+
+The selected view stays put as live updates arrive. Timers show their labels, remaining time, and
+due time; additions and landings arrive as sticky `timers` state on the shared event bus.
 
 A committed line of hers that names a file on her desk (`goals/….md`, `workspace/…`) is a
 control: it fetches the file and folds the contents under the bubble. A path you typed is not.
 
 Everything reads *through* the mind's own stores — the dashboard can never disagree with the
-files. The same data is available at `GET /api/mind`, `/api/mind/journal`, `/api/mind/trace`
+files. The same data is available at `GET /api/mind`, `/api/timers`, `/api/mind/journal`, `/api/mind/trace`
 ([API](api.md#the-mind)).
 
 ## The mind debug page
@@ -654,12 +753,13 @@ to the prompt that phrased it to the audit line that ran it.
 MIND_ENABLED=true                 # off = the reactive body, minus ambient life
 MIND_SEED=0                       # 0 = unseeded; tests pin a seed
 MIND_ACT_THRESHOLD=0.4            # gate 1
-MIND_INTERRUPT_THRESHOLD=0.75     # gate 2 — YOUR dial
+MIND_INTERRUPT_THRESHOLD=0.6      # gate 2 — YOUR dial
 MIND_MAX_INTERRUPTS_PER_DAY=3     # the hard daily cap
 MIND_CONSIDER_COOLDOWN_S=3600     # minimum gap between re-chewing one goal
 MIND_GOAL_FILING_ENABLED=true     # may the night file a goal of her own?
 MIND_SELF_GOALS_MAX=3             # how many of hers may be open at once
 MIND_GOAL_MAX_STEPS=3             # working ticks one goal gets before it waits
+MIND_GOAL_MAX_HANDS=4             # hands one of those steps may chain (≤ TOOL_MAX_CALLS_PER_TURN)
 MIND_DISPATCH_TIMEOUT_S=3600      # how long a goal waits on work it dispatched
 MIND_SOUL_IN_PROMPTS=full         # full | brief | off — her card in private prompts
 MIND_DAILY_TOKENS=200000
@@ -678,15 +778,16 @@ MIND_IDLE_TIMEOUT_S=3600          # away this long → DORMANT
 MIND_DREAM_START_HOUR=2
 MIND_DREAM_END_HOUR=6
 
-# her hands in the loop (SPEC §26) — inert until the first is true
-MIND_TOOLS_ENABLED=false          # house switch: may anything on this machine act unasked?
-MIND_TOOL_ALLOWLIST=              # explicit names; empty even when the switch is on
-MIND_TOOL_CALLS_PER_DAY=8         # a cap, checked before the call
+# her hands in the loop (SPEC §26) — the first line switches all of it off
+MIND_TOOLS_ENABLED=true           # house switch: may anything on this machine act unasked?
+MIND_TOOLS_DURING_CHAT=auto       # auto | on | off — stand down mid-conversation only when the utility model is local
+MIND_TOOL_ALLOWLIST=*             # every hand this machine can offer; or explicit names, empty for none
+MIND_TOOL_CALLS_PER_DAY=64        # a cap, checked before the call
 MIND_TOOL_PRESSURE_CEILING=0.5    # over it, the expensive hands are not offered
 MIND_TOOL_COOLDOWN_CHEAP_S=21600  # desk / set_timer fingerprint (six hours)
 MIND_TOOL_COOLDOWN_EXPENSIVE_S=172800  # web / camera (two days)
-TOOL_RATE_MIND_DESK=4             # the mind's own buckets, not conversation's
-TOOL_RATE_MIND_WEB=1
+TOOL_RATE_MIND_DESK=20            # the mind's own buckets, not conversation's
+TOOL_RATE_MIND_WEB=4
 TOOL_RATE_MIND_CAMERA=1
 TOOL_RATE_MIND_OTHER=1
 ```
@@ -713,25 +814,32 @@ and `dream` restart her.
 
 ## Her hands in the loop
 
-The mind *can* reach for a tool, as a step of an open goal — never free-floating, at most one
-call per tick. It ships **off**. Two switches in series, the same pattern as notify:
+The mind can reach for a tool as a step of an open goal — never free-floating, at most one
+call per tick. The house defaults are **on**: `MIND_TOOLS_ENABLED=true` and
+`MIND_TOOL_ALLOWLIST=*`. Each character's `hands` switch also defaults on. All three
+must admit the call; turning off any one of them prevents that character from using tools
+unasked. Set an explicit allowlist to narrow the hands available on this installation.
 
-- `MIND_TOOLS_ENABLED` (house, **false**) says whether anything on this machine may act unasked.
-- Her own `hands` switch on the tile says whether she is one of the ones that may.
-
-`MIND_TOOL_ALLOWLIST` names the permitted hands explicitly — no wildcard, no inheritance from
-the conversational allowlist, **empty even when the house switch is on**.
 `yurios settings MIND_TOOL_ALLOWLIST` prints every hand this build has, what each one does and
 whether its backend is on. A gentle first setting is her desk alone:
 `write_note,append_note,read_note,list_notes`.
 
-Cheap hands (the desk, `set_timer`) are a step of goal work in any state except ENGAGED.
+Cheap hands (the desk, `set_timer`) are a step of goal work in any state. While she is talking
+they stand down only when `MIND_TOOLS_DURING_CHAT` says so: `off` always, `on` never, and `auto`
+(the default) exactly when `UTILITY_MODEL` is local (`ollama/`, `lm_studio/`, `gguf/`). A local
+utility model is the machine her reply is using, and it cannot do both; a hosted one can, so the
+desk keeps working through the conversation.
 Expensive ones (`research`, `read_page`, `web_search`, the cameras) take the whole tick, need
-their backend, budget pressure under `MIND_TOOL_PRESSURE_CEILING`, and DORMANT/DREAM **or** you
-absent. `MIND_TOOL_CALLS_PER_DAY` is a cap, not a governor: it is checked before the call and
-it refuses. The same call is refused for hours by a fingerprint ledger that survives restarts.
-Nothing she makes this way is sent to you — it goes on her shelf, in her gallery, or on her
-desk. Whether you hear about it is the same reach-out gate as everything else.
+their backend, and DORMANT/DREAM **or** you absent — including while she is talking. The web ones
+also need budget pressure under `MIND_TOOL_PRESSURE_CEILING`. The cameras don't: the budget counts
+model tokens, a render costs none, and the camera has its own rate and daily cap. `MIND_TOOL_CALLS_PER_DAY` is a cap, not a governor: it is checked before the call and
+it refuses. The default daily cap is **64 calls**, checked before dispatch. The same call is
+refused for hours by a fingerprint ledger that survives restarts.
+Nothing she makes this way is sent to you. It goes on her shelf, in her gallery, or on her
+desk. Whether you hear about it is the same reach-out gate as everything else. The one way a goal
+step says something to you is `tell_them`, which is offered on every step, hands or none. It isn't a
+hand, and it still goes through Gate 2's quiet hours and daily cap (see *When she has already
+decided*, above).
 
 The switchboard's fourth toggle revokes her hands before her next tick, without restarting her.
 `tool-logs/calls.jsonl` marks every one of them `mind_tool`. See
@@ -739,9 +847,11 @@ The switchboard's fourth toggle revokes her hands before her next tick, without 
 
 ## What the mind deliberately doesn't do
 
-- **No code execution, no shell, no sandboxed workshop.** Autonomous *reading* ships, default-off
-  (above). What a sandbox is for is running code, which is a different threat model from
-  fetching a page, and that is still the named next rung.
+- **No code execution, no shell, no sandboxed workshop.** Web reading requires
+  `SEARCH_BACKEND` to be enabled, and it is off by default. The desk and other available
+  hands follow the switches and allowlist described above. What a sandbox is for is
+  running code, a different threat model from fetching a page, and that is still the
+  named next rung.
 - **No goals invented mid-conversation.** She files one of her own on the night's stock-take and
   nowhere else — deliberately, so a new intention is something you can read on the goals page
   before it acts, rather than something that appeared while you were mid-sentence.

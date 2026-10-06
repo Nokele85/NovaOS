@@ -13,6 +13,7 @@ try, and prints one table plus the exact commands to close the gap. Nothing here
 imports a heavy dep unless it's already installed — running the doctor is free.
 
     yurios doctor                    # → table, exit 0 if every seam is real
+    yurios doctor --probe-model      # → also check the selected model connections
 """
 from __future__ import annotations
 
@@ -339,6 +340,27 @@ def search_lines(cfg, root: Path | None = None) -> list[str]:
     return lines
 
 
+def model_probe_lines(cfg) -> tuple[list[str], bool]:
+    """Probe the house model choices; a failed requested probe fails doctor.
+
+    The probe is `models.probe_model`, the check `yurios configure` runs too —
+    imported here rather than at the top, so a plain `yurios doctor` stays free.
+    """
+    from yurios.models import probe_model
+
+    models = [("chat", cfg.chat_model)]
+    if getattr(cfg, "utility_enabled", True):
+        models.append(("utility", cfg.utility_model))
+    lines = ["\nModel connections (--probe-model)\n"]
+    failed = False
+    for role, model in models:
+        result = probe_model(cfg, model)
+        mark = "ok" if result.ok else "NOT WORKING" if result.ok is False else "skipped"
+        lines.append(f"   {role:<8} {model}: {mark} — {result.detail}")
+        failed |= result.ok is False
+    return lines, failed
+
+
 def _optional_line(skipped: list[Check]) -> str:
     names = ", ".join(f"{c.seam} (`pip install -e '.[{c.extra}]'`)" for c in skipped)
     return f"Optional, not installed (fine to ignore): {names}"
@@ -416,12 +438,17 @@ def report(checks: list[Check], *, network: list[str] | None = None, out=None) -
     return len(missing)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(*, probe_models: bool = False) -> int:
     from yurios.world.config import Config      # the same config the server reads
     cfg = Config()
     missing = report(collect(cfg),
                      network=search_lines(cfg) + network_lines(cfg))
-    return 1 if missing else 0
+    probe_failed = False
+    if probe_models:
+        lines, probe_failed = model_probe_lines(cfg)
+        for line in lines:
+            print(line)
+    return 1 if missing or probe_failed else 0
 
 
 if __name__ == "__main__":                      # pragma: no cover — the CLI entry

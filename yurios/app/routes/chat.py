@@ -34,9 +34,35 @@ def sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+_settling: set[asyncio.Task] = set()      # post-turn writes a cancel walked away from
+
+
 async def post_turn(state, record: Record, session_id: str, turn_count: int) -> None:
     """§10.1 step 9 — the post-turn pipeline, off the critical path (§2.2):
-    remember, consume bootstrap, maybe summarise, then ONE git commit."""
+    remember, consume bootstrap, maybe summarise, then ONE git commit.
+
+    Shielded. By now her reply is in the transcript, and the steps below run on
+    workers a cancel cannot stop: cancelling here would only release
+    `vault_lock` while a worker is still writing the index. The pipeline keeps
+    the lock until its last write lands, so a runtime that is stopping waits on
+    that lock before it closes her memory (SPEC §29.5)."""
+    task = asyncio.create_task(_post_turn(state, record, session_id, turn_count))
+    _settling.add(task)
+    task.add_done_callback(_settling.discard)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        task.add_done_callback(_log_orphan)    # nobody is left to raise it to
+        raise
+
+
+def _log_orphan(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        log.error("post-turn pipeline failed after its turn was cancelled",
+                  exc_info=task.exception())
+
+
+async def _post_turn(state, record: Record, session_id: str, turn_count: int) -> None:
     async with state.vault_lock:
         retired_bootstrap = False
         try:
@@ -64,8 +90,10 @@ async def post_turn(state, record: Record, session_id: str, turn_count: int) -> 
                     budget_tokens=state.cfg.summary_budget_tokens)
                 state.utility_log.log(kind="summarise", exchanges=exchanges,
                                       raw_reply=text)
-                summarise.write_summary(state.cfg.vault_dir, text,
-                                        state.store.index, state.embedder)
+                # a worker: indexing the summary embeds it (§2.4)
+                await asyncio.to_thread(
+                    summarise.write_summary, state.cfg.vault_dir, text,
+                    state.store.index, state.embedder)
         except Exception:
             log.exception("post-turn pipeline error (turn already served)")
         finally:
@@ -102,7 +130,7 @@ async def chat(req: ChatRequest, request: Request):
     turn_index = session["turn_count"]
     try:
         soul = state.soul_loader.load()                       # read every turn (§5)
-        memories = state.store.recall(req.message, state.cfg.retrieval_k)
+        memories = await state.store.arecall(req.message, state.cfg.retrieval_k)
         prompt = asm.assemble(
             soul,
             user_md=state.store.read_user_md(),

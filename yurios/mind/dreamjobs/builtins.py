@@ -18,10 +18,28 @@ from dataclasses import dataclass
 
 from .context import (JobLedger, JOURNAL_CHARS, PROMPT_OVERHEAD_CHARS, DreamContext, JobReport)
 from ..dream import DreamConsolidator
-from ..util import day_of
+from ..goals import trim
+from ..util import closing, day_of
 
 log = logging.getLogger("mind.dreamjobs")
 
+
+
+_SLOT = re.compile(r"\{([a-z_]+)\}")
+
+
+def fill(template: str, **values: object) -> str:
+    """Put `{char}`, `{user}` or `{day}` into a job's prompt or path — and
+    nothing else.
+
+    Not `str.format`: these templates are prose from `vault/dreams/*.md`, which
+    the person edits, and prose has braces in it. A prompt that shows the model
+    the JSON it wants back — `{"mood": …}` — made `.format` raise KeyError, and
+    the job then failed the same way every night. Here a brace that names none
+    of the given slots is left as written.
+    """
+    return _SLOT.sub(lambda m: str(values[m.group(1)]) if m.group(1) in values
+                     else m.group(0), template)
 
 class DreamJob:
     """One thing that happens at night.
@@ -64,6 +82,13 @@ class DreamJob:
     #: mechanical extraction, where a persona would be a thumb on the scale.
     #: Overridable per character from `vault/dreams/<name>.md`.
     soul = "full"
+    #: How many of her hands this job may chain before it answers (§21.2).
+    #: `None` is the house's `TOOL_MAX_CALLS_PER_TURN`; `0` offers none and the
+    #: job is one plain call. Not a nicety: each round resends the whole
+    #: transcript, so the cost of a chain grows with the square of its length —
+    #: fourteen rounds of `read_note` once spent 158k tokens on a stock-take.
+    #: A file may ask for less than the house allows, never more.
+    max_hands: int | None = None
     #: Set from a job file's `enabled:`. A separate attribute rather than a
     #: mutated `enabled()` because two jobs already override that method for
     #: reasons of their own — the selfie needs a camera — and a file must be
@@ -136,6 +161,7 @@ class DreamJob:
         return {"name": self.name, "title": self.title,
                 "description": self.description, "priority": self.priority,
                 "per_day": self.per_day, "soul": self.soul,
+                "max_hands": self.max_hands,
                 "standing": self.standing, "kind": self.kind,
                 # Where this job's prompt came from. Named `from_file` and not
                 # `custom`, which is what it said first and was wrong the moment
@@ -240,6 +266,34 @@ DIARY_SYSTEM = (
     "held nothing worth a diary entry, output NOTHING.")
 
 
+#: Asked of every diary night after its own prompt, a job file's included:
+#: `vault/dreams/diary.md` replaces the prompt above for every vault seeded
+#: since that folder existed, so a line added only to DIARY_SYSTEM would reach
+#: no character who already has a diary. The same reason STRATEGY_OUTPUT is
+#: appended rather than written into STRATEGY_SYSTEM.
+DIARY_TAKEAWAY = (
+    "After the entry, on a line of its own at the very end, write "
+    "'takeaway:' and then the one thing from this day you want to carry "
+    "forward, in a single sentence of your own. Leave it out if you wrote "
+    "NOTHING.")
+
+#: Pulls that line back off. Anchored and tolerant of the bold or bullet a
+#: model reaches for, the way NEXT_RE is for the stock-take.
+TAKEAWAY_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?takeaway(?:\*\*)?\s*:\s*(?:\*\*)?\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def split_takeaway(entry: str) -> tuple[str, str]:
+    """`(the entry without its takeaway line, the takeaway or "")`."""
+    hits = list(TAKEAWAY_RE.finditer(entry or ""))
+    if not hits:
+        return (entry or "").strip(), ""
+    last = hits[-1]
+    body = (entry[:last.start()] + entry[last.end():]).strip()
+    return body, " ".join(last.group(1).split())
+
+
 class DiaryJob(DreamJob):
     """A private entry per day, on her desk (`workspace/diary/`).
 
@@ -254,6 +308,9 @@ class DiaryJob(DreamJob):
     description = ("Write a short private diary entry for each finished day — "
                    "what the day was like, not what happened in it.")
     priority = 0.6
+    #: Enough to look something up from the day; a chain past this is no
+    #: longer a diary entry.
+    max_hands = 4
 
     async def work(self, ctx: DreamContext, day: str) -> JobReport:
         text = ctx.journal(day)
@@ -262,16 +319,24 @@ class DiaryJob(DreamJob):
             out.result = "nothing happened that day"
             return out
         entry = await ctx.ask(
-            self.system(DIARY_SYSTEM).format(char=ctx.char_name,
-                                             user=ctx.user_name),
+            fill(self.system(DIARY_SYSTEM), char=ctx.char_name,
+                 user=ctx.user_name) + "\n\n" + DIARY_TAKEAWAY,
             f"The day: {day}\n\n{text}")
         if not entry or entry.strip().upper().startswith("NOTHING"):
+            out.result = "nothing worth writing down"
+            return out
+        # The entry stays on the desk; the takeaway is what reaches the
+        # journal, which recall and consolidation read and the desk is not
+        # (SPEC §21.2). "wrote a diary entry" told them only that it existed.
+        entry, kept = split_takeaway(entry)
+        if not entry:
             out.result = "nothing worth writing down"
             return out
         await ctx.put(f"diary/{day}.md", f"# {day}\n\n{entry}\n")
         out.changed = True
         out.result = f"wrote {len(entry)} chars"
-        out.note = f"wrote a diary entry for {day}"
+        out.note = (f"what I took from {day}: {trim(kept, 240)}" if kept
+                    else f"wrote a diary entry for {day}")
         return out
 
 
@@ -344,17 +409,26 @@ class StrategyCandidate:
 class StrategyDecision:
     reflection: str
     next: StrategyCandidate | None
+    #: The reply was an object and still could not be read. Kept apart from
+    #: `next=None`, which is her deciding nothing new is worth starting.
+    unreadable: bool = False
 
 
 def parse_strategy_decision(raw: str) -> StrategyDecision:
     """Structured strategy output, with the old `next:` shape as compatibility."""
     text = (raw or "").strip()
-    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.S | re.I)
-    candidate_json = fence.group(1) if fence else text
+    # The first object the reply opens with, and nothing after it counted
+    # against it. GLM wrote the object, then the same object again in a fenced
+    # block, and `json.loads` of the whole reply turned a complete plan into
+    # the legacy path's "nothing to file" (25 Sep). The object must still
+    # *open* the reply: this does not dig one out of prose.
+    body = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
     try:
-        value = json.loads(candidate_json)
-    except (TypeError, json.JSONDecodeError):
+        value, _end = json.JSONDecoder().raw_decode(body)
+    except json.JSONDecodeError:
         value = None
+        if body.startswith("{"):
+            return StrategyDecision(reflection="", next=None, unreadable=True)
     if isinstance(value, dict) and set(value) == {"reflection", "next"}:
         reflection = str(value["reflection"] or "").strip()[:2000]
         item = value["next"]
@@ -382,10 +456,12 @@ def parse_strategy_decision(raw: str) -> StrategyDecision:
     hit = NEXT_RE.search(text)
     reflection = NEXT_RE.sub("", text).strip()[:2000]
     legacy = " ".join(hit.group(1).split())[:240] if hit else ""
+    # The old format named an objective and nothing else, so the rest stays
+    # empty: goal work hands these fields to her as her own plan (§22.4), and
+    # filler written here would read to her as evidence she had.
     next_goal = (StrategyCandidate(
-        objective=legacy, why="legacy strategy candidate",
-        evidence="legacy strategy note", success="the objective is completed",
-        first_action=legacy, capability="unspecified")
+        objective=legacy, why="", evidence="", success="",
+        first_action="", capability="unspecified")
                  if legacy and "|" not in legacy else None)
     return StrategyDecision(reflection=reflection, next=next_goal)
 
@@ -410,11 +486,16 @@ class StrategyJob(DreamJob):
                    "what matters, what's gone stale, and what to do next.")
     priority = 0.4
     per_day = False
+    #: Four (§21.2). The prompt carries each goal's one-line summary and not its
+    #: progress, so judging what has gone stale needs a look at a goal's file or
+    #: two. Uncapped, on 6 Oct, it reread her desk fourteen times, took a selfie
+    #: and stepped a goal — 158k tokens for a hundred and fifty words.
+    max_hands = 4
 
     def cost(self, ctx: DreamContext, day: str) -> int:
         open_goals = list(ctx.goals.open_goals()) if ctx.goals is not None else []
         context = ctx.strategy_context(day, open_goals)
-        system = (self.system(STRATEGY_SYSTEM).format(
+        system = (fill(self.system(STRATEGY_SYSTEM),
             char=ctx.char_name, user=ctx.user_name) + "\n\n" + STRATEGY_OUTPUT)
         # 800 output tokens is the `max_tokens` below; convert it to the same
         # conservative character accounting the rest of the night uses.
@@ -425,7 +506,7 @@ class StrategyJob(DreamJob):
         open_goals = []
         if ctx.goals is not None:
             open_goals = [g for g in ctx.goals.open_goals()]
-        system = (self.system(STRATEGY_SYSTEM).format(
+        system = (fill(self.system(STRATEGY_SYSTEM),
             char=ctx.char_name, user=ctx.user_name)
                   + "\n\n" + STRATEGY_OUTPUT)
         thinking = await ctx.ask(
@@ -435,6 +516,14 @@ class StrategyJob(DreamJob):
             out.result = "nothing came of it"
             return out
         decision = parse_strategy_decision(thinking)
+        if decision.unreadable:
+            # Said, not swallowed: this used to read as a night that chose to
+            # file nothing, and wrote the raw object onto her desk as the note.
+            log.warning("strategy: the reply for %s was not readable JSON; "
+                        "nothing filed, no note written", day)
+            out.result = (f"reviewed {len(open_goals)} goal(s), "
+                          "could not read what came back")
+            return out
         note = decision.reflection
         await ctx.put(f"strategy/{day}.md", f"# Taking stock — {day}\n\n{note}\n")
         out.changed = True
@@ -449,12 +538,20 @@ class StrategyJob(DreamJob):
                   "first_action": candidate.first_action,
                   "capability": candidate.capability}
         ) if candidate else None
+        # The note stays on the desk; what reaches the journal is where the
+        # thinking landed — the reason for the goal she filed, or the close of
+        # the stock-take — because the journal is what recall reads (§21.2).
+        ended = closing(note, 240)
+        why = candidate.why if candidate is not None else ""
         if filed is not None:
             out.result = f"{reviewed}, filed one of my own"
-            out.note = f"decided this matters: {filed.text}"
+            out.note = (f"decided this matters: {filed.text} — because "
+                        f"{trim(why, 240)}" if why
+                        else f"decided this matters: {filed.text}")
         elif candidate is None:
             out.result = reviewed
-            out.note = "stood back and looked at what I'm carrying"
+            out.note = ("stood back and looked at what I'm carrying: " + ended
+                        if ended else "stood back and looked at what I'm carrying")
         else:
             # Say which silence this was. A night with nothing to add, a night
             # that was capped or switched off, and a night that named something
@@ -466,7 +563,8 @@ class StrategyJob(DreamJob):
                 out.result = f"{reviewed}, the night already does that"
             else:
                 out.result = f"{reviewed}, kept one to myself"
-            out.note = "stood back and looked at what I'm carrying"
+            out.note = ("stood back and looked at what I'm carrying: " + ended
+                        if ended else "stood back and looked at what I'm carrying")
         return out
 
 
@@ -511,10 +609,15 @@ class SelfieJob(DreamJob):
         if not text.strip():
             out.result = "nothing happened that day"
             return out
+        # No hands (§21.2). This job *is* the night's camera, and its answer is
+        # a photograph's description and nothing else. Offered her hands, on
+        # 5 Oct it went and worked a goal instead — read the plan, rendered a
+        # second picture with `show_picture`, journalled "message sent" — and
+        # answered with the message itself, which was then rendered as a look.
         look = await ctx.ask(
-            self.system(SELFIE_SYSTEM).format(char=ctx.char_name,
-                                              user=ctx.user_name),
-            f"The day: {day}\n\n{text}")
+            fill(self.system(SELFIE_SYSTEM), char=ctx.char_name,
+                 user=ctx.user_name),
+            f"The day: {day}\n\n{text}", hands=False)
         if not look or look.strip().upper().startswith("NOTHING"):
             out.result = "no picture in that day"
             return out

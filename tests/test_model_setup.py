@@ -67,7 +67,8 @@ def test_first_run_endpoint_exposes_recommendation_and_saves_none(cfg, tmp_path,
     # the normal fresh server, which has no configured model.
     app.state.rt.model_configured = False
 
-    with TestClient(app, client=("127.0.0.1", 5555)) as client:
+    with TestClient(app, base_url="http://127.0.0.1:8768",
+                    client=("127.0.0.1", 5555)) as client:
         shown = client.get("/api/onboarding").json()
         saved = client.post("/api/onboarding", json={"model": "NONE"}).json()
 
@@ -101,7 +102,8 @@ def test_first_run_endpoint_saves_the_same_gguf_profile_the_cli_does(
     app.state.rt.model_configured = False
 
     model = f"gguf/{DEFAULT_HUGGINGFACE_MODEL}"
-    with TestClient(app, client=("127.0.0.1", 5555)) as client:
+    with TestClient(app, base_url="http://127.0.0.1:8768",
+                    client=("127.0.0.1", 5555)) as client:
         assert client.post("/api/onboarding", json={"model": model}).json()["ok"]
 
     saved = env.read_text(encoding="utf-8")
@@ -127,7 +129,8 @@ def test_first_run_endpoint_writes_no_gguf_profile_for_a_hosted_model(
     app = create_app(cfg, brain=FakeBrain())
     app.state.rt.model_configured = False
 
-    with TestClient(app, client=("127.0.0.1", 5555)) as client:
+    with TestClient(app, base_url="http://127.0.0.1:8768",
+                    client=("127.0.0.1", 5555)) as client:
         client.post("/api/onboarding", json={"model": "ollama/qwen3"})
 
     assert "GGUF_N_GPU_LAYERS" not in env.read_text(encoding="utf-8")
@@ -138,10 +141,54 @@ def test_installer_exposes_the_cli_without_activating_the_venv():
 
     installer = (Path(__file__).resolve().parent.parent / "install.sh").read_text()
 
-    assert 'ln -sfn "$VENV_DIR/bin/yurios" "$launcher"' in installer
+    assert "install_launcher() {" in installer
     assert '"$HOME/.local/bin/yurios" start </dev/null' in installer
     assert "cat <<'EOF'\n\nYuriOS is running as a background daemon:" in installer
     assert "source ${VENV_DIR#$ROOT_DIR}/bin/activate" not in installer
+
+
+def _run_install_launcher(tmp_path, launch_path):
+    """Run install.sh's own install_launcher in bash against a sandbox HOME."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    installer = (Path(__file__).resolve().parent.parent / "install.sh").read_text()
+    start = installer.index("install_launcher() {")
+    body = installer[start:installer.index("\n}\n", start) + 3]
+    home = tmp_path / "home"
+    (home / "bin").mkdir(parents=True)
+    venv = tmp_path / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "yurios").write_text("#!/bin/sh\n", encoding="utf-8")
+    script = ("set -Eeuo pipefail\nlog() { echo \"$*\"; }\n"
+              "fail() { echo \"$*\" >&2; exit 1; }\n" + body + "install_launcher\n")
+    env = {**os.environ, "HOME": str(home), "SHELL": "/bin/zsh",
+           "VENV_DIR": str(venv), "LAUNCH_PATH": launch_path.format(home=home)}
+    run = subprocess.run(["bash", "-c", script], env=env,
+                         capture_output=True, text=True, check=True)
+    return home, venv, run.stdout
+
+
+def test_the_launcher_works_in_the_terminal_that_ran_the_installer(tmp_path):
+    """That terminal's PATH was fixed before ~/.local/bin existed, and the
+    installer can't change it — so the launcher also goes into a directory it
+    already searches, and `yurios` works the moment the installer returns."""
+    home, venv, out = _run_install_launcher(tmp_path, "{home}/bin:/usr/bin:/bin")
+
+    target = venv / "bin" / "yurios"
+    assert (home / ".local" / "bin" / "yurios").resolve() == target
+    assert (home / "bin" / "yurios").resolve() == target
+    assert 'export PATH="$HOME/.local/bin:$PATH"' in (home / ".zshrc").read_text()
+    assert "this terminal can run it now" in out
+
+
+def test_the_launcher_touches_nothing_else_when_the_path_already_has_it(tmp_path):
+    home, _, _ = _run_install_launcher(tmp_path, "{home}/.local/bin:{home}/bin:/usr/bin")
+
+    assert (home / ".local" / "bin" / "yurios").is_symlink()
+    assert not (home / "bin" / "yurios").exists()
+    assert not (home / ".zshrc").exists()
 
 
 def test_doctor_runs_through_the_yurios_command(monkeypatch):
@@ -611,6 +658,40 @@ def test_uninstall_removes_only_the_global_launcher_and_venv(tmp_path, monkeypat
     assert "were preserved" in capsys.readouterr().out
 
 
+def test_uninstall_also_removes_the_link_that_made_yurios_work_at_once(
+        tmp_path, monkeypatch):
+    """install.sh links the launcher into a dir the installing shell already
+    searched (Homebrew's bin, say); uninstall takes that link too — and only a
+    link to this venv, never another checkout's."""
+    from argparse import Namespace
+
+    from yurios import cli
+
+    venv = tmp_path / ".venv"
+    target = venv / "bin" / "yurios"
+    target.parent.mkdir(parents=True)
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+    brew_bin, other_bin = tmp_path / "brew-bin", tmp_path / "other-bin"
+    brew_bin.mkdir()
+    other_bin.mkdir()
+    ours = brew_bin / "yurios"
+    ours.symlink_to(target)
+    theirs = other_bin / "yurios"
+    theirs.symlink_to(tmp_path / "elsewhere" / "yurios")
+    monkeypatch.setattr(cli, "_EXTRA_LAUNCHER_DIRS", (str(brew_bin), str(other_bin)))
+    monkeypatch.setattr(cli, "_root", lambda: tmp_path)
+    monkeypatch.setattr(cli.sys, "prefix", str(venv))
+    monkeypatch.setattr(cli.Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(cli, "command_stop", lambda args: 0)
+    monkeypatch.setattr(cli, "_wait_for_shutdown", lambda cfg: True)
+    monkeypatch.setattr(cli.os, "execv", lambda path, args: None)
+
+    assert cli.command_uninstall(Namespace(yes=True)) == 0
+
+    assert not ours.is_symlink()
+    assert theirs.is_symlink()
+
+
 def test_uninstall_refuses_to_remove_files_until_the_server_is_down(tmp_path, monkeypatch, capsys):
     from argparse import Namespace
 
@@ -655,3 +736,154 @@ def test_uninstall_refuses_to_remove_another_global_command(tmp_path, monkeypatc
     assert launcher.exists()
     assert venv.exists()
     assert "Refusing to remove" in capsys.readouterr().err
+
+
+# ---- the connection probe (SPEC §3): doctor --probe-model and configure ----
+
+def test_model_probe_uses_selected_local_endpoint_and_key(cfg, monkeypatch):
+    from yurios.models import probe_model
+
+    seen = []
+
+    def answer(request):
+        seen.append(request)
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "gemma-4"}]})
+        return httpx.Response(200, json={"models": [{"name": "qwen3"}]})
+
+    client = httpx.Client
+    timeouts = []
+    monkeypatch.setattr(httpx, "Client", lambda **kw: (
+        timeouts.append(kw["timeout"]) or
+        client(transport=httpx.MockTransport(answer), **kw)))
+    local = cfg.model_copy(update={"lmstudio_base_url": "http://gpu:1234/v1",
+                                   "ollama_base_url": "http://ollama:11434",
+                                   "connection_api_key": "private-key"})
+
+    assert probe_model(local, "lm_studio/gemma-4").ok is True
+    assert probe_model(local, "ollama/qwen3").ok is True
+    assert [str(request.url) for request in seen] == [
+        "http://gpu:1234/v1/models", "http://ollama:11434/api/tags"]
+    assert all(request.headers["Authorization"] == "Bearer private-key"
+               for request in seen)
+    assert timeouts == [3.0, 3.0]
+
+
+def test_model_probe_reports_missing_model_and_auth_rejection(cfg, monkeypatch):
+    from yurios.models import probe_model
+
+    requests = []
+
+    def answer(request):
+        requests.append(request)
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(401, text="secret-token should not appear")
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: client(
+        transport=httpx.MockTransport(answer), **kw))
+    local = cfg.model_copy(update={"chat_model": "lm_studio/gemma-4",
+                                   "openrouter_api_key": "secret-token"})
+
+    assert "selected model gemma-4 is absent" in probe_model(
+        local, local.chat_model).detail
+    denied = probe_model(local, "bare/model")
+    assert denied.ok is False
+    assert "authentication rejected" in denied.detail
+    assert "secret-token" not in denied.detail
+    assert str(requests[-1].url) == "https://openrouter.ai/api/v1/auth/key"
+    assert requests[-1].headers["Authorization"] == "Bearer secret-token"
+
+
+def test_unreachable_lm_studio_on_wsl_names_the_installer_bridge(cfg, monkeypatch):
+    """A fresh WSL install has no model chosen, so the installer builds no bridge.
+    `yurios configure` then refuses LM Studio at localhost. Without the hint,
+    nothing tells the user how to get out of that."""
+    from yurios.models import probe_model
+
+    def refuse(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: client(
+        transport=httpx.MockTransport(refuse), **kw))
+    default = cfg.model_copy(update={"lmstudio_base_url": "http://localhost:1234/v1"})
+    stale = cfg.model_copy(update={"lmstudio_base_url": "http://172.20.0.1:1235/v1"})
+    elsewhere = cfg.model_copy(update={"lmstudio_base_url": "http://gpu-box:1234/v1"})
+
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    assert "install.sh" not in probe_model(default, "lm_studio/gemma-4").detail
+
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    hinted = probe_model(default, "lm_studio/gemma-4")
+    assert hinted.ok is False
+    assert "./install.sh --lmstudio-bridge" in hinted.detail
+    # A bridge whose gateway moved when Windows restarted is rebuilt the same way.
+    assert "--lmstudio-bridge" in probe_model(stale, "lm_studio/gemma-4").detail
+    # A server the user pointed at on purpose, or another route, gets no hint.
+    assert "install.sh" not in probe_model(elsewhere, "lm_studio/gemma-4").detail
+    assert "install.sh" not in probe_model(
+        cfg.model_copy(update={"ollama_base_url": "http://localhost:11434"}),
+        "ollama/qwen3").detail
+
+
+def test_model_probe_handles_timeout_and_unprobeable_models(cfg, monkeypatch):
+    from yurios.models import probe_model
+
+    def time_out(request):
+        raise httpx.ReadTimeout("secret-url")
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: client(
+        transport=httpx.MockTransport(time_out), **kw))
+    timed_out = probe_model(cfg, "ollama/qwen3")
+    assert timed_out.ok is False and timed_out.detail == "timed out after 3s"
+    assert probe_model(cfg, "gguf/example/model").ok is None
+    assert probe_model(cfg, "NONE").ok is None
+    assert probe_model(cfg, "openai/gpt-5.2").ok is None
+
+
+def test_ollama_probe_treats_an_untagged_name_as_latest(cfg, monkeypatch):
+    """`/api/tags` always spells the tag; chat takes `ollama/qwen3` as `qwen3:latest`.
+    Comparing the raw strings failed doctor for a model that answers fine."""
+    from yurios.models import probe_model
+
+    listed = {"models": [{"name": "qwen3:latest"}, {"name": "gemma4:12b"},
+                         {"name": "registry.local:5000/team/tiny"}]}
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=listed)),
+        **kw))
+
+    assert probe_model(cfg, "ollama/qwen3").ok is True
+    assert probe_model(cfg, "ollama/qwen3:latest").ok is True
+    assert probe_model(cfg, "ollama/gemma4:12b").ok is True
+    assert probe_model(cfg, "ollama/registry.local:5000/team/tiny").ok is True
+    missing = probe_model(cfg, "ollama/gemma4")
+    assert missing.ok is False and "gemma4:latest is absent" in missing.detail
+
+
+def test_configure_validates_with_the_same_probe_as_doctor(cfg, monkeypatch):
+    """One probe, two callers: configure sends the connection key the way chat
+    and doctor do, accepts a route it cannot probe, and refuses an OpenRouter
+    id with no key to check."""
+    seen = []
+
+    def answer(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"id": "gemma-4"}]})
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: client(
+        transport=httpx.MockTransport(answer), **kw))
+    keyed = cfg.model_copy(update={"connection_api_key": "private-key",
+                                   "openrouter_api_key": ""})
+
+    check = validate_model(keyed, "lm_studio/gemma-4")
+    assert check.ok
+    assert seen[-1].headers["Authorization"] == "Bearer private-key"
+    assert not validate_model(keyed, "lm_studio/absent").ok
+    assert validate_model(keyed, "openai/gpt-5.2").ok
+    no_key = validate_model(keyed, "vendor/model")
+    assert not no_key.ok and "OPENROUTER_API_KEY" in no_key.detail

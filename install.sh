@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+# The PATH of the shell that ran us, before install_uv adds ~/.local/bin to ours.
+# That shell is where the user types `yurios` next, and it never sees our exports.
+LAUNCH_PATH="$PATH"
 
 PYTHON_VERSION="3.12"
 NVM_VERSION="v0.40.3"
@@ -56,6 +59,14 @@ TRAY_EXPLICIT=false
 TRAY_DECLINED=false
 WEB_SEARCH_READY=false
 SEARXNG_PORT=8080
+# WSL only: bridge WSL to an LM Studio server on Windows. That can mean a UAC
+# prompt and a Windows portproxy + firewall rule, so it is only done for an
+# install that will use LM Studio. Empty = not chosen yet: if .env already
+# routes a model to lm_studio/ that answers it, otherwise select_lmstudio_bridge
+# asks when a terminal is attached. On a fresh install no model is chosen yet,
+# and `yurios configure` can't save an LM Studio model it can't reach, so the
+# question is the only way to learn about this setup in time.
+LMSTUDIO_BRIDGE=""
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -97,6 +108,10 @@ Options:
                  and a logout). Off unless asked for; on a desktop that
                  already hosts a tray this is unnecessary and never offered
   --no-tray      Never offer it, and turn her tray icon off in .env
+  --lmstudio-bridge  WSL only: connect WSL to LM Studio running on Windows,
+                 through a portproxy and firewall rule if it has to (one UAC
+                 prompt). Asked when a terminal is attached
+  --no-lmstudio-bridge  Never offer it
   --desktop      Also install the native transparent desktop-window dependencies
   --pinned       Install against constraints.txt — the exact versions this project
                  was last known to work with, instead of whatever resolves today.
@@ -140,6 +155,8 @@ for arg in "$@"; do
         --no-web-search) WEB_SEARCH=false; WEB_SEARCH_EXPLICIT=true ;;
         --tray) INSTALL_TRAY=true; TRAY_EXPLICIT=true ;;
         --no-tray) INSTALL_TRAY=false; TRAY_EXPLICIT=true; TRAY_DECLINED=true ;;
+        --lmstudio-bridge) LMSTUDIO_BRIDGE=true ;;
+        --no-lmstudio-bridge) LMSTUDIO_BRIDGE=false ;;
         --cpu-torch) TORCH_CHOICE="cpu"; TORCH_EXPLICIT=true ;;
         --cuda-torch) TORCH_CHOICE="cuda"; TORCH_EXPLICIT=true ;;
         --pinned) USE_PINS=true ;;
@@ -244,14 +261,39 @@ configure_voice() {
 configure_wsl_lmstudio() {
     [ "$PLATFORM" = "wsl" ] || return 0
 
+    # Everything here serves one setup — an lm_studio/ model served by LM Studio
+    # on the Windows side — and most installs are not that one: OpenRouter, Ollama
+    # inside WSL, a gguf/ model, or (on a fresh install) no model chosen yet. So
+    # nothing in this function may end the installer: every way it can go wrong
+    # logs and returns. The UAC prompt only appears when the bridge was asked
+    # for (--lmstudio-bridge, or yes to select_lmstudio_bridge) or .env already
+    # routes a model to LM Studio.
     local default_url="http://localhost:1234/v1"
-    local current_line current_url gateway interface subnet target_url
-    current_line="$(grep '^LMSTUDIO_BASE_URL=' .env 2>/dev/null)"
+    local current_line current_url gateway="" interface="" subnet="" target_url
+    local want_bridge="$LMSTUDIO_BRIDGE"
+    # Advice for wherever the bridge can't be built. LM Studio's own network
+    # serving needs no UAC, and a rerun finds it on the gateway. Editing .env by
+    # hand is the other way out: `yurios configure` and the dashboard both refuse
+    # an LM Studio address they can't reach.
+    local fallback="turn on \"Serve on Local Network\" in LM Studio's server settings and rerun ./install.sh, or put an address WSL can reach in LMSTUDIO_BASE_URL in .env"
+    # `|| true`: .env.example doesn't carry the key, and under `set -e` a grep
+    # that finds nothing ends the installer here, silently, before the Vault is
+    # seeded or the web app built. An absent key means the default.
+    current_line="$(grep '^LMSTUDIO_BASE_URL=' .env 2>/dev/null || true)"
     current_url="$(printf '%s' "${current_line#*=}" | cut -d' ' -f1)"
+    current_url="${current_url:-$default_url}"
+    # An explicit --lmstudio-bridge rebuilds even over a URL without the marker.
+    # `yurios configure` rewrites the line without it, and the gateway a bridge
+    # listens on can change when Windows restarts.
     if [ "$current_url" != "$default_url" ] \
-        && [[ "$current_line" != *"# managed by install.sh for WSL" ]]; then
+        && [[ "$current_line" != *"# managed by install.sh for WSL" ]] \
+        && [ "$LMSTUDIO_BRIDGE" != true ]; then
         log "Keeping your LMSTUDIO_BASE_URL as-is"
         return 0
+    fi
+    if [ -z "$want_bridge" ]; then
+        want_bridge=false
+        grep -Eq '^(CHAT|UTILITY)_MODEL=lm_studio/' .env 2>/dev/null && want_bridge=true
     fi
 
     # Mirrored-network WSL can reach Windows localhost directly, so keep the
@@ -259,20 +301,31 @@ configure_wsl_lmstudio() {
     if curl -fsS --connect-timeout 1 "$default_url/models" >/dev/null 2>&1; then
         return 0
     fi
-    command -v powershell.exe >/dev/null 2>&1 \
-        || fail "powershell.exe is required to connect WSL to LM Studio on Windows"
 
-    read -r _ _ gateway _ interface _ < <(ip -4 route show default | sed -n '1p')
-    read -r subnet _ < <(ip -4 route show dev "$interface" proto kernel scope link | sed -n '1p')
+    # `|| true` for the same reason as the grep: `read` at end of input returns
+    # non-zero, and mirrored networking can leave either route empty.
+    read -r _ _ gateway _ interface _ < <(ip -4 route show default 2>/dev/null | sed -n '1p') || true
+    read -r subnet _ < <(ip -4 route show dev "$interface" proto kernel scope link 2>/dev/null | sed -n '1p') || true
     if [[ ! "$gateway" =~ ^[0-9]+(\.[0-9]+){3}$ ]] \
         || [[ ! "$subnet" =~ ^[0-9]+(\.[0-9]+){3}/[0-9]+$ ]]; then
-        fail "could not detect the Windows gateway and WSL subnet"
+        [ "$want_bridge" = true ] \
+            && log "Could not detect the Windows host address, so WSL can't be bridged to LM Studio; put an address WSL can reach in LMSTUDIO_BASE_URL in .env"
+        return 0
     fi
 
     # LM Studio may already listen on the Windows-facing adapter. Prefer that
     # over changing the host when it is reachable.
     if curl -fsS --connect-timeout 1 "http://$gateway:1234/v1/models" >/dev/null 2>&1; then
         target_url="http://$gateway:1234/v1"
+    elif [ "$want_bridge" != true ]; then
+        # Nobody was asked (an unattended run with no lm_studio/ model). One
+        # line, so a WSL user who picks LM Studio later knows where the bridge is.
+        [ -z "$LMSTUDIO_BRIDGE" ] \
+            && log "LM Studio on Windows isn't reachable from WSL; if she'll use it, rerun ./install.sh --lmstudio-bridge"
+        return 0
+    elif ! command -v powershell.exe >/dev/null 2>&1; then
+        log "powershell.exe isn't reachable from WSL (is interop off?), so the LM Studio bridge can't be built; $fallback"
+        return 0
     else
         log "Configuring the Windows LM Studio bridge (approve the UAC prompt)"
         # Windows 10 cannot route WSL back to a localhost-only server. A scoped
@@ -280,14 +333,14 @@ configure_wsl_lmstudio() {
         # API port to this WSL subnet. Both addresses are discovered, never fixed.
         if ! powershell.exe -NoProfile -NonInteractive -Command \
             "\$p = Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile -NonInteractive -Command \"netsh interface portproxy delete v4tov4 listenaddress=$gateway listenport=1235; netsh interface portproxy add v4tov4 listenaddress=$gateway listenport=1235 connectaddress=127.0.0.1 connectport=1234; Remove-NetFirewallRule -DisplayName YuriOS-LMStudio-WSL -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName YuriOS-LMStudio-WSL -Direction Inbound -Action Allow -Protocol TCP -LocalAddress $gateway -LocalPort 1235 -RemoteAddress $subnet -Profile Any\"' -Wait -PassThru; exit \$p.ExitCode"; then
-            fail "Windows declined the LM Studio bridge; rerun the installer and approve its UAC prompt"
+            log "Windows declined the LM Studio bridge; rerun ./install.sh --lmstudio-bridge and approve its UAC prompt, or $fallback"
+            return 0
         fi
         target_url="http://$gateway:1235/v1"
     fi
 
     log "Pointing WSL at LM Studio through $target_url"
-    sed -i.bak "s|^LMSTUDIO_BASE_URL=.*|LMSTUDIO_BASE_URL=$target_url # managed by install.sh for WSL|" .env
-    rm -f .env.bak
+    set_env_value LMSTUDIO_BASE_URL "$target_url # managed by install.sh for WSL"
 }
 
 select_torch_build() {
@@ -360,6 +413,30 @@ select_web_search() {
         *) WEB_SEARCH=false ;;
     esac
     log "web search: $WEB_SEARCH"
+}
+
+select_lmstudio_bridge() {
+    # WSL only, and only when nothing has answered it yet: the flag, or an .env
+    # that already routes a model to LM Studio. Asked up front with the other
+    # questions. configure_wsl_lmstudio acts on the answer much later, and on a
+    # fresh install it has no model choice to go on.
+    [ "$PLATFORM" = "wsl" ] && [ -z "$LMSTUDIO_BRIDGE" ] || return 0
+    grep -Eq '^(CHAT|UTILITY)_MODEL=lm_studio/' .env 2>/dev/null && return 0
+    [ -t 0 ] || return 0            # unattended: configure_wsl_lmstudio says how
+
+    printf '\n==> Will she use LM Studio running on Windows?\n' >&2
+    printf '    WSL cannot always reach a server on the Windows side. If LM Studio\n' >&2
+    printf '    only listens on localhost, the installer connects the two with a\n' >&2
+    printf '    Windows port forward and firewall rule, which asks for one UAC\n' >&2
+    printf '    approval. Say no for OpenRouter, Ollama, or a gguf/ model; rerun\n' >&2
+    printf '    with --lmstudio-bridge whenever you change your mind.\n' >&2
+    local answer=""
+    read -r -p "    Connect WSL to LM Studio on Windows? [y/N]: " answer || true
+    case "$answer" in
+        y|Y|yes|YES|Yes) LMSTUDIO_BRIDGE=true ;;
+        *) LMSTUDIO_BRIDGE=false ;;
+    esac
+    log "LM Studio bridge: $LMSTUDIO_BRIDGE"
 }
 
 setup_web_search() {
@@ -457,10 +534,10 @@ install_torch() {
     fi
     if [ "$TORCH_CHOICE" = "cuda" ]; then
         log "Installing the CUDA ${packages[*]} build (~4.5 GB; fast local selfies and GPU voice)"
-        uv pip install --python "$PYTHON" "${reinstall[@]}" "${packages[@]}"
+        uv pip install --python "$PYTHON" ${reinstall[@]+"${reinstall[@]}"} "${packages[@]}"
     else
         log "Installing the CPU-only ${packages[*]} wheels (skips ~3.8 GB of unused CUDA; --cuda-torch to opt out)"
-        uv pip install --python "$PYTHON" "${reinstall[@]}" "${packages[@]}" \
+        uv pip install --python "$PYTHON" ${reinstall[@]+"${reinstall[@]}"} "${packages[@]}" \
             --index-url https://download.pytorch.org/whl/cpu
     fi
 }
@@ -796,27 +873,48 @@ install_launcher() {
     # never require `source .venv/bin/activate`.
     local user_bin="$HOME/.local/bin"
     local launcher="$user_bin/yurios"
+    local target="$VENV_DIR/bin/yurios"
     mkdir -p "$user_bin"
     if [ -e "$launcher" ] && [ ! -L "$launcher" ]; then
         fail "$launcher already exists and is not a YuriOS launcher; move it aside, then rerun the installer"
     fi
-    ln -sfn "$VENV_DIR/bin/yurios" "$launcher"
+    ln -sfn "$target" "$launcher"
 
     case "${SHELL##*/}" in
         bash) local profile="$HOME/.bashrc" ;;
         zsh) local profile="$HOME/.zshrc" ;;
-        *)
-            log "Installed $launcher (add $user_bin to PATH for your shell)"
-            return
-            ;;
+        *) local profile="" ;;
     esac
-    if [[ ":$PATH:" != *":$user_bin:"* ]] && ! grep -Fq 'YuriOS command launcher' "$profile" 2>/dev/null; then
+    # Checked against LAUNCH_PATH, not PATH: install_uv has already put
+    # ~/.local/bin on ours, which says nothing about the user's shell.
+    if [[ ":$LAUNCH_PATH:" == *":$user_bin:"* ]]; then
+        return
+    fi
+    if [ -n "$profile" ] && ! grep -Fq '.local/bin' "$profile" 2>/dev/null; then
         {
             printf '\n# YuriOS command launcher\n'
             printf 'export PATH="$HOME/.local/bin:$PATH"\n'
         } >> "$profile"
-        log "Added $user_bin to PATH in $profile (open a new terminal to use yurios)"
+        log "Added $user_bin to PATH in $profile"
     fi
+
+    # New terminals will find it; this one won't — its PATH was fixed when it
+    # opened. So `yurios` works the moment the installer returns, link it into a
+    # directory that terminal already searches, when one is ours to write:
+    # Homebrew's bin on macOS and Linuxbrew, /usr/local/bin where it is
+    # user-owned, ~/bin. `yurios uninstall` knows the same list.
+    local dir
+    for dir in /opt/homebrew/bin /usr/local/bin /home/linuxbrew/.linuxbrew/bin "$HOME/bin"; do
+        [[ ":$LAUNCH_PATH:" == *":$dir:"* ]] || continue
+        [ -d "$dir" ] && [ -w "$dir" ] || continue
+        if [ -e "$dir/yurios" ] && [ ! -L "$dir/yurios" ]; then
+            continue                    # someone else's yurios; not ours to replace
+        fi
+        ln -sfn "$target" "$dir/yurios"
+        log "Linked yurios into $dir, so this terminal can run it now"
+        return
+    done
+    log "Open a new terminal to use yurios (or run: export PATH=\"$user_bin:\$PATH\")"
 }
 
 if [ "$SKIP_SYSTEM" = false ]; then
@@ -837,10 +935,11 @@ if [ -d yurios.egg-info ]; then
 fi
 
 log "Installing YuriOS with Python $($PYTHON --version 2>&1)"
-# Both interactive questions together, before the long downloads — so the user
+# The interactive questions together, before the long downloads — so the user
 # answers everything up front and can then walk away.
 select_torch_build
 select_web_search
+select_lmstudio_bridge
 install_torch
 PIN_ARGS=()
 if [ "$USE_PINS" = true ]; then
@@ -849,7 +948,9 @@ if [ "$USE_PINS" = true ]; then
     log "Pinning to constraints.txt (torch is not pinned — that build stays your choice)"
     PIN_ARGS=(--constraints "$ROOT_DIR/constraints.txt")
 fi
-uv pip install --python "$PYTHON" "${PIN_ARGS[@]}" -e ".[$EXTRAS]"
+# `${a[@]+"${a[@]}"}`, not `"${a[@]}"`: macOS's bash 3.2 calls an empty array
+# unbound under `set -u`, and PIN_ARGS is empty on every unpinned install.
+uv pip install --python "$PYTHON" ${PIN_ARGS[@]+"${PIN_ARGS[@]}"} -e ".[$EXTRAS]"
 install_launcher
 
 prepare_local_state
@@ -894,12 +995,16 @@ YuriOS is running as a background daemon:
   yurios restart               # reload settings saved in .env
   yurios start --foreground    # keep logs in this terminal
 
-Then open http://localhost:8768.
+A fresh install selects no language model. Choose one, then restart to load it:
+  yurios configure
+  yurios restart
 
-The first dashboard load asks you to choose a language model. `yurios configure`
-offers the same choice in a terminal; selecting a gguf/ model automatically
-downloads its matching Q4_K_M GGUF before it is used. The default
-sentence-transformer embedder also downloads its small local model on first startup.
+Then open http://localhost:8768. (The dashboard offers the same choice if you
+open it first; restart after choosing there too.)
+
+Selecting a gguf/ model automatically downloads its matching Q4_K_M GGUF before
+it is used. The default sentence-transformer embedder also downloads its small
+local model on first startup.
 EOF
 
 if [ "$INSTALL_VOICE" = true ]; then

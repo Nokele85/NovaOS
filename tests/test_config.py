@@ -10,13 +10,14 @@ def test_defaults():
     cfg = Config(_env_file=None)
     assert cfg.port == 8768                       # +1 off Build #4
     assert cfg.tools_backend == "mcp"
-    assert cfg.tool_max_calls_per_turn == 2
+    assert cfg.tool_max_calls_per_turn == 16
+    assert cfg.mind_goal_max_hands == 4         # a goal step's own, §26.2
     assert cfg.timer_max_minutes == 1440
     assert cfg.rain_intensity == 0.6
     # the mind's dials (SPEC §15–§18)
     assert cfg.mind_enabled
     assert cfg.mind_act_threshold == 0.4
-    assert cfg.mind_interrupt_threshold == 0.75
+    assert cfg.mind_interrupt_threshold == 0.6
     assert cfg.mind_max_interrupts_per_day == 3
     assert cfg.mind_dormant_cadence_s == 900.0
     assert cfg.idle_settle_s == 20.0              # the reflex windows survive
@@ -86,15 +87,19 @@ def test_the_example_never_hands_a_comment_over_as_a_value():
         f"comment above the assignment: {sorted(swallowed)}")
 
 
-def test_the_example_ships_her_hands_off_and_empty():
-    """The default-off proof, read off the file a new install actually copies
-    (§26.1). Two separate decisions, and `.env.example` makes neither of them."""
+def test_the_example_ships_her_hands_on_with_every_hand():
+    """One rule for every call she makes (§26.1), read off the file a new
+    install actually copies: her hands work out of the box — in a reply, as
+    they always did, and now on her own too — behind the caps below."""
     cfg = Config(_env_file=".env.example")
 
-    assert not cfg.mind_tools_enabled
-    assert cfg.mind_tool_allowlist == ""
-    # …and even were both flipped, the caps are the shipped ones
-    assert cfg.mind_tool_calls_per_day == 8
+    assert cfg.mind_tools_enabled
+    assert cfg.mind_tool_allowlist == "*"
+    assert cfg.mind_tools_during_chat == "auto"
+    assert cfg.tool_max_calls_per_turn == 16
+    # …and what she does on her own is still metered
+    assert cfg.mind_goal_max_hands == 4
+    assert cfg.mind_tool_calls_per_day == 64
     assert cfg.mind_tool_pressure_ceiling == 0.5
     # a cooldown shorter than the goal's own re-consider gap is not a cooldown
     assert cfg.mind_tool_cooldown_cheap_s >= cfg.mind_consider_cooldown_s

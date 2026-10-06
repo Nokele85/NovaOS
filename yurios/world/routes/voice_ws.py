@@ -206,19 +206,26 @@ async def _in_the_room(ws: WebSocket, rt, session_id: str, safe_send,
                         spoken.append(ev.text)
                         if not commit_text:            # …unless the text is given
                             rt.hub.publish("draft", {"text": " ".join(spoken)})
-                    elif ev.kind == "done" and (spoken or commit_text):  # commit
-                        committed_message = rt.post_message(
-                            "assistant", commit_text or " ".join(spoken),
-                            proactive=proactive, channel="voice",
-                            session_id=session_id)
+                    elif ev.kind == "done" and (spoken or commit_text
+                                                or ev.tool_outcomes):  # commit
+                        # Wordless with outcomes: a hand ran and that was the
+                        # reply (turn.py). Nothing to draw; REFLECT still hears it.
+                        if spoken or commit_text:
+                            committed_message = rt.post_message(
+                                "assistant", commit_text or " ".join(spoken),
+                                proactive=proactive, channel="voice",
+                                session_id=session_id)
                         if user_text:                  # the SignalBus tee
                             rt.signals.post("turn_committed",
                                             {"text": user_text,
-                                             "reply": " ".join(spoken)},
+                                             "reply": " ".join(spoken),
+                                             "tool_outcomes": ev.tool_outcomes},
                                             source="voice")
                     elif ev.kind in ("cancelled", "error"):   # no trace
                         rt.hub.publish("draft_cancel", {})
                     payload = encode_event(ev)
+                    if ev.kind == "error":         # whose line got no answer
+                        payload["client_id"] = client_id
                     if ev.kind == "done":
                         payload["client_id"] = client_id
                         if committed_message:
@@ -232,7 +239,8 @@ async def _in_the_room(ws: WebSocket, rt, session_id: str, safe_send,
         except Exception:
             log.exception("turn stream failed")
             rt.hub.publish("draft_cancel", {})
-            await safe_send({"type": "error", "message": "turn failed"})
+            await safe_send({"type": "error", "message": "turn failed",
+                             "client_id": client_id})
         finally:
             rt.turn_ended()
             # "no trace" has to mean her memory too. `stream_reply`
@@ -291,12 +299,12 @@ async def _in_the_room(ws: WebSocket, rt, session_id: str, safe_send,
     # is already in flight — the mind treats that as "she's busy".
     async def inject(cue: str) -> bool:
         nonlocal turn_task
-        if busy():                             # …a replay counts: one mouth
+        if rt.stopping.is_set() or busy():      # …a replay counts: one mouth
             return False
-        turn_task = asyncio.create_task(run(
+        turn_task = rt.start_live_task(run(
             controller.run_turn(session_id, "", persist=False,
                                 tokens=brain.stream_ambient(session_id, cue)),
-            proactive=True))                       # she reached out
+            proactive=True), name="voice-ambient")  # she reached out
         return True
 
     rt.attach_ambient(session_id, inject)
@@ -307,16 +315,18 @@ async def _in_the_room(ws: WebSocket, rt, session_id: str, safe_send,
     if session_id not in rt.greeted:
         rt.greeted.add(session_id)
         if not rt.still_in_the_room():
-            turn_task = asyncio.create_task(run(
+            turn_task = rt.start_live_task(run(
                 controller.run_turn(session_id, "", persist=False,
                                     tokens=brain.stream_greeting(session_id)),
                 proactive=True,                    # she speaks first
-                commit_text=brain.cold_open()))    # …and on the first-ever
-                                                   # arrival, from the card (§5.4)
+                commit_text=brain.cold_open()),     # from the card on first arrival
+                name="voice-greeting")
 
     try:
         while True:
             msg = await guard.receive(safe_send)
+            if rt.stopping.is_set():
+                break
             if msg["type"] == "websocket.disconnect":
                 break
 
@@ -390,7 +400,8 @@ async def _in_the_room(ws: WebSocket, rt, session_id: str, safe_send,
                     continue
                 await stop_replay()            # a second press takes the floor
                 await safe_send({"type": "speaking", "message_id": message_id})
-                replay_task = asyncio.create_task(replay(line, message_id))
+                replay_task = rt.start_live_task(
+                    replay(line, message_id), name="voice-replay")
                 continue
 
             if kind == "endpoint" or kind == "text":
@@ -444,11 +455,11 @@ async def _in_the_room(ws: WebSocket, rt, session_id: str, safe_send,
                 # …and the SignalBus — the ENGAGED preempt rides it
                 rt.signals.post("user_message", {"text": text}, source="voice")
                 trace = TurnTrace()
-                turn_task = asyncio.create_task(
+                turn_task = rt.start_live_task(
                     run(controller.run_turn(
                             session_id, text, trace=trace,
                             image=rt.uploads.data_url(picture) if picture else None),
-                        user_text=text, client_id=client_id))
+                        user_text=text, client_id=client_id), name="voice-turn")
     except (WebSocketDisconnect, VoiceSocketClosed):
         pass
     finally:

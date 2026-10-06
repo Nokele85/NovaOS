@@ -35,6 +35,7 @@ import logging
 import random
 from typing import Awaitable, Callable
 
+from yurios.app.conversation import drawn
 from yurios.kernel import correlate
 from yurios.world.avatar.controller import VrmController
 from yurios.world.brain_protocol import AutonomousBrain
@@ -45,20 +46,20 @@ from yurios.world.vram import ParkGate
 
 from .budget import BudgetGovernor
 from .dream import DreamConsolidator
-from .dreamjobs import SELF_GOAL, DreamRunner
-from .goals import (Goal, GoalStore, discover_promise_candidates,
-                    fallback_promises, trim)
-from .hands import (Hands, build_guard)
+from .dreamjobs import DreamRunner
+from .goals import (OWN_JUDGEMENT, Goal, GoalStore, discover_promise_candidates,
+                    fallback_promises, timer_for_promise, trim)
+from .hands import (Hands, build_guard, strip_native_calls)
 from .journal import Journal
 from .knowledge import KnowledgeStore
 from .promptlog import PromptLog
-from . import acts, goalwork, housekeeping, prompts
+from . import acts, goalwork, handed, handwork, housekeeping, muse, prompts
 from .policy import (DREAM, ENGAGED, IDLE, ActivityController, Appraisal,
                      appraise_goal, appraise_signal)
 from .selfedit import SelfEdit
 from .signals import Signal, SignalBus, failure_of
 from .trace import TickTrace
-from .util import new_id, read_json, ts_of_iso, write_json
+from .util import day_of, new_id, read_json, ts_of_iso, write_json
 from .vaultio import MindVault
 from .workspace import SkillStore, Workspace
 from .world import WorldModelStore
@@ -136,7 +137,8 @@ class MindLoop:
         #: (key, rendered, when) for `_soul_text` — see there.
         self._soul_cache: tuple = ((None, None), "", -1e18)
         self.selfedit = SelfEdit(self.vault, clock)
-        brain.set_goals(self.goals)            # §22: her standing list joins the
+        brain.set_goals(self.goals, on_write=self._goal_written)
+                                               # §22: her standing list joins the
                                                # conversational prompt, so the
                                                # talking-self and the intending-
                                                # self stop being two people
@@ -172,6 +174,8 @@ class MindLoop:
             # "what did this actually do to the vault" for DREAM too.
             soul_text=self._soul_text,
             drives=self._soul_drives,
+            # Her hands, for the jobs written in her own voice (§26.1).
+            hands=handwork.LoopHands(self),
             audit=(brain.guard.audit
                    if getattr(brain, "guard", None) is not None else None))
         state_dir = cfg.vault_dir / "state"
@@ -202,22 +206,25 @@ class MindLoop:
         # rehydration snapshot (SPEC §15.4): a restart resumes, not forgets
         self.state_path = state_dir / "engine.json"
         st = read_json(self.state_path, None) or {}
-        self.offset: int = st.get("bus_offset", 0)
+        # The offset indexes this bus's in-memory queue, so it only carries over
+        # to a mind rebuilt on the same live bus. A restart used to restore it
+        # onto a new, empty queue and skip that many of the first signals.
+        # `SignalBus.next` catches an offset past the end, but not one short of
+        # it: an offset of 1 skipped the one timer landed at boot (§7.5).
+        self.offset: int = (st.get("bus_offset", 0)
+                            if st.get("bus_epoch") == bus.epoch else 0)
         self.interrupts: dict = st.get("interrupts", {"date": "", "count": 0})
         self.considered: dict = st.get("considered", {})
         self.last_tick_ts: float | None = st.get("last_tick_ts")
+        # When `run` expects the next heartbeat — the end of the sleep it is in.
+        # A signal can wake her sooner; nothing makes her later. None until the
+        # loop has slept once (a test ticking by hand never does).
+        self.next_tick_at: float | None = None
         # goal id -> when to consider it next (SPEC §16, the `wakeup` signal).
         # A goal that decided "look at this again after lunch" said something the
         # hourly consider cooldown cannot express, and a restart that forgot it
         # would quietly turn a scheduled follow-up into an hourly one.
         self.wakeups: dict = st.get("wakeups", {})
-        # goal id -> the whole of what its last step read (SPEC §22.3a), spent
-        # by that goal's next step. Kept across a restart for the same reason
-        # as `wakeups`: steps are an hour apart, and a restart in between
-        # would hand her the 160-character stub again.
-        carried = st.get("just_read", {})
-        self.just_read: dict = {k: v for k, v in carried.items()
-                                if isinstance(v, dict)} if isinstance(carried, dict) else {}
         # Which day's reconsideration has already run (§22.2). Commitment
         # strategies used to apply only after a suspend gap — i.e. only when the
         # machine had slept two hours — so a goal that went stale while she was
@@ -226,12 +233,29 @@ class MindLoop:
         # The one-shot §5.4 handoff, below. A date rather than a bool so the
         # journal line and the goal it files can be traced back to the day.
         self.bootstrapped_on: str = st.get("bootstrapped_on", "")
+        # When she last had free time (§22.7) — persisted, so a restart does
+        # not hand her a fresh sitting the moment it comes back up.
+        self.last_mused: float = float(st.get("mused_at", 0) or 0)
+        self._muse_filed = ""                  # the one goal this sitting filed
+        # Documents handed to her desk (§34.6): the ones she has yet to sit down
+        # with, and the last few she has, with what came of them. Persisted:
+        # the bus is not replayed, and a document you gave her the minute
+        # before a restart is still a document you gave her.
+        waiting = st.get("handed", [])
+        self.handed: list[dict] = [
+            h for h in waiting if isinstance(h, dict) and h.get("path")
+        ] if isinstance(waiting, list) else []
         reviews = st.get("promise_reviews", [])
         self.promise_reviews: list[dict] = [
             review for review in reviews
             if isinstance(review, dict)
             and isinstance(review.get("candidates"), list)
         ] if isinstance(reviews, list) else []
+        delivered_timers = st.get("delivered_timers", [])
+        self.delivered_timers: list[str] = [
+            str(timer_id) for timer_id in delivered_timers[-100:]
+            if timer_id
+        ] if isinstance(delivered_timers, list) else []
         self.hands.load(st)
 
         self._session: str | None = None       # lazy brain session for her own words
@@ -299,6 +323,12 @@ class MindLoop:
         """Record a human editor write with the same journal semantics as a tool."""
         self._desk_written("write_note", {"path": path}, notify=False)
 
+    def _goal_written(self, goal: Goal) -> None:
+        """Refresh open inner-life surfaces after a conversational goal write."""
+        self.hub.publish("mind", {"state": self.activity.state,
+                                  "intention": "goal_created",
+                                  "goal": goal.id})
+
     def _brain_session(self) -> str:
         if self._session is None:
             self._session = self.brain.resolve_session(None)
@@ -313,10 +343,13 @@ class MindLoop:
                 out.append(tok)
         text = "".join(out).strip()
         self.budget.debit(cue, text)
-        # strip any leading [expression] tag — this line lands as chat text
-        if text.startswith("[") and "]" in text[:24]:
-            text = text.split("]", 1)[1].strip()
-        return text
+        # A compose call carries no tools, and DeepSeek answers a cue it
+        # wants a hand for in its own call markup — which is not a line she
+        # can say. Nothing is better than that (acts.py posts only a line).
+        text = strip_native_calls(text)
+        # …and drawn the way the column draws a reply: this line lands as chat
+        # text, and a `[tender]` it kept was shown as a word (SPEC §18.3).
+        return drawn(text)
 
     # ---- notifications from the voice route (same surface the idle machine had)
 
@@ -330,6 +363,13 @@ class MindLoop:
         self._turns_in_flight = max(0, self._turns_in_flight - 1)
         self._last_turn_end = self.clock.now()
         self.bus.wake.set()
+
+    def tool_called(self, line: dict, *, talking: bool) -> None:
+        """One audit line from either guard — a document she has now read
+        herself stops waiting for its sitting (§34.6). Persisted at once: the
+        next tick may be a budget-blocked hour away."""
+        if handed.opened(self, line, talking=talking):
+            self._persist()
 
     def _engaged_now(self) -> bool:
         return (self._turns_in_flight > 0
@@ -366,7 +406,9 @@ class MindLoop:
             # `late_s` is ~0 for a timer that landed while she was up, and the
             # real gap for one restored across a restart (§7.5) — the
             # announcement must not call that one punctual.
-            self.bus.post("timer", {"label": t.label, "id": t.id,
+            # `due` rides along so the announcement can `ack` exactly this
+            # countdown once it is delivered (§7.5).
+            self.bus.post("timer", {"label": t.label, "id": t.id, "due": t.due,
                                     "late_s": max(0.0, self.clock.now() - t.due)},
                           source="host")
         # …and the wakes the loop scheduled for itself (SPEC §16). A goal that
@@ -396,14 +438,21 @@ class MindLoop:
             elif sig.type == "turn_committed":
                 user_text = str(sig.payload.get("text", ""))
                 reply = str(sig.payload.get("reply", ""))
+                tool_outcomes = [dict(item) for item in
+                                 sig.payload.get("tool_outcomes", [])
+                                 if isinstance(item, dict)]
                 candidates = discover_promise_candidates(reply, user_text)
                 explicit = [candidate for candidate in candidates
                             if candidate.confidence == "explicit"]
                 assistant = [candidate for candidate in candidates
                              if candidate.confidence != "explicit"]
                 for candidate in explicit:
+                    timer = timer_for_promise(
+                        tool_outcomes, candidate.text, candidate.source,
+                        user_text, reply)
                     note = acts.file_promise_candidate(
-                        self, candidate, user_text=user_text, reply=reply)
+                        self, candidate, user_text=user_text, reply=reply,
+                        timer=timer)
                     if note:
                         reflect_notes.append(note)
                 if assistant and acts.promise_review_available(self):
@@ -418,6 +467,7 @@ class MindLoop:
                             "user_text": trim(user_text, 1000),
                             "reply": trim(reply, 3000),
                             "candidates": normalized,
+                            "tool_outcomes": tool_outcomes,
                             "attempts": 0,
                         })
                         # The signal bus is not replayed after restart. Persist
@@ -425,8 +475,12 @@ class MindLoop:
                         self._persist()
                 elif assistant:
                     for candidate in fallback_promises(assistant):
+                        timer = timer_for_promise(
+                            tool_outcomes, candidate.text, candidate.source,
+                            user_text, reply)
                         note = acts.file_promise_candidate(
-                            self, candidate, user_text=user_text, reply=reply)
+                            self, candidate, user_text=user_text, reply=reply,
+                            timer=timer)
                         if note:
                             reflect_notes.append(note)
             elif sig.type == "selfedit_decision":
@@ -442,10 +496,17 @@ class MindLoop:
                 goal = self.goals.get(str(sig.payload.get("id", "")))
                 if (goal is not None and sig.payload.get("abandon")
                         and goal.state not in ("done", "abandoned")):
+                    # Let go of the work, not an undelivered picture it already
+                    # made. The follow-up remains subject to Gate 2 (§18.2a).
+                    reflect_notes += goalwork.offer_the_picture(self, goal)
                     self.goals.set_state(goal.id, "abandoned")
                     self.wakeups.pop(goal.id, None)
                     reflect_notes.append(
                         f"you let go of: {goal.text}")
+                    # A message she decided to send, let go before it went:
+                    # the goal it came from stops waiting for it (§18.2b).
+                    reflect_notes += acts.settle_telling(self, goal,
+                                                         delivered=False)
             elif sig.type == "suspend_gap":
                 # ONE catch-up over the whole gap — but a goal that was
                 # holding a picture for you hands it on before it goes (§18.2a)
@@ -456,6 +517,12 @@ class MindLoop:
                     "I caught up on what expired and what still matters")
             elif sig.type == "timer":
                 self._pending_announce.append(sig.payload)
+            elif sig.type == "handed":
+                # Noticed now, whatever the hour — a journal line, no model.
+                # Whether she sits down with it now is APPRAISE's (§34.6).
+                note = handed.received(self, sig)
+                if note:
+                    reflect_notes.append(note)
             elif sig.type == "wakeup":
                 # The wake IS the effect: clearing the consider cooldown is what
                 # lets APPRAISE look at that goal again on this very tick. It is
@@ -485,6 +552,9 @@ class MindLoop:
         # writes are lines REFLECT has to journal now. Idempotent and dated, so
         # a restart at 23:59 does not do the day twice.
         reflect_notes.extend(self._day_rollover(now))
+        # After the rollover, whose `reconsider` can retire a goal that has a
+        # message waiting on it, and before ACT, which could send that message.
+        reflect_notes.extend(goalwork.settle_strays(self))
         reflect_notes.extend(self._bootstrap_handoff(now))
         # Partner-model → PERSONA is gated, not daily: a DREAM rewrite at 2am
         # must be able to queue the same night, not wait for tomorrow's rollover.
@@ -512,14 +582,22 @@ class MindLoop:
         for g in self.goals.open_goals():
             if g.state == "waiting":
                 continue
+            if g.meta.get("timer_id"):
+                # The TimerBoard owns this future delivery (§7.5). Appraising
+                # the mirrored goal would send the reminder early and then let
+                # the real countdown announce it a second time.
+                continue
             last = self.considered.get(g.id)
             if last and (now - last) < self.cfg.mind_consider_cooldown_s:
                 continue                       # don't re-chew one goal every tick
             a = appraise_goal(g, self.clock)
-            if offer and g.kind != "reach_out":
+            if offer and (g.kind != "reach_out"
+                          or goalwork.needs_preparing(self, g)):
                 # Same goal, same score — the difference is only whether the
                 # step she takes may be a reach as well as a thought (principle
                 # 7: a tool call is a step of an open goal, never free-floating).
+                # A reach-out gets one too while it is still being got ready
+                # (§18.2c): the picture it is about is taken before the gate.
                 a = Appraisal(g, "tool_step", a.score,
                               f"{a.why}; hands: {', '.join(offer.tools)}")
             appraisals.append(a)
@@ -532,6 +610,9 @@ class MindLoop:
         if self.knowledge.pending_docs() and not self.knowledge.busy:
             appraisals.append(Appraisal("ingest", "impulse", 0.55,
                                         "new document on the shelf"))
+        sitting = handed.appraise(self)        # a document you handed her (§34.6)
+        if sitting is not None:
+            appraisals.append(sitting)
         if (self.cfg.dream_enabled and self.cfg.utility_enabled
                 and self.activity.state == DREAM and self.dreams.backlog()):
             appraisals.append(Appraisal("dream", "dream", 0.6, "DREAM backlog"))
@@ -541,6 +622,16 @@ class MindLoop:
             appraisals.append(Appraisal(
                 "self_talk", "impulse", self.cfg.mind_act_threshold + 0.05,
                 "a long quiet stretch, with someone in the room"))
+
+        # Free time (§22.7): with nothing above gate 1 and no goal merely
+        # resting between its steps, REST forever is not a rest but a stop. A
+        # reach-out is not work in progress: Gate 2 can hold one all night.
+        busy = any(muse.cooling(self, g, now) for g in self.goals.open_goals()
+                   if g.state != "waiting" and g.kind != "reach_out"
+                   and not g.meta.get("timer_id"))
+        free = muse.appraise(self, appraisals, busy=busy, now=now)
+        if free is not None:
+            appraisals.append(free)
 
         # ---- DECIDE: exactly one intention, or REST ---------------------------
         appraisals.sort(key=lambda a: a.score, reverse=True)
@@ -572,13 +663,15 @@ class MindLoop:
                 acted = {"what": "error", "result": f"error: {e}"}
 
         # ---- REFLECT: journal + trace, always ----------------------------------
+        if chosen is not None and chosen.kind in ("goal", "tool_step"):
+            goalwork.record_decision(self, chosen.subject, acted, interrupt)
         # Desk writes happened on the *turn's* task, outside this tick entirely
         # (§34.2). Drain them here so they are journalled in tick order with
         # everything else, rather than racing the journal from another task.
         while self._desk_notes:
             reflect_notes.append(self._desk_notes.pop(0))
         for note in reflect_notes:
-            self.journal.write(note)
+            await self.journal.write(note)
         trace_rec = {
             "activity_state": self.activity.state,
             "sensed": [{"type": s.type, "id": s.id} for s in batch],
@@ -601,6 +694,8 @@ class MindLoop:
         self.offset = new_offset
         self.last_tick_ts = now
         self._persist()
+        # only now, with the cursor on disk, is the batch read (SPEC §16.4)
+        self.bus.ack(self.offset)
         # git is a subprocess: on the loop it stalls every room this host is
         # holding open, including the other characters' (SPEC §2.2)
         await asyncio.to_thread(
@@ -632,10 +727,19 @@ class MindLoop:
             return await acts.self_talk(self)
         if chosen.subject == "ingest":
             return await acts.ingest(self)
+        if chosen.subject == "handed":
+            return await handed.consider(self, offer)
         if chosen.subject == "dream":
-            return await acts.dream(self)
+            acted, interrupt, notes = await acts.dream(self)
+            # The impulse outranks the standing goal for the same leftover
+            # (MAINTENANCE), so the close the goal would have done itself
+            # has to happen from the act that cleared it (SPEC §22.5).
+            notes += housekeeping.close_cleared_maintenance(self, "dream")
+            return acted, interrupt, notes
         if chosen.subject == "promise_review":
             return await acts.promise_review(self, offer)
+        if chosen.subject == "muse":
+            return await muse.muse(self, offer)
         if chosen.kind == "signal":
             sig: Signal = chosen.subject
             if sig.type == "task_completion":
@@ -649,13 +753,24 @@ class MindLoop:
                     return ({"what": "noted",
                              "result": f"task failed: {task} ({err})"}, {},
                             [f"it didn't come out: {task} ({err})"])
+                # With what it *was*, when the producer said: "a selfie she
+                # took" alone is the same sentence for every photo, and recall
+                # handed her six of them in a row as six memories of nothing.
+                detail = trim(str(sig.payload.get("detail") or ""), 240)
+                what = f"{task} — {detail}" if detail else task
                 return ({"what": "noted", "result": f"task done: {task}"}, {},
-                        [f"finished something I'd started: {task}"])
+                        [f"finished something I'd started: {what}"])
             return ({"what": "noted", "result": f"noted {sig.type}"}, {}, [])
         if chosen.kind in ("goal", "tool_step"):
             goal: Goal = chosen.subject
             self.considered[goal.id] = self.clock.now()
             if goal.kind == "reach_out":
+                # Got ready first (§18.2c): with her hands, or — for a dated
+                # one — with none, because whether its moment has come is a
+                # judgement the score cannot make.
+                if chosen.kind == "tool_step" or (
+                        goal.dated and goalwork.needs_preparing(self, goal)):
+                    return await goalwork.prepare(self, goal, offer)
                 return await acts.reach_out(self, goal)
             # `tool_step` is reachable ONLY from here (§26, as amended): a hand
             # she reaches for is a step of an open goal or it does not happen.
@@ -687,7 +802,11 @@ class MindLoop:
         if report.dry_run:
             return report          # a rehearsal leaves no journal and no commit
         for note in report.notes:
-            self.journal.write(note)
+            await self.journal.write(note)
+        # A night asked for by hand finishes the same backlog, so it gets the
+        # same close the tick's dream act gives the standing goal (SPEC §22.5).
+        for note in housekeeping.close_cleared_maintenance(self, "dream"):
+            await self.journal.write(note)
         await asyncio.to_thread(self.vault.commit_if_dirty,
                                 f"dream (by hand): {report.summary[:60]}")
         return report
@@ -710,9 +829,9 @@ class MindLoop:
 
 
 
-    def _goal_context(self, goal: Goal) -> str:
+    async def _goal_context(self, goal: Goal) -> str:
         """What a working step is given to work from (mind/goalwork.py)."""
-        return goalwork.context(self, goal)
+        return await goalwork.context(self, goal)
 
     async def _act_goal_work(self, goal: Goal,
                              offer=None) -> tuple[dict, dict, list[str]]:
@@ -777,17 +896,16 @@ class MindLoop:
     # ------------------------------------------------------------------- misc
 
     def _persist(self) -> None:
-        open_ids = {g.id for g in self.goals.open_goals()}
         write_json(self.state_path, {
-            "bus_offset": self.offset, "interrupts": self.interrupts,
+            "bus_offset": self.offset, "bus_epoch": self.bus.epoch,
+            "interrupts": self.interrupts,
             "considered": self.considered, "last_tick_ts": self.last_tick_ts,
             "wakeups": self.wakeups, "reconsidered_on": self.reconsidered_on,
             "bootstrapped_on": self.bootstrapped_on,
+            "mused_at": self.last_mused,
             "promise_reviews": self.promise_reviews,
-            # only for goals still open: a read nobody will take up again is
-            # not worth carrying in a file rewritten every tick
-            "just_read": {gid: read for gid, read in self.just_read.items()
-                          if gid in open_ids},
+            "handed": self.handed,
+            "delivered_timers": self.delivered_timers[-100:],
             # the fingerprint ledger and the daily call count, beside
             # `interrupts` and rolling at the same local midnight (§26, amended)
             **self.hands.snapshot()})
@@ -918,7 +1036,9 @@ class MindLoop:
             except Exception:  # noqa: BLE001 — the heartbeat must never stop
                 log.exception("tick failed")
             self.bus.wake.clear()
-            await self.clock.sleep(self.cadence(), wake=self.bus.wake)
+            delay = self.cadence()
+            self.next_tick_at = self.clock.now() + delay
+            await self.clock.sleep(delay, wake=self.bus.wake)
 
     # ---- the inner-life snapshot the /api/mind route serves (SPEC §24.3) ------
 
@@ -926,6 +1046,7 @@ class MindLoop:
         return {
             "state": self.activity.state,
             "cadence_s": self.activity.cadence(),
+            "next_tick_at": self.next_tick_at,
             "budget": self.budget.snapshot(),
             "goals": [{"id": g.id, "text": g.text, "kind": g.kind,
                        "state": g.state, "due": g.due,
@@ -941,10 +1062,19 @@ class MindLoop:
                 "enabled": bool(getattr(self.cfg,
                                         "mind_goal_filing_enabled", True)),
                 "open": sum(1 for g in self.goals.open_goals()
-                            if str(g.provenance or "").startswith(SELF_GOAL)),
+                            if str(g.provenance or "").startswith(OWN_JUDGEMENT)),
                 "max": int(getattr(self.cfg, "mind_self_goals_max", 3) or 0)},
             "shelf": self.knowledge.shelf(),
-            "interrupts_today": self.interrupts.get("count", 0),
+            # documents handed to her desk, read and not yet (§34.6, §24.3),
+            # and whether a waiting one wakes her or waits for you
+            "handed": [dict(h) for h in self.handed],
+            "inbox_wake": bool(self.cfg.mind_inbox_wake),
+            # Gate 2's spend, which only `reach_out` rolls over — so a count
+            # stamped yesterday is today's zero, not today's number.
+            "interrupts_today": (self.interrupts.get("count", 0)
+                                 if self.interrupts.get("date")
+                                 == day_of(self.clock.now()) else 0),
+            "interrupts_per_day": self.cfg.mind_max_interrupts_per_day,
             "dream_backlog": self.dreams.backlog(),
             "dream_jobs": self.dreams.status(),
             "workspace": (self.workspace.digest(limit=10)

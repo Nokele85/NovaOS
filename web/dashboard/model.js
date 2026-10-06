@@ -79,8 +79,8 @@ export function normalizeCharacter(raw, index = 0) {
       available: boolean(typeof source.notify === "boolean"
         ? source.notify_available : source.notify?.available),
     },
-    // Whether her mind may reach for a tool between conversations (SPEC §26,
-    // as amended). Read exactly like the doorbell above and for the same
+    // Whether she may use a tool at all — in a reply and on her own (SPEC
+    // §26.1). Read exactly like the doorbell above and for the same
     // reason: `available` is the house switch (`MIND_TOOLS_ENABLED`), and with
     // it off the per-character toggle is shown inert rather than pretending a
     // character can grant herself a capability this node has not installed.
@@ -113,6 +113,16 @@ export function normalizeCharacters(payload) {
   if (!Array.isArray(rows)) throw new TypeError("Character response must be an array or contain a characters array");
   return rows.map(normalizeCharacter).filter(Boolean).sort((a, b) =>
     a.stateMeta.rank - b.stateMeta.rank || a.name.localeCompare(b.name));
+}
+
+/** The fields of a form that differ from the baseline it was loaded with —
+ *  compared as text, because a checkbox is a boolean and an input a string. A
+ *  profile save sends only these (SPEC §30.4): the card fields land in her
+ *  SOUL, and re-sending one she was only shown rewrites a section nobody
+ *  touched. */
+export function changedFields(now, baseline) {
+  return Object.fromEntries(Object.entries(now).filter(
+    ([name, value]) => String(value) !== String(baseline[name] ?? "")));
 }
 
 export function filterCharacters(characters, query) {

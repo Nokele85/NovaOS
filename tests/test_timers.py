@@ -25,6 +25,32 @@ def test_multiple_timers_land_in_due_order(clock, timers):
     assert timers.due.get_nowait().id == "b"
 
 
+def test_snapshot_is_the_public_due_ordered_shape(clock, timers):
+    timers.add(id="later", label="the roast", seconds=120)
+    timers.add(id="sooner", label="tea", seconds=60)
+
+    assert timers.snapshot() == {"timers": [
+        {"id": "sooner", "label": "tea", "due": clock.now() + 60},
+        {"id": "later", "label": "the roast", "due": clock.now() + 120},
+    ]}
+
+
+def test_change_hook_fires_only_when_the_board_changes(clock, timers):
+    snapshots = []
+    timers.on_change = lambda: snapshots.append(timers.snapshot())
+
+    timers.poll()
+    timers.add(id="t1", label="tea", seconds=60)
+    timers.poll()
+    clock.advance(60)
+    timers.poll()
+
+    assert snapshots == [
+        {"timers": [{"id": "t1", "label": "tea", "due": clock.now()}]},
+        {"timers": []},
+    ]
+
+
 async def test_run_loop_polls_on_the_virtual_clock(clock, timers):
     """One pass of the production loop moves an elapsed timer without a real
     sleep — the VirtualClock advances instead of waiting."""
@@ -73,16 +99,46 @@ def test_a_timer_that_came_due_while_she_was_down_still_lands(tmp_path, clock):
     assert restarted.pending() == []
 
 
-def test_a_landed_timer_is_not_restored_and_announced_twice(tmp_path, clock):
-    """Off the file the moment it is on the queue — a promise kept twice reads
-    as her losing track, not as diligence."""
+def test_a_landed_timer_stays_on_the_file_until_it_is_delivered(tmp_path, clock):
+    """Landing is not keeping. Between `poll` and the announcement the promise
+    lives only in memory — the queue, the bus, the mind's announce list — and a
+    restart anywhere in there used to keep it zero times (§7.5)."""
     first = board(tmp_path, clock)
     first.add(id="t1", label="tea", seconds=60)
     clock.advance(61)
     assert [t.id for t in first.poll()] == ["t1"]
+    assert first.pending() == [] and first.snapshot() == {"timers": []}
+    assert first.poll() == [], "landed once is on the queue once"
+
+    restarted = board(tmp_path, VirtualClock(start=clock.now()))
+    assert [t.id for t in restarted.poll()] == ["t1"], "the restart owes it still"
+
+
+def test_a_delivered_timer_is_not_restored_and_announced_twice(tmp_path, clock):
+    """Off the file once delivered — a promise kept twice reads as her losing
+    track, not as diligence."""
+    first = board(tmp_path, clock)
+    first.add(id="t1", label="tea", seconds=60)
+    clock.advance(61)
+    first.poll()
+    assert first.ack("t1")
 
     restarted = board(tmp_path, VirtualClock(start=clock.now()))
     assert restarted.pending() == [] and restarted.poll() == []
+
+
+def test_ack_takes_only_the_countdown_it_names(tmp_path, clock):
+    """Two timers can share the default id; `due` tells them apart, and a timer
+    still counting down is never acked."""
+    b = board(tmp_path, clock)
+    b.add(id="t", label="tea", seconds=60)
+    b.add(id="t", label="oven", seconds=120)
+    clock.advance(61)
+    tea = b.poll()[0]
+    assert not b.ack("t", clock.now() + 1000)
+    assert b.ack("t", tea.due)
+    assert not b.ack("t"), "the oven has not landed"
+    assert [t.label for t in board(tmp_path, clock).pending()] == ["oven"]
 
 
 def test_a_timer_older_than_the_longest_one_settable_is_dropped(tmp_path, clock):
@@ -122,6 +178,14 @@ def test_an_unreadable_board_is_an_empty_one(tmp_path, clock):
     assert b.pending() == []
     b.add(id="t1", label="tea", seconds=60)                  # …and the next add repairs it
     assert [t.id for t in board(tmp_path, clock).pending()] == ["t1"]
+
+
+def test_non_finite_due_times_are_ignored(tmp_path, clock):
+    (tmp_path / "state").mkdir(parents=True)
+    (tmp_path / "state" / "timers.json").write_text(
+        '{"timers":[{"id":"bad","label":"bad","due":NaN}]}',
+        encoding="utf-8")
+    assert board(tmp_path, clock).snapshot() == {"timers": []}
 
 
 def test_no_vault_is_a_working_in_memory_board(clock):

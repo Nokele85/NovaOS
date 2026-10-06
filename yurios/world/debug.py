@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from itertools import islice
 from pathlib import Path
 from typing import Any, Callable
 
 from yurios.app import vaultgit
 from yurios.mind.journal import canonical_day, is_canonical_day, parse_day_entries
-from yurios.mind.util import jsonl_page, read_json
+from yurios.mind.util import jsonl_count, jsonl_page, jsonl_reverse, read_json
 
 #: Per-view page ceilings. Generous, but bounded — a debug page asking for
 #: 100000 rows is a bug, and answering it would be a worse one.
@@ -87,10 +88,11 @@ def _matcher(**equals) -> Callable[[dict], bool] | None:
 def manifest(record) -> list[dict]:
     """Every log, its size, and whether a rotated generation exists beside it.
 
-    The paged lists read only the live file (a rolled `.1` is deliberately not
+    Most paged lists read only the live file (a rolled `.1` is deliberately not
     merged into a page), so this has to be able to *say* that older records
     exist there. Silently truncated history is worse than none. The joined
-    graph (`debug_graph`) and the single-record lookups below do read it."""
+    graph (`debug_graph`), the context windows and the single-record lookups
+    below do read it."""
     out = []
     for name in SOURCES:
         path = source(record, name)
@@ -110,13 +112,24 @@ def counts(record) -> dict:
     return {name: jsonl_count(source(record, name)) for name in SOURCES}
 
 
-def overview(record, runtime=None) -> dict:
+def budget(record, daily_tokens: int | None = None) -> dict:
+    """The governor's ledger off disk, with the cap it is spent against.
+
+    `state/budget.json` holds only what was spent; the cap is configuration
+    (`MIND_DAILY_TOKENS`, SPEC §17.3), so the host hands it in. Without it a
+    "spent today" figure has nothing to be read against.
+    """
+    ledger = read_json(Path(record.paths.vault) / "state" / "budget.json", {}) or {}
+    return {**ledger, "daily_tokens": daily_tokens} if daily_tokens else ledger
+
+
+def overview(record, runtime=None, *, daily_tokens: int | None = None) -> dict:
     vault = Path(record.paths.vault)
     state = vault / "state"
     return {
         "character": record.id,
         "activity": read_json(state / "activity.json", {}) or {},
-        "budget": read_json(state / "budget.json", {}) or {},
+        "budget": budget(record, daily_tokens),
         "engine": read_json(state / "engine.json", {}) or {},
         "vault": {"head": vaultgit.head(vault),
                   "commits": vaultgit.count_commits(vault)},
@@ -160,7 +173,7 @@ def generations(path: Path) -> tuple[Path, Path]:
 def find_one(path: Path, match: Callable[[dict], bool],
              shape: Callable[[dict], dict] | None = None) -> dict | None:
     """One record by identity, from the live file or the generation rolled off
-    it. The lists above page the live file only and say so; a single-record
+    it. Most lists above page the live file only and say so; a single-record
     lookup is reached from a link — the joined graph reads both generations —
     and a link that 404s because its row rolled over an hour ago is a lie."""
     for candidate in generations(path):
@@ -168,6 +181,24 @@ def find_one(path: Path, match: Callable[[dict], bool],
         if found:
             return found[0]
     return None
+
+
+def paged_generations(path: Path, *, page: int, limit: int,
+                      match: Callable[[dict], bool] | None = None,
+                      shape: Callable[[dict], dict] | None = None) -> dict:
+    """`paged`, across the live file and the generation rolled off it, as one
+    newest-first log. For a list that is an index into history rather than a
+    tail of it: the prompt log rolls whole days at once, and a day index that
+    goes blank the moment it does has hidden everything it was for."""
+    page, limit = clamp(page, limit)
+    rows = (row for candidate in generations(path) for row in jsonl_reverse(candidate))
+    if match is not None:
+        rows = (row for row in rows if match(row))
+    window = list(islice(rows, page * limit, page * limit + limit + 1))
+    items = [shape(row) if shape else row for row in window[:limit]]
+    total = None if match is not None else sum(jsonl_count(p) for p in generations(path))
+    return {"items": items, "page": page, "limit": limit,
+            "has_more": len(window) > limit, "total": total}
 
 
 def find_all(path: Path, match: Callable[[dict], bool],
@@ -266,13 +297,13 @@ def strip_messages(row: dict) -> dict:
 
 
 def prompt_days(record, *, page: int = 0, limit: int = 20) -> dict:
-    """The day index. Walks the whole log once — it is the one view that has to,
-    and it is the entry point users open rarely and then page within."""
+    """The day index. Walks the whole log once, both generations — it is the one
+    view that has to, and it is the entry point users open rarely and then page
+    within. Rotation bounds the walk: two generations of `mind_prompt_log_max_bytes`."""
     page, limit = clamp(page, limit)
     days: dict[str, dict] = {}
-    rows, _, _ = jsonl_page(source(record, "prompts"), limit=10 * MAX_LIMIT,
-                            shape=lambda r: {"ts": r.get("ts"), "kind": r.get("kind")})
-    for row in rows:
+    path = source(record, "prompts")
+    for row in (r for candidate in generations(path) for r in jsonl_reverse(candidate)):
         day = (row.get("ts") or "")[:10]
         if not day:
             continue
@@ -295,8 +326,9 @@ def prompts(record, *, day: str | None = None, kind: str | None = None,
             return False
         return True
 
-    return paged(source(record, "prompts"), page=page, limit=limit,
-                 match=match if (day or kind) else None, shape=strip_messages)
+    return paged_generations(source(record, "prompts"), page=page, limit=limit,
+                             match=match if (day or kind) else None,
+                             shape=strip_messages)
 
 
 def prompt_detail(record, prompt_id: str) -> dict | None:
@@ -496,7 +528,8 @@ def chunk(record, chunk_id: str) -> dict | None:
 
 # --- what it all costs --------------------------------------------------------
 
-def economics(record, *, points: int = 500) -> dict:
+def economics(record, *, points: int = 500,
+              daily_tokens: int | None = None) -> dict:
     history, _, _ = jsonl_page(source(record, "context"), limit=points)
     history.reverse()                               # a chart reads left to right
     utility_rows, _, _ = jsonl_page(source(record, "utility"), limit=MAX_LIMIT)
@@ -522,7 +555,7 @@ def economics(record, *, points: int = 500) -> dict:
         bucket["tokens_out"] += row.get("tokens_out") or 0
     return {
         "context": history,
-        "budget": read_json(Path(record.paths.vault) / "state" / "budget.json", {}) or {},
+        "budget": budget(record, daily_tokens),
         "utility": {"applied": applied, "quarantined": quarantined,
                     "total": len(utility_rows), "by_kind": by_kind},
         "by_kind": spend,

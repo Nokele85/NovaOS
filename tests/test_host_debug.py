@@ -310,6 +310,32 @@ def test_the_prompt_day_index_counts_by_kind(client):
                                 "kinds": {"ambient": 2}}
 
 
+def test_the_context_section_survives_the_log_rolling_over(client):
+    """The prompt log rolls whole at its byte cap, and the live file is only
+    recreated by her next model call — so on a quiet day the rolled `.1` is all
+    there is. The day index and its lists are an index into history: they read
+    it, rather than go blank the moment it rolled."""
+    traces = client.record.paths.traces
+    write_jsonl(traces / "prompts.jsonl.1", [
+        {"id": "pr-1", "ts": "2026-08-01T10:00:00", "kind": "ambient"},
+        {"id": "pr-2", "ts": "2026-08-02T09:00:00", "kind": "dream"}])
+
+    days = get(client, "/prompts/days")
+    assert [d["day"] for d in days["items"]] == ["2026-08-02", "2026-08-01"]
+    assert [r["id"] for r in get(client, "/prompts", day="2026-08-02")["items"]] == ["pr-2"]
+
+    # Once she speaks again, a day split across the roll reads as one day.
+    write_jsonl(traces / "prompts.jsonl", [
+        {"id": "pr-3", "ts": "2026-08-02T11:00:00", "kind": "chat_turn"}])
+    assert get(client, "/prompts/days")["items"][0] == {
+        "day": "2026-08-02", "count": 2, "kinds": {"chat_turn": 1, "dream": 1}}
+    first = get(client, "/prompts", day="2026-08-02", limit=1)
+    second = get(client, "/prompts", day="2026-08-02", limit=1, page=1)
+    assert [r["id"] for r in first["items"]] == ["pr-3"] and first["has_more"] is True
+    assert [r["id"] for r in second["items"]] == ["pr-2"] and second["has_more"] is False
+    assert get(client, "/prompts")["total"] == 3
+
+
 def test_days_is_not_swallowed_by_the_prompt_id_route(client):
     """`/prompts/days` and `/prompts/{id}` share a shape; declaration order is
     what keeps them apart."""
@@ -457,6 +483,20 @@ def test_the_live_context_meter_is_reported_separately_when_she_is_up(live_clien
     body = live_client.get("/api/characters/yuri/debug/overview").json()
     assert body["live"] == {"context": {"used": 12, "limit": 100}}
     assert body["counts"]["ticks"] == 3, "history still comes off disk"
+
+
+def test_spent_today_carries_the_cap_it_is_spent_against(client):
+    """The ledger on disk holds only the spend; the cap is configuration, and a
+    figure with nothing to read it against is half a tile (SPEC §17.3)."""
+    state = client.record.paths.vault / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "budget.json").write_text(json.dumps(
+        {"date": "2026-08-01", "spent_tokens": 815798, "calls": 150}), encoding="utf-8")
+    cap = Config().mind_daily_tokens
+    for route in ("/overview", "/economics"):
+        assert get(client, route)["budget"] == {
+            "date": "2026-08-01", "spent_tokens": 815798, "calls": 150,
+            "daily_tokens": cap}, route
 
 
 def test_economics_separates_what_was_applied_from_what_was_quarantined(client):

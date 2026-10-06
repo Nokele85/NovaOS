@@ -2,7 +2,7 @@
 
 Her hands are reached over a real **MCP** connection: an in-repo MCP server
 (`yurios/world/tools/server.py`, FastMCP over stdio) that the brain connects to as a genuine MCP
-client, discovering the calls with `list_tools` rather than hardcoding them. There are eighteen
+client, discovering the calls with `list_tools` rather than hardcoding them. There are nineteen
 built-in calls when every optional group is enabled, plus any third-party MCP calls you mount.
 Disabled groups are not advertised at all.
 
@@ -25,6 +25,7 @@ reports the truth (`"mcp"` / `"fake"` / `"off"` / `"failed: …"`).
 |---|---|---|---|
 | `set_timer` | `minutes` (0 < m <= `TIMER_MAX_MINUTES`), `label?` | schedules a spoken announcement | always |
 | `play_music` | `action`, `track?`, `volume?` | drives browser-side synthesized ambience | always |
+| `create_goal` | `text`, `kind?` | adds or deduplicates a standing goal and returns its exact ID | the mind is on |
 | `take_selfie` | `look?`, `scene?`, `framing?`, `lighting?`, `mood?`, `wardrobe?`, `avoid?` | starts a render off-turn | `SELFIE_BACKEND` is not `off` |
 | `show_picture` | `subject`, `avoid?` | starts a render of something other than Yuri | `SELFIE_BACKEND` is not `off` |
 | `web_search` | `query`, `k?` | returns titles, links, and snippets from SearXNG | `SEARCH_BACKEND` is not `off` |
@@ -68,6 +69,18 @@ TIMER_MAX_MINUTES=1440
 TOOL_RATE_TIMER=6                 # calls per minute
 ```
 
+### create_goal
+
+Explicit requests such as "set a goal to…" use `create_goal`, which writes through the host-owned
+standing `GoalStore` and returns the exact `g-…` ID. A file under `workspace/goals/` is only a
+working note and never becomes a goal by resembling one. The tool is absent when the mind is off.
+Working one of her goals, she can use it too: the mind files that goal itself, as `goal:<id>` —
+one open per goal, and not from a goal filed that way (see [mind.md](mind.md#goals-she-files-herself)).
+
+```ini
+TOOL_RATE_GOAL=6
+```
+
 ### play_music
 
 Drives a generative ambient pad synthesized in the browser — not a media library. The seam is the
@@ -98,10 +111,12 @@ preserves the first.
 with `count` first so a clipped listing still says how many files there were; a folder that
 is not on the desk says so rather than looking empty. It lists `workspace/` only — kept
 memory is `memory/semantic/facts.md`, written by the night, not a desk folder.
-`read_note` returns up to 4,000 characters of content. Notes are scratch space, so they are not
+`read_note` returns one page — whole lines, up to 4,000 characters of them — with where it is
+first: `start_line`, `end_line`, `line_count`, and `next_start_line`, the line to read on from
+(null at the end). Reading a long note is reading again from `next_start_line`. Notes are scratch space, so they are not
 versioned in the Vault.
 
-Skills live in `vault/skills/`. `read_skill` loads the instructions for one named skill;
+Skills live in `vault/skills/`. `read_skill` loads the instructions for one named skill, whole up to about 8,000 characters;
 `write_skill` stores a lowercase-hyphenated name, a short description that says when to use it,
 and its full instructions; `delete_skill` removes it. Skills are versioned. See [The mind](mind.md#her-desk-and-her-skills)
 for the storage layout and prompt behavior.
@@ -137,6 +152,7 @@ SEARCH_SAFESEARCH=1               # 0 none | 1 moderate | 2 strict
 FETCH_TIMEOUT_S=8
 FETCH_MAX_BYTES=2000000
 RESEARCH_MAX_PAGES=5
+RESEARCH_MAX_CALLS=100
 TOOL_RATE_SEARCH=6
 TOOL_RATE_READ=6
 TOOL_RATE_RESEARCH=2
@@ -154,8 +170,10 @@ dead one, the same rule as `SELFIE_BACKEND=off`.
 >
 > `MIND_DAILY_TOKENS` is a governor, not a spend cap: it is an estimate, it never gates
 > conversation, it does not abort a read already in flight, and it does not stand between a tool
-> call and the run it starts. What actually bounds a run is `RESEARCH_MAX_PAGES`, the
-> `TOOL_RATE_RESEARCH` bucket, and you — the **inner life** tab shows every run and the document
+> call and the run it starts. `RESEARCH_MAX_CALLS` limits the estimated model calls admitted to
+> each run before a page is read. Pages that do not fit are held unread on the shelf for you to
+> resume. `RESEARCH_MAX_PAGES` also bounds the number of pages and `TOOL_RATE_RESEARCH` limits
+> starts per minute. The **inner life** tab shows every run and the document
 > being read right now with its model-call count, and the stop button there loses nothing. If she
 > is pointed at a paid API, set a spend limit with the provider as well.
 
@@ -551,10 +569,11 @@ restarts), and never hands a screenshot's base64 to the model.
 
 ## Her hands in the loop
 
-The mind *can* reach for these same hands, as a step of an open goal — never free-floating, at
-most one call per tick. It ships **off**. `MIND_TOOLS_ENABLED` is the house switch;
-`MIND_TOOL_ALLOWLIST` names the permitted tools explicitly and is empty even once the switch is
-true; her tile's `hands` toggle is the per-character grant, live, without a restart. Cheap
+The mind can reach for these same hands as a step of an open goal — never free-floating, at
+most one call per tick. The house defaults are on: `MIND_TOOLS_ENABLED=true` and
+`MIND_TOOL_ALLOWLIST=*`; a character's `hands` toggle is also on by default. All three
+gates must admit a call. Change the house allowlist to narrow which tools can be used, or
+turn off the house or character switch. Cheap
 hands (the desk, `set_timer`) are a goal step; expensive ones (`research`, `read_page`,
 `web_search`, the cameras) take the whole tick and are simply not offered over
 `MIND_TOOL_PRESSURE_CEILING`. `MIND_TOOL_CALLS_PER_DAY` is a cap, checked before the call.

@@ -40,6 +40,7 @@ import logging
 import re
 from contextlib import nullcontext
 
+from yurios.app.providers.usage import ACTED, LAST_STREAM, unanswered
 from yurios.desktop.voice.emotion import EmotionParser
 from .tooltags import ToolCall
 
@@ -226,6 +227,24 @@ class _Drafts:
         return _text_of(self.shown)
 
 
+class RuntimeStopping(RuntimeError):
+    """A request arrived after this character began shutting down."""
+
+
+class EmptyReply(RuntimeError):
+    """The model answered with nothing to show — a turn that didn't happen (SPEC §10.5).
+
+    It used to be rolled back and then *returned*, as a success with no
+    message in it, so the page drew nothing and the log said nothing: from the
+    chair, she had just ignored you. It is a failure like any other now, and
+    `why` is the provider's reason in words (usage.StreamTally) — a refusal, a
+    reasoning pass that spent the whole reply budget, or plain silence."""
+
+    def __init__(self, why: str):
+        self.why = why
+        super().__init__(unanswered(why))
+
+
 class TextTurns:
     """The one text-turn runner every channel shares (built once, on Runtime)."""
 
@@ -267,6 +286,8 @@ class TextTurns:
         already greeted this run, or said nothing."""
         rt = self.rt
         async with self._lock:
+            if rt.stopping.is_set():
+                raise RuntimeStopping("character is stopping")
             session_id = rt.brain.resolve_session(session_id)
             if session_id in rt.greeted:
                 return {"session_id": session_id, "message": None}
@@ -353,6 +374,8 @@ class TextTurns:
             if attachment is None:
                 raise LookupError(f"no such picture: {image_id}")
         async with self._lock:
+            if rt.stopping.is_set():
+                raise RuntimeStopping("character is stopping")
             session_id = rt.brain.resolve_session(session_id)
             user_entry = rt.post_message("user", text, channel=channel,
                                          client_id=client_id,
@@ -431,6 +454,8 @@ class TextTurns:
             # keeps its two-argument signature.
             reply_kw = {"image": rt.uploads.data_url(attachment)} \
                 if attachment else {}
+            LAST_STREAM.set(None)        # this turn's reason, not an earlier one's
+            ACTED.set(False)
             try:
                 with context:
                     async for token in rt.brain.stream_reply(session_id, text,
@@ -467,21 +492,36 @@ class TextTurns:
 
             entry = None
             reply = drafts.text
-            if not reply:
+            if not reply and not ACTED.get():
                 rt.brain.abandon(session_id)   # nothing to commit — same rollback
+                tally = LAST_STREAM.get()
+                why = (tally.reason() if tally else "") \
+                    or "her reply had nothing in it to show"
+                log.warning("text turn came back empty (channel %s): %s %s",
+                            channel, why, tally.detail() if tally else "")
+                raise EmptyReply(why)
+            # No words, but a hand ran: the act is the reply. It is committed —
+            # her memory keeps the call, REFLECT gets its outcome — and nothing
+            # is drawn, because the tool row already is. Failing it would ask
+            # for a retry that does the act a second time.
             if reply:
                 entry = rt.post_message("assistant", reply, channel=channel,
                                         session_id=session_id)
-                # Persisting is another model call — the memory extractor's —
-                # and it runs *after* `turn_ended`, so as far as the parker is
-                # concerned the room has already gone quiet. Held, so a render
-                # that starts in this gap waits for it instead of unloading the
-                # model it is talking to (§7.6). No `wait` first: the turn came
-                # through the gate at the top, and this is the same turn.
-                async with rt.park_gate.hold():
-                    await rt.brain.persist(session_id, text, "".join(raw))
-                rt.signals.post("turn_committed",
-                                {"text": text, "reply": reply}, source=channel)
+            rt.committing()                    # Stop waits for the rest (§29.5)
+            # Persisting is another model call — the memory extractor's — and it
+            # runs *after* `turn_ended`, so as far as the parker is concerned the
+            # room has already gone quiet. Held, so a render that starts in this
+            # gap waits for it instead of unloading the model it is talking to
+            # (§7.6). No `wait` first: the turn came through the gate at the
+            # top, and this is the same turn.
+            async with rt.park_gate.hold():
+                tool_outcomes = await rt.brain.persist(
+                    session_id, text, "".join(raw))
+            if entry:
+                rt.turn_filed(entry["id"])     # now it can be rated (§37.1)
+            rt.signals.post("turn_committed",
+                            {"text": text, "reply": reply,
+                             "tool_outcomes": tool_outcomes}, source=channel)
             selfies = rt.selfies.active_ids(client_id) if rt.selfies else []
             return {"session_id": session_id, "message": entry,
                     "user_message": user_entry, "active_selfies": selfies}

@@ -12,6 +12,7 @@ import pytest
 from yurios.mind.goals import (PromiseReviewError, discover_promise_candidates,
                                extract_promises, parse_promise_review,
                                promise_decision_grounded, promise_kind)
+from yurios.mind.util import iso_of
 
 from .conftest import FakeUtility, make_mind, run_mind
 
@@ -21,12 +22,14 @@ class ReviewUtility(FakeUtility):
         self.reviews = list(reviews)
         self.review_calls = 0
         self.review_params = []
+        self.review_messages = []
 
     async def complete(self, messages, **params):
         system = messages[0].get("content", "") if messages else ""
         if "reviewing possible commitments" in system.lower():
             self.review_calls += 1
             self.review_params.append(params)
+            self.review_messages.append([dict(message) for message in messages])
             return self.reviews.pop(0)
         return await super().complete(messages, **params)
 
@@ -138,6 +141,40 @@ async def test_self_talk_needs_company_and_a_long_quiet(cfg, seeded_vault):
     rig.clock.advance(1)
     trace2 = await rig.mind.tick()
     assert trace2["decided"]["intention"] != "self_talk"
+
+
+def test_a_murmur_does_not_name_the_house_room():
+    """The cues named the shipped companion's room, so an imported character
+    was told to murmur about a lamp and a window seat she doesn't have. Her
+    place comes from the situation block the ambient prompt already carries."""
+    from yurios.mind.acts import SELF_TALK_CUES
+    for cue in SELF_TALK_CUES:
+        for fixture in ("rain", "lamp", "plant", "window seat", "this room"):
+            assert fixture not in cue.lower(), f"{fixture!r} in {cue!r}"
+
+
+def test_no_unprompted_cue_prescribes_a_temperament():
+    """Every greeting, announcement and reach-out said "short, warm", and the
+    cue is what the model obeys over the card — so a reserved or a blunt
+    character opened like a greeting card. Length may be fixed; the voice is
+    hers (SPEC §8)."""
+    from yurios.app.core.assemble import OWN_VOICE
+    from yurios.app.routes import greeting
+    from yurios.desktop import brain
+    from yurios.mind import acts
+    from yurios.world import selfies
+    spoken = {"timer": acts.ANNOUNCE_CUE, "late timer": acts.LATE_ANNOUNCE_CUE,
+              "reach-out": acts.REACH_OUT_CUE,
+              "reach-out with a picture": acts.REACH_OUT_WITH_SHOT_CUE,
+              "picture ready": selfies.ANNOUNCE_CUE,
+              "greeting": greeting.GREET_CUE, "voice greeting": brain.GREET_CUE}
+    for name, cue in spoken.items():
+        assert OWN_VOICE in cue, f"the {name} cue does not ask for her voice"
+    for name, cue in {**spoken, **{f"murmur {i}": c for i, c in
+                                   enumerate(acts.SELF_TALK_CUES)}}.items():
+        rest = cue.replace(OWN_VOICE, "").lower()
+        for word in ("warm", "gentle", "tender", "sweet"):
+            assert word not in rest, f"the {name} cue tells her to be {word}"
 
 
 async def test_goal_work_is_silent_and_journaled(cfg, seeded_vault):
@@ -269,6 +306,15 @@ def test_promise_candidates_keep_source_order_across_openers():
     ]
 
 
+def test_promise_candidates_ignore_quoted_examples():
+    reply = ('None of the "I\'ll get to it" routine. '
+             '“I will read it” is exactly what I said before. '
+             "I'll check the real file now.")
+    candidates = discover_promise_candidates(reply, "review it")
+    assert [candidate.text for candidate in candidates] == [
+        "check the real file now"]
+
+
 def test_promise_review_parser_is_strict():
     valid = review_goal("verify the release calendar")
     decision = parse_promise_review(valid, candidate_count=1)
@@ -331,13 +377,55 @@ async def test_yuriquant_fragments_become_one_canonical_goal(cfg, seeded_vault):
     assert utility.review_params[0]["response_format"]["type"] == "json_schema"
 
 
+async def test_promise_review_receives_the_calls_that_actually_ran(
+        cfg, seeded_vault):
+    utility = ReviewUtility(review_goal("read every goal file"))
+    rig = make_mind(cfg, seeded_vault, utility=utility)
+    outcome = {"tool": "list_notes", "args": {"folder": "goals"},
+               "verdict": "ok", "result": '{"count":24,"files":[]}'}
+    rig.say("review every goal file",
+            reply="I'll read them all. I read every one.",
+            tool_outcomes=[outcome])
+
+    await rig.mind.tick()
+
+    payload = json.loads(utility.review_messages[0][-1]["content"])
+    assert payload["tool_outcomes"] == [outcome]
+    assert "list_notes` proves an index" in utility.review_messages[0][0]["content"]
+
+
+async def test_a_reviewed_timer_promise_keeps_the_timer_contract(
+        cfg, seeded_vault):
+    due = 1_800_000_300.0
+    utility = ReviewUtility(review_goal(
+        "say hi when the five-minute timer fires", kind="reach_out"))
+    rig = make_mind(cfg, seeded_vault, utility=utility)
+    outcome = {
+        "tool": "set_timer", "args": {"minutes": 5, "label": "say hi"},
+        "verdict": "ok",
+        "result": json.dumps({"id": "timer-hi", "label": "say hi",
+                              "seconds": 300, "due": due}),
+    }
+    rig.say("say hi to me in five minutes", reply="Five minutes. I'll find you.",
+            tool_outcomes=[outcome])
+
+    await rig.mind.tick()
+
+    goal = rig.mind.goals.open_goals()[0]
+    assert goal.meta["timer_id"] == "timer-hi"
+    assert goal.due == iso_of(due)
+
+
 async def test_promise_reviews_are_fifo_and_survive_restart(cfg, seeded_vault):
     utility = ReviewUtility(
         review_goal("check the first source"),
         review_goal("check the second source"))
     rig = make_mind(cfg, seeded_vault, utility=utility)
     rig.say("first", reply="I'll check the first source.")
-    rig.say("second", reply="I'll check the second source.")
+    second_outcome = {"tool": "web_search", "args": {"query": "second"},
+                      "verdict": "ok", "result": '{"results":[]}'}
+    rig.say("second", reply="I'll check the second source.",
+            tool_outcomes=[second_outcome])
 
     await rig.mind.tick()
     assert [goal.text for goal in rig.mind.goals.open_goals()] == [
@@ -346,9 +434,12 @@ async def test_promise_reviews_are_fifo_and_survive_restart(cfg, seeded_vault):
 
     restarted = make_mind(cfg, seeded_vault, clock=rig.clock, utility=utility)
     assert len(restarted.mind.promise_reviews) == 1
+    assert restarted.mind.promise_reviews[0]["tool_outcomes"] == [second_outcome]
     await restarted.mind.tick()
     assert [goal.text for goal in restarted.mind.goals.open_goals()] == [
         "check the first source", "check the second source"]
+    payload = json.loads(utility.review_messages[-1][-1]["content"])
+    assert payload["tool_outcomes"] == [second_outcome]
 
 
 async def test_invalid_review_rotates_without_blocking_later_turns(cfg, seeded_vault):
@@ -423,7 +514,7 @@ def test_a_promise_is_split_into_work_and_news():
 
 
 def test_a_promise_made_in_german_is_kept():
-    """§22.1c. She was given a task in German, answered "Ich mach's fertig und
+    """§22.1g. She was given a task in German, answered "Ich mach's fertig und
     meld mich", and nothing was filed: the turn ended and the work she had taken
     on was gone. These are her own words from that night, and each must reach
     the store as the half it is."""
@@ -495,23 +586,27 @@ def test_what_german_says_now_is_not_a_promise():
 
 
 async def test_what_she_read_reaches_the_next_prompt(cfg, seeded_vault):
-    """§20.2 end to end, on the real MindLoop and the real brain: a doc lands on
-    the shelf, the tick ingests it, and the *next turn she assembles* carries it
-    with its citation. Everything the web hands shelve arrives the same way —
-    `read_page`, `research` and a book you dropped are one shelf and one slot."""
+    """§20.2 end to end: a compiled note reaches the prompt; its raw source
+    remains available on the shelf without contributing a prompt chunk."""
     rig = make_mind(cfg, seeded_vault)
     ref = seeded_vault / "knowledge" / "reference"
     ref.mkdir(parents=True, exist_ok=True)
     (ref / "web-sencha.md").write_text(
         "# Sencha\n\nSource: https://example.invalid/sencha\n\n"
-        "Sencha is steamed rather than pan-fired, which keeps it green.\n")
+        "RAW SOURCE: Sencha is steamed rather than pan-fired.\n")
+    (ref / "research-sencha.md").write_text(
+        "# Sencha\n\nSencha is steamed rather than pan-fired "
+        "(https://example.invalid/sencha).\n")
     await rig.mind.tick()                               # SENSE → ingest
 
-    _soul, prompt = rig.mind.brain._assemble(
+    _soul, prompt = await rig.mind.brain._assemble(
         "s1", "how is sencha made?", window=[], lore=[])
     assert "WHAT YOU'VE READ" in prompt.system
-    assert "steamed rather than pan-fired" in prompt.system
-    assert "web-sencha.md (chars" in prompt.system      # the citation, grounded
+    read_block = prompt.system.split("## WHAT YOU'VE READ", 1)[1].split("\n## ", 1)[0]
+    assert "steamed rather than pan-fired" in read_block
+    assert "research-sencha.md (chars" in read_block
+    assert "web-sencha.md" not in read_block
+    assert "RAW SOURCE" not in read_block
 
 
 async def test_a_turn_survives_a_broken_shelf(cfg, seeded_vault):
@@ -520,11 +615,11 @@ async def test_a_turn_survives_a_broken_shelf(cfg, seeded_vault):
     rig = make_mind(cfg, seeded_vault)
 
     class Broken:
-        def search(self, *a, **kw):
+        async def asearch(self, *a, **kw):
             raise RuntimeError("index is half-written")
 
     rig.mind.brain.set_knowledge(Broken())
-    _soul, prompt = rig.mind.brain._assemble("s1", "hello", window=[], lore=[])
+    _soul, prompt = await rig.mind.brain._assemble("s1", "hello", window=[], lore=[])
     assert "WHAT YOU'VE READ" not in prompt.system
     assert "PERSONA BACKBONE" in prompt.system          # the turn still happened
 
@@ -642,11 +737,29 @@ async def test_a_restart_does_not_leave_her_deaf_to_the_next_signals(
     assert rig.mind.offset == 2
 
     fresh = make_mind(cfg, seeded_vault)          # same vault, new bus
-    assert fresh.mind.offset == 2, "the offset really is restored from disk"
     fresh.mind.bus.post("user_message", {"text": "still here"}, source="web")
     trace = await fresh.mind.tick()
     assert [s["type"] for s in trace["sensed"]] == ["user_message"]
     assert fresh.mind.offset == 1
+
+
+async def test_a_restart_does_not_skip_signals_short_of_the_old_offset(
+        cfg, seeded_vault):
+    """The half the end-of-queue check could not see: an offset of 2 restored
+    onto a boot that has already posted two signals points at a queue that
+    looks caught up, and both go past her unread. A timer that landed at boot
+    was one of them (§7.5)."""
+    rig = make_mind(cfg, seeded_vault)
+    rig.mind.bus.post("user_message", {"text": "hello?"}, source="web")
+    rig.mind.bus.post("user_present", {}, source="frontend")
+    await rig.mind.tick()
+    rig.mind._persist()
+
+    fresh = make_mind(cfg, seeded_vault)          # same vault, new bus
+    fresh.mind.bus.post("timer", {"id": "t1", "label": "tea"}, source="host")
+    fresh.mind.bus.post("user_message", {"text": "still here"}, source="web")
+    trace = await fresh.mind.tick()
+    assert [s["type"] for s in trace["sensed"]] == ["timer", "user_message"]
 
 
 async def test_a_loop_switched_off_and_on_does_not_re_read_the_queue(
@@ -662,3 +775,28 @@ async def test_a_loop_switched_off_and_on_does_not_re_read_the_queue(
     rebuilt = make_mind(cfg, seeded_vault, bus=rig.mind.bus)   # live queue
     trace = await rebuilt.mind.tick()
     assert trace["sensed"] == [], "already read once is already read"
+
+
+async def test_a_tick_acks_what_it_sensed_and_keeps_nothing_behind_it(
+        cfg, seeded_vault):
+    """SPEC §16.4 — the queue holds what is unread. A daemon up for months
+    used to hold every turn it ever heard, because nothing released it."""
+    rig = make_mind(cfg, seeded_vault)
+    rig.mind.bus.post("user_message", {"text": "hello?"}, source="web")
+    rig.mind.bus.post("user_present", {}, source="frontend")
+    await rig.mind.tick()
+    assert rig.mind.offset == 2 and len(rig.mind.bus) == 2
+    assert rig.mind.bus._signals == []
+
+
+# ---- a composed line is drawn like a reply (SPEC §18.3) ------------------
+
+async def test_a_composed_line_loses_its_tags_wherever_they_fall(cfg, seeded_vault):
+    """Verbatim, 24 Sep 02:31: only a *leading* tag was ever taken off."""
+    from .conftest import CannedChat
+    rig = make_mind(cfg, seeded_vault, chat=CannedChat(
+        "[shy] It's done. [tender] The frame I wrote for you — *quietly* I took it."))
+    line = await rig.mind._compose("((the timer finished))")
+    assert "[" not in line
+    assert line.startswith("It's done.") and "The frame I wrote for you" in line
+    assert "*quietly*" in line, "narration is part of what she wrote on the page"

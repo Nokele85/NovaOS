@@ -8,14 +8,10 @@ the actual going-and-finding-out happens here, off-turn, exactly the way a
 selfie renders (world/selfies.py — this file is deliberately its sibling, down
 to the callables it's handed).
 
-What makes this more than a slow `web_search` is where the text lands. Every
-page read — by `research`, or by a plain `read_page` she made herself — is
-ingested into the §20 KnowledgeStore: chunked, situated, embedded, and indexed
-with a doc + span she can cite. So a tool result stops being 600 characters that
-expire at the end of the turn and becomes something she still has next week,
-retrievable through the same assembler slot as the books you drop on her shelf.
-A page she read is a page she read; the fact that a tool call fetched it rather
-than you copying it in is not a distinction worth keeping.
+Every page read — by `research`, or by a plain `read_page` she made herself — is
+kept with its source URL in the §20 KnowledgeStore. Raw pages remain there for
+verification, while §20.2 keeps their chunks out of ordinary prompt retrieval.
+The curated page a DREAM research job writes is what enters that prompt slot.
 
 The store is reached through a **getter**, not a reference, because it belongs
 to the MindLoop (mind/loop.py) — built after the tools are wired, and not built
@@ -45,6 +41,15 @@ FETCH_CONCURRENCY = 2
 ANNOUNCE_CUE = (
     "((You've finished reading up on {topic} — {count} page(s), and it's in "
     "the chat now. Say one short line about what you found, nothing else.))")
+
+#: Why a run shelved a fetched page held instead of reading it (`held_by` on the
+#: page's entry), as the summary says it. Only these count as "held" there: a
+#: page whose read was stopped mid-way is also held, but it was read in part,
+#: it is already listed, and the stop was somebody else's (SPEC §7.7).
+HELD_BECAUSE = {
+    "ceiling": "reading {it} would exceed this run's model-call ceiling",
+    "unpriced": "I couldn't estimate what reading {it} would cost",
+}
 
 
 def _to_vault(contract: dict) -> bool:
@@ -82,7 +87,7 @@ def _doc_name(page: dict) -> str:
 
 
 def as_document(page: dict, *, retrieved: str) -> str:
-    """One fetched page, as a document for the shelf.
+    """One fetched page, as a source document for the shelf.
 
     The header is the whole point of writing it this way: `KnowledgeStore`
     citations are `doc (chars a-b)`, which tells you *which file* and *where in
@@ -105,6 +110,7 @@ class Researcher:
     def __init__(self, search, fetcher, *, clock: Clock,
                  post: Callable[..., dict],
                  speak: Callable[[str], Awaitable[bool]],
+                 max_calls: int = 100,
                  knowledge: Optional[Callable[[], object]] = None,
                  notify: Optional[Callable[[str, dict], None]] = None,
                  signal: Optional[Callable[..., object]] = None):
@@ -113,6 +119,7 @@ class Researcher:
         self.clock = clock
         self.post = post                       # Runtime.post_message
         self.speak = speak                     # Runtime.speak_ambient (§8.4)
+        self.max_calls = max(0, max_calls)      # §7.7, per-run estimated ceiling
         self.knowledge = knowledge             # () -> KnowledgeStore | None
         self.notify = notify                   # EventHub.publish, when hosted
         # SignalBus.post — the return path for work the loop dispatched (§16).
@@ -138,29 +145,61 @@ class Researcher:
             log.exception("research: couldn't reach the knowledge shelf")
             return None
 
-    def _price(self, entry: dict, page: dict) -> None:
-        """What reading this page is going to cost, in model calls, before any
-        of them are made. Best-effort: no store, no estimate, no drama."""
+    def research_note(self, job: str) -> str:
+        """The current curated page for a recurring research job (SPEC §21.2a)."""
         store = self._store()
         if store is None:
-            return
+            return ""
+        path = store.reference / f"research-{_slug(job)}.md"
         try:
-            est = store.estimate(as_document(page, retrieved=self._stamp()))
+            return path.read_text(encoding="utf-8") if path.is_file() else ""
+        except OSError:
+            log.warning("research: couldn't read topic page for %s", job,
+                        exc_info=True)
+            return ""
+
+    async def publish_research_note(self, job: str, text: str) -> str:
+        """Replace a job's topic page and wait until it is retrievable."""
+        store = self._store()
+        if store is None:
+            return ""
+        name = f"research-{_slug(job)}.md"
+        try:
+            return (await store.ingest(name, text)).doc
+        except Exception:
+            log.warning("research: couldn't index topic page for %s", job,
+                        exc_info=True)
+            return ""
+
+    def _price(self, entry: dict, page: dict) -> int | None:
+        """What reading this page is going to cost, in model calls, before any
+        of them are made. No store means no model calls; an unpriceable page
+        cannot be admitted under a model-call ceiling."""
+        store = self._store()
+        if store is None:
+            return 0
+        try:
+            est = store.estimate(as_document(page, retrieved=self._stamp()),
+                                 name=_doc_name(page))
             entry["calls"] = est["calls"]
             entry["passages"] = est["passages"]
             entry["digested"] = est["digested"]
+            return max(0, int(est["calls"]))
         except Exception:  # noqa: BLE001 — a price tag is not worth a traceback
             log.debug("research: couldn't price %s", page.get("url"),
                       exc_info=True)
+            return None
 
-    def _park(self, page: dict) -> str:
+    def _park(self, page: dict, *,
+              reason: str = "you stopped it before she read it") -> str:
         """Shelve a fetched page without reading it (KnowledgeStore.park)."""
         store = self._store()
         if store is None:
             return ""
         try:
             return store.park(_doc_name(page),
-                              as_document(page, retrieved=self._stamp()))
+                              as_document(page, retrieved=self._stamp()),
+                              reason=reason)
         except Exception:  # noqa: BLE001
             log.warning("research: couldn't park %s", page.get("url"),
                         exc_info=True)
@@ -196,6 +235,19 @@ class Researcher:
             return ""
         return result.doc
 
+    async def archive_source(self, page: dict) -> str:
+        """Keep a DREAM research source without adding retrieval chunks."""
+        store = self._store()
+        if store is None:
+            return ""
+        try:
+            return await store.archive_source(
+                _doc_name(page), as_document(page, retrieved=self._stamp()))
+        except Exception:
+            log.warning("research: couldn't archive %s", page.get("url"),
+                        exc_info=True)
+            return ""
+
     def _stamp(self) -> str:
         import datetime
         return datetime.datetime.fromtimestamp(
@@ -229,7 +281,8 @@ class Researcher:
             "id": run_id, "topic": str(contract.get("topic") or ""),
             "depth": int(contract.get("depth") or 3),
             "stage": "searching", "started_at": self.clock.now(),
-            "pages": [], "stopped": False, "corr_id": contract.get("_corr_id")}
+            "pages": [], "stopped": False, "corr_id": contract.get("_corr_id"),
+            "max_calls": self.max_calls, "budget_calls": 0}
         self._trim()
         task = asyncio.create_task(self._job(dict(contract)),
                                    name=f"research-{run_id}")
@@ -262,19 +315,16 @@ class Researcher:
     def runs(self) -> list[dict]:
         """Every run this process knows about, newest last — the panel's list.
 
-        `calls` is what the reading is *estimated* to cost in model calls, page
-        by page, and it only becomes knowable as pages arrive: a search result
-        is a URL, and a URL's length is whatever the server sends back. So the
-        number grows during the fetch phase and then counts down — which is the
-        honest shape of it, and better than a spinner that implies nothing is
-        being spent.
+        `calls` is the estimated cost admitted to this run. Individual page
+        estimates remain visible even when a page is held: a search result is
+        only a URL, and its length is unknown until the fetch finishes.
         """
         out = []
         for run in self._runs.values():
             pages = run["pages"]
             row = dict(run)
             row["pages"] = list(pages)
-            row["calls"] = sum(p.get("calls", 0) for p in pages)
+            row["calls"] = run["budget_calls"]
             row["read"] = sum(1 for p in pages if p.get("state") == "read")
             row["elapsed_s"] = round(
                 (run.get("ended_at") or self.clock.now()) - run["started_at"], 1)
@@ -305,7 +355,9 @@ class Researcher:
     async def _job(self, c: dict) -> None:
         topic = str(c.get("topic") or "").strip()
         depth = max(1, int(c.get("depth") or 3))
-        run = self._runs.get(str(c.get("id", "")), {"pages": [], "stopped": False})
+        run = self._runs.get(str(c.get("id", "")),
+                             {"pages": [], "stopped": False, "budget_calls": 0})
+        max_calls = run.get("max_calls", self.max_calls)
         try:
             hits = await self.search.search(topic, depth)
         except Exception as e:
@@ -341,7 +393,7 @@ class Researcher:
                          "chars": len(page["text"]), "state": "fetched",
                          "calls": 0, "doc": ""}
                 run["pages"].append(entry)
-                self._price(entry, page)
+                calls = self._price(entry, page)
                 if run["stopped"]:
                     # Fetched between the flag going up and this line. Somebody
                     # already paid a stranger's web server for it — put it on the
@@ -350,6 +402,20 @@ class Researcher:
                     entry["doc"] = self._park(page)
                     entry["state"] = "held" if entry["doc"] else "dropped"
                     return None
+                # Reservations happen before the first await of an ingest.
+                # Fetches can overlap, but two pages cannot both spend the
+                # same remaining calls (SPEC §7.7).
+                if calls is None or run["budget_calls"] + calls > max_calls:
+                    why = "unpriced" if calls is None else "ceiling"
+                    entry["doc"] = self._park(page, reason=(
+                        "research run couldn't estimate its model calls"
+                        if calls is None else
+                        "research run reached its model-call ceiling"))
+                    entry["state"] = "held" if entry["doc"] else "dropped"
+                    if entry["doc"]:
+                        entry["held_by"] = why
+                    return None
+                run["budget_calls"] += calls
                 entry["state"] = "reading"   # …for however long the read takes
                 entry["doc"] = await self._shelve(page)
                 entry["state"] = self._page_state(entry["doc"])
@@ -363,9 +429,20 @@ class Researcher:
                          "fetched is on her shelf, waiting for you)")
             self._status(c, "stopped")
             return
+        held = {why: sum(p.get("held_by") == why for p in run["pages"])
+                for why in HELD_BECAUSE}
         if not pages:
-            self._say(c, f"(found some links about {topic}, but none of them "
-                         "would open)")
+            if any(held.values()):
+                because = ", and ".join(HELD_BECAUSE[why].format(it="them")
+                                        for why, n in held.items() if n)
+                self._say(c, f"(found pages about {topic}, but {because} — "
+                             "they're held on the shelf for you)")
+                self._completed(c, {"pages": 0, "shelved": 0,
+                                    "held": sum(held.values()), "docs": [],
+                                    "error": "research held every page unread"})
+            else:
+                self._say(c, f"(found some links about {topic}, but none of them "
+                             "would open)")
             self._status(c, "done")
             return
 
@@ -381,9 +458,15 @@ class Researcher:
         else:
             lines.append("(not shelved this time — I'll have to read them "
                          "again if you need the detail)")
+        for why, n in held.items():
+            if n:
+                noun, it = ("page", "it") if n == 1 else ("pages", "them")
+                lines.append(f"({n} more {noun} held on the shelf — "
+                             f"{HELD_BECAUSE[why].format(it=it)})")
         self._say(c, "\n".join(lines))
         self._status(c, "done")
         self._completed(c, {"pages": len(pages), "shelved": kept,
+                            "held": sum(held.values()),
                             "docs": [p.get("doc") for p in pages if p.get("doc")]})
 
         if _to_vault(c):

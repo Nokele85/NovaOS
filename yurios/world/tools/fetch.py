@@ -48,6 +48,18 @@ GIST_CHARS = 400
 
 _SKIP_TAGS = {"script", "style", "noscript", "template", "svg", "canvas",
               "nav", "header", "footer", "aside", "form", "button", "iframe"}
+_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input",
+              "link", "meta", "param", "source", "track", "wbr"}
+# SPEC §7.7: sites often render furniture as ordinary divs. Match whole CSS
+# tokens, never substrings: an article about a "social contract" is content.
+_FURNITURE = {"advert", "advertisement", "ads", "app-banner", "breadcrumb",
+              "breadcrumbs", "comment", "comments", "comtr", "cookie",
+              "newsletter", "pagination", "recommendation", "recommendations",
+              "related", "related-posts", "share", "sharing", "sidebar",
+              "social-links", "toolbar"}
+_FURNITURE_ROLES = {"complementary", "contentinfo", "navigation", "search"}
+_MIN_SUBSTANTIVE_CHARS = 160
+_LARGE_HTML_BYTES = 5_000
 _BLOCK_TAGS = {"p", "div", "section", "article", "br", "li", "tr", "blockquote",
                "pre", "figcaption", "h1", "h2", "h3", "h4", "h5", "h6"}
 _HEADINGS = {"h1": "#", "h2": "##", "h3": "###", "h4": "####", "h5": "#####",
@@ -74,6 +86,29 @@ async def system_resolver(host: str, port: int) -> list[str]:
     return [info[4][0] for info in infos]
 
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _public(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Whether an address is on the public internet (SPEC §7.7).
+
+    `is_global`, not a list of the ranges to refuse: a list only ever names
+    the ranges its author thought of, and the one this missed was 100.64.0.0/10
+    — carrier-grade NAT, which Python counts as neither private nor global and
+    which is exactly where a Tailscale network lives, MagicDNS included. An
+    IPv6 address that only wraps an IPv4 one (`::ffff:a.b.c.d`, or NAT64's
+    `64:ff9b::a.b.c.d`) is judged by the address inside it.
+    """
+    if isinstance(addr, ipaddress.IPv6Address):
+        inner = addr.ipv4_mapped
+        if inner is None and addr in _NAT64:
+            inner = ipaddress.IPv4Address(addr.packed[-4:])
+        if inner is not None:
+            return _public(inner)
+    # Multicast is "global" to Python, and is never a page.
+    return addr.is_global and not addr.is_multicast
+
+
 async def _validated_addresses(url: str, resolve) -> list[str]:
     """Return every address after applying the public-endpoint policy."""
     parsed = urlparse(url)
@@ -88,9 +123,7 @@ async def _validated_addresses(url: str, resolve) -> list[str]:
     if not addresses:
         raise UnsafeURL(f"couldn't resolve {host}")
     for raw in addresses:
-        addr = ipaddress.ip_address(raw)
-        if (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+        if not _public(ipaddress.ip_address(raw)):
             raise UnsafeURL(
                 f"{host} is on this machine or this network — pages she reads "
                 "have to be on the public internet")
@@ -291,6 +324,10 @@ class HttpFetcher:
                     title, text = "", body.strip()
                 else:
                     title, text = extract(body)
+                    # SPEC §7.7: a large app shell with only a title or a few
+                    # controls left is no readable page to shelve or cite.
+                    if len(body) >= _LARGE_HTML_BYTES and len(text) < _MIN_SUBSTANTIVE_CHARS:
+                        raise ValueError(f"{url} has no substantive readable text")
                 return {"url": url, "title": title or url, "text": text}
         raise ValueError(f"too many redirects from {url}")
 
@@ -328,14 +365,25 @@ class _Reader(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.title = ""
-        self._skip = 0
+        self._tags: list[tuple[str, bool]] = []
+        self._skip = False
         self._in_title = False
         self._heading = ""
 
     def handle_starttag(self, tag, attrs):
-        if tag in _SKIP_TAGS:
-            self._skip += 1
-        elif tag == "title" and not self.title:
+        props = dict(attrs)
+        css = {token.lower() for key in ("class", "id")
+               for token in (props.get(key) or "").split()}
+        ignored = (self._skip or tag in _SKIP_TAGS
+                   or bool(css & _FURNITURE)
+                   or (props.get("role") or "").lower() in _FURNITURE_ROLES)
+        if tag not in _VOID_TAGS:
+            self._tags.append((tag, ignored))
+        if ignored:
+            if tag not in _VOID_TAGS:
+                self._skip = True
+            return
+        if tag == "title" and not self.title:
             # Only the FIRST one. Real pages carry a second <title> more often
             # than you'd think (a stray one in the body, a framework template
             # rendering twice), and appending them produced doc names and chat
@@ -348,9 +396,16 @@ class _Reader(HTMLParser):
             self.parts.append("\n")
 
     def handle_endtag(self, tag):
-        if tag in _SKIP_TAGS:
-            self._skip = max(0, self._skip - 1)
-        elif tag == "title":
+        # Pop through the matching opener. HTML in the wild is often malformed;
+        # this also prevents a nested div from ending its parent's skip early.
+        for i in range(len(self._tags) - 1, -1, -1):
+            if self._tags[i][0] == tag:
+                del self._tags[i:]
+                break
+        self._skip = any(ignored for _, ignored in self._tags)
+        if self._skip:
+            return
+        if tag == "title":
             self._in_title = False
         elif tag in _HEADINGS:
             self._heading = ""

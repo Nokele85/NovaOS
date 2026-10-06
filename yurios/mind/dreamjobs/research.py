@@ -19,8 +19,9 @@ from .context import (PROMPT_OVERHEAD_CHARS, REPORT_REASONING_ALLOWANCE,
                       REPORT_TIMEOUT_S, REPORT_WINDOW_MARGIN,
                       ROUND_MAX_TOKENS, SEARCH_SNIPPET_CHARS, DreamContext,
                       JobReport)
+from .builtins import fill
 from .filedsl import FileJob, JobFile, _as_effort, _as_int, _shorter_effort
-from ..hands import parse_intent
+from ..hands import Hands, bounded, parse_intent
 
 log = logging.getLogger("mind.dreamjobs")
 
@@ -48,9 +49,20 @@ RESEARCH_CATALOG = """You may take ONE action now, and only one. Answer with one
   use web_search {"query": "..."}
   use read_page {"url": "https://..."}
 
-Put a `think` line above a hand saying why you reached for it — the result alone won't tell you next time. Search to find what is out there; open the pages actually worth reading. Never search for something you have already searched, and never open a page you have already opened. When you have enough to write from, answer with exactly:
+Put a `think` line above a hand saying why you reached for it — the result alone won't tell you next time. A `use` line must begin on its own new line, never attached to the end of a sentence. Search to find what is out there; open a plausible result before spending all your searches looking for a perfect one. Never search for something you have already searched, and never open a page you have already opened. When you have enough to write from, answer with exactly:
 
   think nothing further"""
+
+#: Her other hands, offered in a round under the same rule as every call she
+#: makes (§26.1). The web moves keep their own path above — they are what the
+#: caps count — and `research` is left off: a night of research does not start
+#: another one.
+RESEARCH_OTHER_HANDS = ("\n\nYour other hands, if a note or a reminder is worth "
+                        "more than another page — each one costs a move:\n\n"
+                        "{rows}")
+
+#: The web moves this loop runs itself, and the hand it must not recurse into.
+_OWN_MOVES = ("web_search", "read_page", "research")
 
 #: Added to the catalog only while she has reached for nothing. Appending it to
 #: every round told her she had nothing on the round after she had just read
@@ -99,9 +111,16 @@ RESEARCH_MIN_PAGES = ("\n\nYou have actually opened and read {done} of the "
 REPORT_CORPUS = (
     "Today is {day}. This is everything you gathered tonight: your searches, "
     "the pages you opened, and your own notes as you went.\n\n{gathered}\n\n"
-    "That is all you have. Every figure and every claim in what you write now "
-    "comes from what is above — where it does not go far enough, say so plainly "
-    "instead of filling the gap. Whoever reads this has seen none of it.")
+    "Your previous topic page, if any, follows. Revise and reorganize it using "
+    "tonight's evidence; retain useful findings with their source URLs, remove "
+    "stale or unsupported claims, and state disagreements.\n\n{previous}\n\n"
+    "That is all you have. Write a concise, self-contained topic page of at "
+    "most 750 words. End on a complete sentence or question. "
+    "Synthesize the evidence rather "
+    "than copying page text or site controls. Cite an opened source URL beside "
+    "each material claim, and mark weak or conflicting evidence. Every new "
+    "claim must come from a page opened tonight; where the material does not "
+    "go far enough, say so plainly. Whoever reads this has seen none of it.")
 
 #: Words that carry no search intent, dropped before two queries are compared.
 _QUERY_NOISE = frozenset(
@@ -324,7 +343,7 @@ class ResearchJob(FileJob):
         # file cannot opt out of having read something, only say how much
         # (§26.1's one-way rule, applied to a floor instead of a ceiling).
         min_pages = max(1, min(pages, _as_int(self._min_pages, 2, ceiling=pages)))
-        brief = self.system("").format(char=ctx.char_name, user=ctx.user_name)
+        brief = fill(self.system(""), char=ctx.char_name, user=ctx.user_name)
         gathered = _Gathering()
         if self.topics:
             gathered.add("plan", "What you set out to look at: "
@@ -334,7 +353,17 @@ class ResearchJob(FileJob):
         quiet = 0
         searched = 0
         opened = 0
+        sources: list[tuple[str, str]] = []
         broke = ""
+        # Offered once per night rather than per round: the preconditions are
+        # checked again on every call (`handwork.dispatch`), so a hand that
+        # goes away mid-night is refused there, in the audit.
+        hands = None if ctx.dry_run else ctx.hands
+        offer = hands.offer() if hands is not None else None
+        others = tuple(t for t in (offer.tools if offer else ())
+                       if t not in _OWN_MOVES)
+        extra = (RESEARCH_OTHER_HANDS.format(rows=Hands.rows(others))
+                 if others else "")
         try:
             for move in range(steps):
                 system = RESEARCH_LOOP_SYSTEM.format(char=ctx.char_name,
@@ -342,7 +371,7 @@ class ResearchJob(FileJob):
                 reply = await ctx.ask(
                     system,
                     f"Today is {day}.\n\n{gathered.render(self.context_chars)}"
-                    f"\n\n{RESEARCH_CATALOG}"
+                    f"\n\n{RESEARCH_CATALOG}{extra}"
                     + ("" if searched or opened else RESEARCH_FIRST_MOVE)
                     + RESEARCH_BUDGET.format(steps=steps - move,
                                              searches=searches - searched,
@@ -355,8 +384,9 @@ class ResearchJob(FileJob):
                     # thinking harder that improves it, and on a local
                     # reasoning model the pass costs minutes per round. The
                     # report below gets the full one.
-                    thinking=False, max_tokens=ROUND_MAX_TOKENS)
-                intent = parse_intent(reply, allowed=("web_search", "read_page"))
+                    thinking=False, max_tokens=ROUND_MAX_TOKENS, hands=False)
+                intent = parse_intent(reply,
+                                      allowed=("web_search", "read_page") + others)
                 if intent.kind == "think":
                     if intent.text:
                         gathered.add("note", f"You thought: {intent.text}")
@@ -387,7 +417,7 @@ class ResearchJob(FileJob):
                     # not quiet — it is her working out where to start, and a
                     # reasoning model asked not to think out loud puts that
                     # first move in the answer instead of in a <think> block.
-                    if searched or opened:
+                    if (searched or opened) and gathered.pages() >= min_pages:
                         quiet += 1
                     if quiet >= 2:
                         broke = "two quiet rounds"
@@ -402,8 +432,27 @@ class ResearchJob(FileJob):
                 # mistake as counting the paywall, one step further down. What
                 # bounds a night of bad links is `max_steps`, not this.
                 quiet = 0
+                if intent.fumbled:
+                    gathered.add("note", f"({intent.tool} did not run: "
+                                         f"{intent.fumbled}. Write it again as "
+                                         "one complete JSON object.)")
+                    continue
+                if intent.tool in others and hands is not None:
+                    reach = await hands.use(intent.tool, intent.args)
+                    gathered.add("note", f"You used {intent.tool}: "
+                                         f"{bounded(intent.tool, reach.result, most=500)}")
+                    continue
                 if intent.tool == "web_search":
                     query = str(intent.args.get("query") or "").strip()
+                    if searched >= searches:
+                        # SPEC §21.2a: the cap refuses this move, rather than
+                        # ending the night while results already found remain
+                        # unopened. The next round can still read one of them.
+                        gathered.add("note", "(no searches remain. Open a "
+                                     "plausible URL from the results above "
+                                     "before giving up; if none is relevant, "
+                                     "say so rather than inventing a source.)")
+                        continue
                     already = (_already_asked(_query_key(query), seen_queries)
                                if query else "")
                     if not query or already:
@@ -420,9 +469,6 @@ class ResearchJob(FileJob):
                                              "one of those results, or search "
                                              f"for one of these instead: {plan})")
                         continue
-                    if searched >= searches:
-                        broke = "out of searches"
-                        break
                     seen_queries[query] = _query_key(query)
                     searched += 1
                     rows = await ctx.search(query, self.results)
@@ -438,7 +484,6 @@ class ResearchJob(FileJob):
                     broke = "out of pages"
                     break
                 seen_urls.add(url)
-                opened += 1
                 page = await ctx.read_page(url, shelve=self.shelve)
                 text = str(page.get("text") or "").strip()
                 if not text:
@@ -446,6 +491,10 @@ class ResearchJob(FileJob):
                                          "or a page that needs a browser. Try a "
                                          "different source.)")
                     continue
+                # SPEC §21.2a: a blocked PDF or paywall spent a move, not a
+                # successfully read page. `max_steps` still bounds attempts.
+                opened += 1
+                sources.append((str(page.get("title") or url), url))
                 gathered.add("page", f"{page.get('title') or url}\n{url}\n"
                                      f"{text[:self.step_chars]}")
             else:
@@ -466,8 +515,10 @@ class ResearchJob(FileJob):
             # Marking the day is what stops her re-deciding this every night.
             out.result = f"nothing worth a report ({broke})"
             return out
+        previous = (await ctx.research_note(self.name))[:self.context_chars // 2]
         corpus = REPORT_CORPUS.format(
-            day=day, gathered=gathered.render(self.context_chars))
+            day=day, gathered=gathered.render(self.context_chars - len(previous)),
+            previous=previous or "(none yet)")
         prompt_chars = len(brief) + len(corpus)
         ceiling = self.report_ceiling(ctx.cfg, prompt_chars)
         report = await ctx.ask(brief, corpus, thinking=self.report_thinking,
@@ -500,7 +551,33 @@ class ResearchJob(FileJob):
         if not report:
             out.result = f"gathered {opened} pages and wrote nothing of them"
             return out
-        rel = await self._write(ctx, day, f"{report}\n")
+        if not _report_complete(report):
+            # SPEC §21.2a: a capped completion can end halfway through a
+            # sentence. Give it one shorter rewrite from the same evidence;
+            # never index the severed draft as a durable topic page.
+            shorter = (corpus + "\n\nYour previous draft was cut off. Rewrite "
+                       "the entire page in at most 600 words. Finish the "
+                       "Open questions section with a complete sentence or "
+                       "question. Keep source URLs beside claims.")
+            retry = await ctx.ask(brief, shorter, thinking=False,
+                                  timeout=self.report_timeout_s,
+                                  max_tokens=self.report_max_tokens)
+            if _report_complete(retry):
+                report = retry
+            else:
+                await self._write(ctx, day, report.rstrip() +
+                                  "\n\n[Incomplete draft; not indexed.]\n")
+                out.changed = True
+                out.result = (f"read {opened} pages but the report ended "
+                              "incomplete twice; topic page not indexed")
+                return out
+        # Keep a deterministic source list even when the model omits one from
+        # its prose. The retrieved page never goes in RAG; this page does.
+        bibliography = "\n\n## Sources opened\n" + "\n".join(
+            f"- {title}: {url}" for title, url in sources)
+        page_text = f"{report.rstrip()}{bibliography}\n"
+        rel = await self._write(ctx, day, page_text)
+        indexed = await ctx.publish_research_note(self.name, page_text)
         out.changed = True
         # Why she stopped belongs in the result even when the night worked.
         # "out of pages" and "she had enough" are the same length of report and
@@ -508,6 +585,10 @@ class ResearchJob(FileJob):
         # they are ever told apart.
         out.result = (f"read {opened} pages over {searched} searches and wrote "
                       f"{len(report)} chars ({broke})")
+        if indexed:
+            out.result += f"; indexed {indexed}"
+        elif not ctx.dry_run:
+            out.result += "; topic page not indexed"
         out.note = (f"{self.title.lower()}: read {opened} pages and wrote it up "
                     f"for {day}")
         if self.deliver == "chat":
@@ -565,6 +646,13 @@ def _already_asked(key: frozenset[str], seen) -> str:
         if both and len(key & other) / len(both) >= QUERY_SAME_ENOUGH:
             return query
     return ""
+
+
+def _report_complete(report: str) -> bool:
+    """Catch the visible mid-sentence cutoff a token ceiling can leave."""
+    last = (report or "").rstrip().splitlines()
+    return bool(last and last[-1].strip().endswith(
+        (".", "?", "!", ")", "]", '"', "”", "*", "`")))
 
 
 def _lede(report: str) -> str:

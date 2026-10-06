@@ -50,9 +50,9 @@ async def _retire_bootstrap(state) -> None:
 
 
 GREET_CUE = ("(({user} just opened the sanctuary — no message yet; you speak "
-             "first. One short greeting in your own voice that surfaces "
-             "something {user} told you before, unprompted. If the memory "
-             "blocks are empty, just welcome them back warmly.))")
+             "first. One short greeting that surfaces something {user} told "
+             "you before, unprompted. If the memory blocks are empty, just "
+             f"welcome them back. {asm.OWN_VOICE}))")
 
 
 #: How many of the previous conversation's lines a greeting opens on. Small on
@@ -77,7 +77,7 @@ def _last_words(state) -> list[dict]:
     try:
         # `SessionStore` keeps the per-session window; the whole room's
         # transcript is the `ConversationLog` underneath it.
-        rows = state.sessions.log.tail(GREETING_LOOKBACK)
+        rows = state.sessions.log.said(GREETING_LOOKBACK)
     except Exception:  # noqa: BLE001 — no transcript is not a failed greeting
         log.debug("greeting: no transcript to open on", exc_info=True)
         return []
@@ -118,7 +118,7 @@ async def greeting(session_id: str, request: Request):
     user_md = state.store.read_user_md()
     summary = state.store.read_summary()
     probe = summary or user_md or "what matters lately"
-    memories = state.store.recall(probe, state.cfg.retrieval_k)
+    memories = await state.store.arecall(probe, state.cfg.retrieval_k)
     cue = GREET_CUE.format(user=state.cfg.user_name)
     prompt = asm.assemble(
         soul, user_md=user_md, summary=summary, memories=memories,

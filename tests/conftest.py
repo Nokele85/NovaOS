@@ -230,6 +230,10 @@ class FakeUtility:
             return "Two of these are the same thing. Do the sailing one first."
         if "want a picture of" in low:
             return "Sat by the window with the lamp low, chin on my hand."
+        if "get ready what the message should carry" in low:
+            # A reach-out's preparing step (§18.2c): nothing to fetch, so it
+            # goes to the gate — the behaviour every scenario was written to.
+            return "think nothing to get ready for this — ready to send"
         return '{"ops": []}'
 
 
@@ -361,10 +365,13 @@ class MindRig:
         self.controller = controller
         self.chat = chat
 
-    def say(self, text: str, reply: str = "Mm. I'm here.") -> None:
+    def say(self, text: str, reply: str = "Mm. I'm here.", *,
+            tool_outcomes: list[dict] | None = None) -> None:
         """One committed exchange, as the forked voice route tees it."""
         self.mind.bus.post("user_message", {"text": text}, source="voice")
-        self.mind.bus.post("turn_committed", {"text": text, "reply": reply},
+        self.mind.bus.post("turn_committed", {
+            "text": text, "reply": reply,
+            "tool_outcomes": tool_outcomes or []},
                            source="voice")
 
     def proactive_messages(self):
@@ -384,16 +391,29 @@ class ScriptedUtility:
     — the dream jobs, the partner ops — still gets the honest fake, or one
     night's consolidation would break every hands test."""
 
-    def __init__(self, *lines: str):
+    def __init__(self, *lines: str, muse: tuple[str, ...] = (),
+                 handed: tuple[str, ...] = ()):
         self.lines = list(lines)
+        #: …and her free time (mind/muse.py, SPEC §22.7), scripted apart so a
+        #: test can say what a sitting decides without spending a goal line.
+        self.muse = list(muse)
+        #: …and a sitting with a document you handed her (mind/handed.py, §34.6).
+        self.handed = list(handed)
         self.calls: list[list[dict]] = []
         self.fallback = FakeUtility()
 
     async def complete(self, messages, **params):
         self.calls.append([dict(m) for m in messages])
         system = (messages[0].get("content", "") if messages else "").lower()
-        if "advancing one of your own goals" in system and self.lines:
+        # A task's working step, or a reach-out's preparing one (§18.2c): the
+        # same kind of call, the same script.
+        if self.lines and ("advancing one of your own goals" in system
+                           or "get ready what the message should carry" in system):
             return self.lines.pop(0)
+        if "this is your free time" in system and self.muse:
+            return self.muse.pop(0)
+        if "handed you a document" in system and self.handed:
+            return self.handed.pop(0)
         return await self.fallback.complete(messages, **params)
 
 

@@ -100,8 +100,9 @@ What stands between you and that:
   the run it starts.
 - **The inner-life tab is the meter.** Every run, the document being read right now, its
   passage and model-call counts, and a stop button that keeps what she has already read.
-- **`RESEARCH_MAX_PAGES` and `TOOL_RATE_RESEARCH`** bound how far one run and one minute
-  can reach.
+- **`RESEARCH_MAX_CALLS=100`** caps estimated model calls admitted to one run; pages that do
+  not fit wait unread on the shelf. `RESEARCH_MAX_PAGES` and `TOOL_RATE_RESEARCH` also bound
+  how far one run and one minute can reach.
 - **`MIND_TOOLS_ENABLED=false` is the default**, and it is the switch that decides whether
   any of this can happen *without you in the room*. Everything above assumes you said
   something first. With this off — the shipped state — her background loop thinks and
@@ -141,16 +142,14 @@ Supports Linux, macOS, and Windows through WSL.
 ```bash
 cd YuriOS
 ./install.sh
+yurios configure                      # choose her language model
+yurios restart                        # load it (starts the daemon if it is stopped)
 yurios status
 ```
 
-Open the address shown by `yurios status` (normally `http://localhost:8768`). On first
-launch, choose a model in the dashboard, or configure one from the terminal:
-
-```bash
-yurios configure
-yurios restart
-```
+A fresh install selects no model, so she can't talk until you choose one and restart.
+Then open the address shown by `yurios status` (normally `http://localhost:8768`).
+The dashboard offers the same model choice if you open it first; restart after it too.
 
 Everything else in `.env` is editable from either surface too: **House settings** on
 the switchboard (and the gear in every room) opens the same table `yurios settings`

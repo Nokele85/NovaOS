@@ -85,9 +85,10 @@ name of the variable holding it. The same fields are on the switchboard's profil
 | `LMSTUDIO_LOAD_TIMEOUT_S` | `600` | only has to cover a cold load off disk |
 | `CONTEXT_LENGTH` | `32768` in `.env.example`, `0` in code | her context window in tokens; `0` = the provider's default |
 | `CHAT_THINKING` | `false` | the reply's `<think>` pass — off, so voice stays real-time |
+| `CHAT_REASONING_EFFORT` | blank | `low`, `medium`, or `high` when reply thinking is enabled; blank uses the provider default |
 | `UTILITY_THINKING` | `true` | on: it runs off the hot path, where quality beats latency |
 | `UTILITY_MAX_TOKENS` | `10048` | room for the `<think>` block *and* the JSON answer |
-| `MAX_REPLY_TOKENS` | `1600` | a roomy ceiling, not a target |
+| `MAX_REPLY_TOKENS` | `8192` | a ceiling, not a target — a reasoning model's thinking is spent inside it |
 | `TEMPERATURE` | `0.9` | |
 
 ### Pictures you send her
@@ -183,6 +184,17 @@ more — the same two-switch rule that stops a file switching on a camera the ho
 A `kind: research` job also needs `SEARCH_BACKEND` to be something other than `off`, or it is not
 in the night's list at all.
 
+What a night *actually* costs is mostly her hands, not the tick budget. A job in her own voice may
+read notes, search or reach for the camera before it answers, and every one of those rounds resends
+the whole conversation so far — so a chain's cost grows with the square of its length. The dial is
+`max_hands:` in that job's file: `0` is none, and leaving it out means `TOOL_MAX_CALLS_PER_TURN`,
+which is also the most a file may ask for. `diary` and `strategy` ship with `4`, and she is told
+how many she has left after each one.
+
+The same arithmetic applies by day. A goal step chains up to `MIND_GOAL_MAX_HANDS` (**4**, never
+past `TOOL_MAX_CALLS_PER_TURN`) — and that matters at night too, because the stock-take files goals
+and the next tick works them under this cap, not the job's.
+
 ## Server
 
 | Key | Default | |
@@ -251,9 +263,9 @@ Backend-specific keys (`QWEN_*`, `SOVITS_*`) are in [Voice](voice.md).
 | Key | Default | |
 |---|---|---|
 | `TOOLS_BACKEND` | `mcp` | `mcp` · `fake` · `off` |
-| `TOOL_MAX_CALLS_PER_TURN` | `2` | |
+| `TOOL_MAX_CALLS_PER_TURN` | `16` | calls one reply may chain; also the ceiling on a night job's `max_hands` and on `MIND_GOAL_MAX_HANDS` |
 | `TOOL_TIMEOUT_S` | `10` | |
-| `TOOL_RATE_TIMER` / `_MUSIC` / `_SELFIE` / `_PICTURE` / `_DESK` | `6` / `6` / `2` / `2` / `20` | calls per minute |
+| `TOOL_RATE_TIMER` / `_MUSIC` / `_GOAL` / `_SELFIE` / `_PICTURE` / `_DESK` | `6` / `6` / `6` / `2` / `2` / `20` | calls per minute |
 | `STORY_ENABLED` / `TOOL_RATE_STORY` | `false` / `1` | advertises `tell_story` (SPEC §7.8); calls per minute |
 | `STORY_TTS_URL` / `STORY_TTS_SUPERVISOR_URL` | `…:8091` / `…:8092` | Qwen3-TTS: the service that speaks, and the one that loads and unloads it |
 | `STORY_TTS_SPEAKER` | `sohee` | one of the CustomVoice model's own speakers — the variant that takes a per-line instruction; narration and her own lines |
@@ -283,6 +295,7 @@ See [Tools](tools.md).
 | `FETCH_TIMEOUT_S` | `8` | one page, kept inside `TOOL_TIMEOUT_S` |
 | `FETCH_MAX_BYTES` | `2000000` | `read_page` stops here |
 | `RESEARCH_MAX_PAGES` | `5` | ceiling on `research(depth=…)` |
+| `RESEARCH_MAX_CALLS` | `100` | estimated model calls per research run; excess pages are held unread |
 | `TOOL_RATE_SEARCH` / `_READ` / `_RESEARCH` | `6` / `6` / `2` | calls per minute |
 
 `SEARCH_BACKEND` is the one knob on this page that can turn into a bill: `research` keeps reading
@@ -324,15 +337,17 @@ Cadences, gates, DREAM hours, and the rest of `MIND_*` — the full table is in
 
 | Key | Default | |
 |---|---|---|
-| `MIND_TOOLS_ENABLED` | `false` | house switch: may anything on this machine reach for a tool unasked? |
-| `MIND_TOOL_ALLOWLIST` | *(empty)* | explicit names; empty even when the switch is on. `yurios settings MIND_TOOL_ALLOWLIST` prints the vocabulary |
-| `MIND_TOOL_CALLS_PER_DAY` | `8` | a cap, checked before the call |
+| `MIND_TOOLS_ENABLED` | `true` | house switch: may anything on this machine reach for a tool unasked? |
+| `MIND_TOOLS_DURING_CHAT` | `auto` | `auto` stands down mid-conversation only when `UTILITY_MODEL` is local; `on` keeps working; `off` always stands down |
+| `MIND_TOOL_ALLOWLIST` | `*` | every hand this build can offer; set explicit names or empty to narrow/disable. `yurios settings MIND_TOOL_ALLOWLIST` prints the vocabulary |
+| `MIND_TOOL_CALLS_PER_DAY` | `64` | a cap, checked before the call |
 | `MIND_TOOL_PRESSURE_CEILING` | `0.5` | over it, the expensive hands are not offered |
 | `MIND_TOOL_COOLDOWN_CHEAP_S` | `21600` | desk / `set_timer` fingerprint (six hours) |
 | `MIND_TOOL_COOLDOWN_EXPENSIVE_S` | `172800` | web / camera (two days) |
-| `TOOL_RATE_MIND_DESK` / `_WEB` / `_CAMERA` / `_OTHER` | `4` / `1` / `1` / `1` | the mind's own buckets, not conversation's |
+| `TOOL_RATE_MIND_DESK` / `_WEB` / `_CAMERA` / `_OTHER` | `20` / `4` / `1` / `1` | the mind's own buckets, not conversation's |
 | `MIND_ENGAGED_CADENCE_S` | `10` | tick while talking |
 | `MIND_DREAM_CADENCE_S` | `120` | DREAM works in capped chunks |
+| `MIND_INBOX_WAKE` | `true` | a document handed to her desk inbox wakes her to read it and decide (model calls, any hour); `false` = noticed at once, decided when she's next active |
 
 See [the cost note](README.md#experimental--and-it-can-spend) before turning the house switch on
 against a metered API. Her tile's `hands` toggle is the per-character grant and takes effect live.

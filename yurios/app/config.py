@@ -72,10 +72,16 @@ class Config(BaseSettings):
     # before it speaks); set chat_thinking=false to disable it for speed — Build #2
     # does this so the voice loop stays real-time on a local reasoning model.
     chat_thinking: bool = True
+    # Optional provider effort while reply reasoning is on. Empty leaves the
+    # provider's own default intact; common hosted values are low/medium/high.
+    chat_reasoning_effort: str = ""
     # Reply/greeting token ceiling. Big enough that a *reasoning* chat model has room
     # for its <think> pass AND the reply — too small and the think block eats it all
-    # and the reply comes back empty. A no-think model never nears the cap.
-    max_reply_tokens: int = 2048
+    # and the reply comes back empty. That happened at 3200 with a hosted model on
+    # medium effort, on a message that gave it something to deliberate over, so
+    # the default is generous: a ceiling costs nothing until it is used, a no-think
+    # model never nears it, and llama.cpp trims it to whatever the window has left.
+    max_reply_tokens: int = 8192
 
     # embeddings — local, always (§3: the mind stays ownable). lm_studio reuses the
     # same local server as an lm_studio/ chat model (LMSTUDIO_BASE_URL), so one

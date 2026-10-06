@@ -32,6 +32,8 @@ def test_every_config_knob_is_in_the_table_and_typed_from_its_annotation():
     assert any(g["group"] == "You" and any(f["key"] == "USER_NAME" for f in g["fields"])
                for g in envfile.groups_for(cfg))
     assert table["MIND_ENABLED"]["type"] == "bool"
+    assert table["MIND_TOOLS_DURING_CHAT"]["type"] == "select"
+    assert table["MIND_TOOLS_DURING_CHAT"]["options"] == ["auto", "on", "off"]
     assert table["MIND_SEED"]["type"] == "number"
     assert table["MIND_ACT_THRESHOLD"]["step"] == "any"        # a float, not an int
     assert table["SEARXNG_URL"]["type"] == "text"
@@ -208,7 +210,7 @@ def test_yurios_settings_lists_the_common_and_the_changed(tmp_path, monkeypatch,
 
     assert cli_main(["settings"]) == 0
     out = capsys.readouterr().out
-    assert "CHAT_MODEL          old" in out
+    assert ["CHAT_MODEL", "old"] in [line.split() for line in out.splitlines()]
     assert "MIND_SEED" in out                    # not curated, but changed here
     assert "MIND_DREAM_END_HOUR" not in out      # untouched default, so not listed
     assert cli_main(["settings", "--all"]) == 0
@@ -250,7 +252,7 @@ def test_yurios_settings_shows_a_named_group_whole(tmp_path, monkeypatch, capsys
     is exactly the section you have come here to configure."""
     _installation(tmp_path, monkeypatch)
 
-    assert cli_main(["settings", "--group", "unasked"]) == 0
+    assert cli_main(["settings", "--group", "one switch"]) == 0
     out = capsys.readouterr().out
     assert "MIND_TOOLS_ENABLED" in out and "MIND_TOOL_ALLOWLIST" in out
     assert "the house switch" in out, "with its help, since you asked for it"

@@ -33,11 +33,16 @@ from yurios.characters import (
 )
 from yurios.characters import archive as archive_model
 
+from .. import rewire
 from .hosting import (_OPTION_KEYS, PURGE_CHALLENGE_TTL_S,
-                      CharacterHost, _env_values, _card_values, _construction_fingerprint,
+                      CharacterBusy, CharacterHost, _env_values, _card_values, _construction_fingerprint,
                       _update_soul, save_brain_overrides)
 
 log = logging.getLogger("world.host")
+
+# The card fields a profile save may carry, each with a SOUL home (§30.4).
+_CARD_FIELDS = ("name", "description", "personality", "scenario", "first_mes",
+                "system_prompt", "post_history_instructions", "creator_notes")
 
 
 def register(app: FastAPI, host: CharacterHost, require) -> None:
@@ -154,14 +159,20 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
                 400, f"{field} is host-owned; select a connection_profile instead")
         record = copy.deepcopy(current)
         built_with = _construction_fingerprint(current)
-        if "name" in body and str(body["name"]).strip():
-            record.display.name = str(body["name"]).strip()
+        # A blank name is not a rename: the registry has always ignored one, and
+        # the card and `soul.yaml` must not take the blank the registry refused.
+        name = str(body.get("name") or "").strip()
+        if name:
+            record.display.name = name
         if "description" in body:
             record.display.description = str(body["description"])
-        if "model" in body:
-            record.models.chat = str(body["model"])
-        if "utility_model" in body:
-            record.models.utility = str(body["utility_model"])
+        try:
+            if "model" in body:
+                record.models.chat = rewire.model_route(body["model"])
+            if "utility_model" in body:
+                record.models.utility = rewire.model_route(body["utility_model"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         if "voice" in body:
             record.voice.voice_id = str(body["voice"])
         if "connection_profile" in body:
@@ -192,10 +203,25 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
             record.lifecycle.enabled = bool(body["enabled"])
         if "autostart" in body:
             record.lifecycle.autostart = bool(body["autostart"])
-        card_fields = {key: body[key] for key in (
-            "name", "description", "personality", "scenario", "first_mes",
-            "system_prompt", "post_history_instructions", "creator_notes")
-            if key in body}
+        # A card field reaches the SOUL only where the save *moved* it (§30.4).
+        # "Moved" is measured against what `get_settings` showed, read the same
+        # way: a client that posts the whole form must not rewrite her sections
+        # with what it was handed — for a character with no card.json (one seeded
+        # from `soul-src/`) that is blanks, and replacing `## Identity` with a
+        # blank erases who she is.
+        _, shown_card = _card_values(current)
+        shown = {key: str(shown_card.get(key) or "") for key in _CARD_FIELDS}
+        shown["name"] = current.display.name
+        shown["description"] = current.display.description
+        card_fields = {}
+        for key in _CARD_FIELDS:
+            if key not in body:
+                continue
+            value = name if key == "name" else str(body[key])
+            if key == "name" and not value:
+                continue
+            if value != shown[key]:
+                card_fields[key] = value
         if card_fields:
             wrapper, card = _card_values(record)
             card.update({key: str(value) for key, value in card_fields.items()})
@@ -217,7 +243,9 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
             record.lifecycle.autostart = True
         registry.upsert(record)
         applied: list[str] = []
-        if was_running:
+        if was_running and not record.lifecycle.enabled:
+            await host.stop(character_id)
+        elif was_running:
             # Which model she thinks with is not worth a rebuild (SPEC §31.4):
             # unless this save moved something the runtime was *built* with, she
             # keeps her session, her mind and her voice, and simply answers the
@@ -244,7 +272,7 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
         enabled, autostart on, runtime up. A start that fails leaves her approved
         and reports why, because "she is allowed to run" and "she ran" are two
         different facts and the dashboard shows both."""
-        record = require(character_id)
+        record = copy.deepcopy(require(character_id))
         record.lifecycle.review_required = False
         record.lifecycle.enabled = True
         record.lifecycle.autostart = True
@@ -268,6 +296,8 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
         if host.runtime(character_id) is None:
             try:
                 await host.start(character_id)
+            except CharacterBusy:
+                raise                                      # the host answers 409
             except Exception as exc:                       # already logged by start()
                 started, detail = False, str(exc)
                 raise HTTPException(500, detail) from exc
@@ -289,13 +319,45 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
             raise HTTPException(400, "clone request must be a JSON object")
         body = body or {}
         async with app.state.lifecycle_lock:
+            host._cloning.add(character_id)
+            was_running = host.runtime(character_id) is not None
+            source_error = None
             try:
-                record = clone_character(
-                    registry, character_id,
-                    name=str(body.get("name") or "") or None,
-                    character_id=str(body.get("character_id") or "") or None)
-            except CharacterCloneError as exc:
-                raise HTTPException(400, str(exc)) from exc
+                if was_running:
+                    await host.stop(character_id)
+                try:
+                    # Copy a quiet tree. The worker may take minutes for a
+                    # lived-in Vault; the other rooms must keep answering.
+                    copy_task = asyncio.create_task(asyncio.to_thread(
+                        clone_character, registry, character_id,
+                        name=str(body.get("name") or "") or None,
+                        character_id=str(body.get("character_id") or "") or None,
+                        publish=False))
+                    try:
+                        record = await asyncio.shield(copy_task)
+                    except asyncio.CancelledError:
+                        # A cancelled HTTP request cannot abandon a worker
+                        # still copying into the character directory.
+                        abandoned = await copy_task
+                        await asyncio.to_thread(shutil.rmtree, abandoned.paths.root)
+                        raise
+                    try:
+                        registry.add(record)
+                    except Exception:
+                        await asyncio.to_thread(shutil.rmtree, record.paths.root)
+                        raise
+                except CharacterCloneError as exc:
+                    raise HTTPException(400, str(exc)) from exc
+            finally:
+                host._cloning.discard(character_id)
+                if was_running:
+                    # Reported, never raised: raising here would replace the
+                    # clone's own answer — a 201 for a copy already in the
+                    # registry, or the 400 that says why there is none.
+                    try:
+                        await host.start(character_id)
+                    except Exception as exc:       # already logged by start()
+                        source_error = str(exc)
             started, detail = False, None
             if record.lifecycle.enabled and not record.lifecycle.review_required:
                 try:
@@ -305,12 +367,12 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
                     started, detail = False, str(exc)
             return JSONResponse(
                 {"character": host.summary(record), "started": started,
-                 "error": detail},
+                 "error": detail, "source_error": source_error},
                 status_code=201)
 
     @app.patch("/api/characters/{character_id}/loop")
     async def set_loop(character_id: str, request: Request):
-        record = require(character_id)
+        record = copy.deepcopy(require(character_id))
         enabled = bool((await request.json()).get("enabled"))
         record.loops.mind = enabled
         registry.upsert(record)
@@ -324,7 +386,7 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
 
     @app.patch("/api/characters/{character_id}/controls")
     async def controls(character_id: str, request: Request):
-        record = require(character_id)
+        record = copy.deepcopy(require(character_id))
         body = await request.json()
         restart = False
         for key in ("mind", "utility", "dream", "hands"):
@@ -432,6 +494,18 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
         character_id = str(body.get("id") or default_id).strip() or default_id
         start = bool(body.get("start"))
         dest = registry.data_root / "characters" / character_id
+        # Build the row before anything moves: constructing it is what validates the
+        # id, and an id that reaches the filesystem first can name a path outside
+        # characters/.
+        try:
+            if snapshot is not None:
+                record = archive_model.record_from_snapshot(
+                    snapshot, character_id=character_id, dest_root=dest,
+                    data_root=registry.data_root)
+            else:
+                record = archive_model.record_from_tree(source, character_id, dest)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         async with app.state.lifecycle_lock:
             if registry.get(character_id) is not None or dest.exists():
                 raise HTTPException(409, f"character already exists: {character_id}")
@@ -442,13 +516,6 @@ def register(app: FastAPI, host: CharacterHost, require) -> None:
                 raise HTTPException(500, "could not move archive back onto the board") \
                     from exc
             try:
-                if snapshot is not None:
-                    record = archive_model.record_from_snapshot(
-                        snapshot, character_id=character_id, dest_root=dest,
-                        data_root=registry.data_root)
-                else:
-                    record = archive_model.record_from_tree(
-                        dest, character_id, dest)
                 registry.add(record)
             except Exception as exc:
                 try:

@@ -148,8 +148,15 @@ has to act on it — see [Characters → When the export refuses](characters.md#
 | `POST /api/chat/cancel` | `{client_id, selfie_ids?}` → cancel that browser turn and its correlated camera work |
 | `POST /api/greeting` | `{session_id?, channel?}` → `{session_id, message}`. She speaks first: the voice route greets on connect, a text client asks. Committed `proactive`, never persisted. A new `session_id` is **not** an arrival if another viewer is already in the room, or if the last one left within 60 s (`GREET_REJOIN_S`) — the skip still marks the session greeted (`message: null`) so a flap does not fire again. The first-ever call plays her cold open |
 | `GET /api/history?limit=&before=` | `{messages, has_more}`, oldest first, `Cache-Control: no-store`. No arguments is the end of the conversation (100 entries) — the catch-up window a reconnecting page asks for. A page *opening* asks for `limit=6`, the same six the walk-back control loads, so one earlier line is enough to offer it. Either way it survives a restart: the ring is seeded from `<vault>/state/conversation.jsonl`, the one log the chat column and the §7.1 window are both read from. `before=<message id>` is the `limit` entries just *older* than that one — the walk back at the top of the column, six a press. `limit` is capped at 200 |
+| `POST /api/rate` | `{id, thumbs}` → `{rating: {id, thumbs}}`. 👍 (`1`) or 👎 (`-1`) on one of her replies, by the transcript id the page drew; `0` takes it back. Appends to `corpus/ratings.jsonl` under the reply's corpus id and publishes a `rating` event. `404` for a line the conversation does not hold, `409` for one with no corpus record (a greeting, a reach-out, a selfie, your own line) |
 | `GET /api/inbox` | `{entries, unread}`, `Cache-Control: no-store` — what she reached out about while the room was empty, oldest first. `?all=1` includes what has already been seen |
 | `POST /api/inbox/read` | `{marked, unread}` — everything pending has now been seen. Owner-gated |
+
+A history row of hers with a corpus record behind it carries `rateable: true`, plus `thumbs`
+when a rating stands on it; only those lines may offer 👍/👎 (SPEC §37). A text reply is drawn
+before its turn is filed, so it gains `rateable` through a `rating` event a moment after its
+`message`; a voice reply's `message` carries it already. The ratings are training data for
+`scripts/export_corpus.py` — she never sees them.
 
 `image_id` sends a picture with the line (SPEC §35) — the id `POST /api/uploads` answered with,
 never the bytes. `text` may be empty when one is attached. An id that no longer resolves is a
@@ -172,7 +179,7 @@ turns receive the retryable `503` response above. Typed WebSocket text is capped
 
 `GET /api/events` — Server-Sent Events, one `data:` line per event.
 
-On attach you get `hello`, then a replay of sticky appearance state (last-write-wins), then live
+On attach you get `hello`, then a replay of sticky state (last-write-wins), then live
 events. The stream pings while idle and ends itself on shutdown, so an open tab never holds Ctrl+C
 hostage. **A chat room attaching counts as presence**: it posts `user_present` to the mind, and
 the last room or live-CLI detach posts `user_absent`. Telegram, notify, and the mind debug page
@@ -185,14 +192,17 @@ claiming a body on a screen.
 | `hello` | `{character: "<name>"}` |
 | `capabilities` | `{image_input, detail}` — whether her model can be sent a picture; sticky, and re-published when the model is swapped |
 | `message` | a chat entry — including `image_url` selfies, the originating `channel`, and `unheard` on a line she started into a room that may have been empty |
+| `rating` | `{id, thumbs}` — one of her replies was rated (`0`: taken back), or a text reply was just filed and can now be rated |
 | `gallery` | a picture was scored (`{action: "rate", image, score, by, at}`) — so a second open room stops showing the old number |
 | `draft` / `draft_cancel` | streaming sentence drafts |
 | `avatar` | expression, gaze, posture, visemes, `rain`, `music` — the puppet lane |
 | `journal` | a new `[she]` journal line |
 | `mind` | activity/budget/goal updates for the inner-life tab |
+| `timers` | complete `{timers: [{id, label, due}]}` pending-countdown state; sticky and re-published on add or landing |
 | `context` | current `{used, limit, limit_source, reserve, exact, pct}` context-meter snapshot; sticky |
 | `selfie_status` | `{id, state, client_id?}` for asynchronous camera work: `started`, `done`, `cancelled`, or `error` |
 | `workspace` | a desk file was written (`{action: "write", path, …}`) |
+| `shelf` | a document was added to her shelf (`{action: "add", name, bytes, replaced, unchanged, passages, calls, digested, chars}`) |
 
 Publishes are non-blocking (a stalled client loses events, never blocks the publisher) and
 thread-safe.
@@ -238,7 +248,8 @@ set a timer?" gets answered without reading logs.
 
 | Route | |
 |---|---|
-| `GET /api/mind` | activity state, cadence, budget, goals (each with its `desk` path), shelf, pending self-edits, and `goal_filing` (the switch, plus how many of her own goals are open against the cap) |
+| `GET /api/mind` | activity state, cadence, budget, goals (each with its `desk` path), shelf, pending self-edits, `goal_filing` (the switch, plus how many of her own goals are open against the cap), `handed` (documents handed to her desk: `path`, `name`, `at`, `state` `waiting`/`read`/`gone`, and once read `read_at`, `outcome`, `goal`) and `inbox_wake` |
+| `GET /api/timers` | due-ordered `{timers: [{id, label, due}]}` pending countdowns; runtime state available even when the mind is off |
 | `GET /api/mind/journal?days=` | her `[she]` lines by day (max 30) |
 | `GET /api/mind/trace?n=` | the tick-trace tail (max 200) |
 | `POST /api/mind/edits/{id}` | `{"approve": bool}` — queued as a signal the loop consumes next tick |
@@ -250,7 +261,9 @@ set a timer?" gets answered without reading logs.
 | `GET /api/mind/workspace` | `{files: […]}` — her desk listing |
 | `GET /api/mind/workspace/file?path=` | `{path, text}` — one desk file; the same GET a chat-line control and a report card make |
 | `PUT /api/mind/workspace/file` | `{"path", "text"}` — write a desk file; publishes `workspace` |
+| `POST /api/mind/workspace/inbox` | multipart `file` — hand her a `.md`/`.txt`/`.pdf` document: written to `inbox/` on her desk (never indexed), publishes `workspace`, and posts a `handed` signal so she reads it and decides what to do with it. Answers `{path, name, bytes, replaced, noticed, wakes}`; `413` past the desk's per-file limit |
 | `GET /api/mind/research` · `…/research/file?name=` | the research corpus, and one document |
+| `POST /api/mind/research` | multipart `file` — put a `.md`/`.txt`/`.pdf` document on her shelf for SENSE to read (a PDF goes on as the `.md` of its text); answers with its shelf name and the model calls the read will cost, commits, publishes `shelf`. `415` unreadable, `409` a `web-`/`research-` name, `413` too big (5 MB text, 50 MB PDF), `503` no mind |
 | `GET /api/mind/dream` | tonight's roster, builtins and files folded together |
 | `POST /api/mind/dream/run` | manually run DREAM; `day` must be canonical `YYYY-MM-DD`, and `budget` is typed then clamped to `1..MIND_DREAM_TICK_TOKENS` |
 | `GET /api/mind/dream/jobs` | every job file on disk, parsed, plus the kinds and builtin names this build knows |

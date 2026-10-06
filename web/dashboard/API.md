@@ -32,9 +32,13 @@ Returns either a JSON array or `{ "characters": [...] }`. Each active character 
 character's switch, `available` is the **house** switch behind it (`NOTIFY_ENABLED`,
 `MIND_TOOLS_ENABLED`). The two are in series — a character can never talk her way past the
 house — so when `available` is false the board shows her toggle **inert with the reason on
-it**, rather than offering a switch that quietly does nothing. `hands` is whether her mind
-may reach for a tool between conversations (SPEC §26.1); it is also mirrored in `loops` for
+it**, rather than offering a switch that quietly does nothing. `hands` is whether she may
+use a tool at all — in a reply and on her own (SPEC §26.1); it is also mirrored in `loops` for
 the four-switch stack on the tile.
+
+`updated_at` is when a line last landed in her conversation, from either side and any medium
+(the transcript's modification time), or `null` if she has never spoken; the drawer shows it as
+*updated 3 hours ago*.
 
 `unread` is what she reached out about while nobody was in the room (SPEC §18.4) — the tile wears
 a mark when `count` is above zero, and says *picture* rather than *message* when `selfies` accounts
@@ -81,7 +85,8 @@ and avoids downloading every journal on registry load.
 `POST /api/characters/{id}/approve` accepts the review and starts her.
 `POST /api/characters/{id}/start` / `stop` bring a reviewed character up or down
 without archiving. `POST /api/characters/{id}/clone` duplicates the whole tree
-under a new id. `POST /api/characters/{id}/archive` parks her under
+under a new id; a running source is stopped for the copy and restarted, and a
+restart that fails is reported as `source_error` beside the 201. `POST /api/characters/{id}/archive` parks her under
 `data/archives/` with an `archive.json` snapshot; `GET /api/archives` lists
 those folders and `POST /api/archives/{name}/restore` puts one back.
 

@@ -164,6 +164,7 @@ reactive body (Part II gates who may edit it, §23).
 3. SCENARIO / PLACE       (SCENARIO#Scenario)
 4. LORE (if fired)        (matched WORLD.md entries, keyword-triggered)
 5. WHAT YOU KNOW ABOUT THEM (vault/soul/USER.md facts — not YAML, seed headings, or empty `_(…)_` slots)
+5b. WHAT YOU'RE WORKING ON (the open entries in vault/goals.md — §22.6)
 6. WHAT YOU'VE TALKED ABOUT (vault/memory/summary.md)
 7. THINGS THAT MAY BE RELEVANT (recall(user_msg, k), each tagged with age)
 8. WHAT YOU'VE READ       (knowledge.search(user_msg, k), each with its citation — §20.2)
@@ -182,10 +183,19 @@ and that "the companion" in such a fact is the reader, and the fused hard-limits
 say that it is not part of the user's message and that its third person is the reader. Both
 are there because unmarked they were read either way from one line to the next, and she
 answered with her own plan as the user's promise.
+When the new user message asks for the status of her goals, the final user turn **MUST** also
+repeat the authoritative open-goal snapshot after the raw window and forbid consulting
+`workspace/goals/`. A correct system block above a recent bad review is not enough: the model
+copies the nearer example and reads historical files again. Hard limits remain the final fused
+note when both apply. A request to act on, finish, or complete an open goal **MUST NOT** be
+classified as a status request merely because it contains a completion word: it keeps the tool
+catalogue and normal tool policy. Explicit state questions such as “Have you completed those
+goals?” and “Which goals are finished?” remain status requests.
 The raw window **MUST** stay small
 (long raw context degrades middle recall); the rolling summary carries older context
 cheaply. On overflow, **drop the examples first, then knowledge, then recalled memories, then
-the lorebook; never drop the voice law, persona, `USER.md`, or the honesty constraint.**
+the lorebook, then open goals; never drop the voice law, persona, `USER.md`, or the honesty
+constraint.**
 Knowledge goes before memory in that order because a chunk is a paragraph rather than a line
 (so one buys back what a dozen memories would), because the shelf is on disk and the same
 search runs again next turn, and because of the three it is the least *hers*.
@@ -204,8 +214,11 @@ DREAM job at 4am has no user message, no window and no retrieval to give it.
 
 **The honesty constraint** (property: honest memory) is a fixed block: *she remembers only
 what is in the memory blocks and the current conversation; asked about something with no
-record, she says so warmly and plainly and asks, rather than inventing a memory; and the
-rule runs both ways — she never claims to "remember" details that are not actually present.*
+record, she says so plainly, in her own voice, and asks, rather than inventing a memory; and the
+rule runs both ways — she never claims to "remember" details that are not actually present.* Like
+the embodiment truth (§2.5) it is the same for every character, so it **MUST NOT** prescribe a
+temperament (§8), nor quote a line for her to say — a sample sentence in a block every turn
+carries is copied verbatim, by every character.
 This is verified by a golden-transcript test (§27).
 
 **The memory contract** (`yurios/app/memory/store.py`, `MemoryStore`) is implemented
@@ -258,7 +271,11 @@ file-backed:
   and recency decides nothing. It did, and a line fifteen days old took a slot from an
   answer an hour old — while `Memory.score` went on reporting a decay that had not been
   allowed to matter. Scores are normalised to the pool's best so the relevance and
-  redundancy terms stay comparable.
+  redundancy terms stay comparable. A sentence the index holds more than once **MUST** be
+  returned at most once — the best-ranked copy — because MMR only discounts a verbatim
+  repeat, and against a thin pool six copies of one journal line took all six slots.
+  On the event loop the query is embedded on a worker (`arecall`, §2.4); `recall` is the
+  same lookup for a caller that is already off it.
 - `forget(selector)` is **supersede-not-delete**: remove the line from the working
   `USER.md`/`facts.md`, append a tombstone to `memory/semantic/forgotten.md`, and commit.
   Removal **MUST** include matching prose in `USER.md`, including derived copies in
@@ -288,7 +305,7 @@ data is kept, the seed of a future distillation corpus. `corpus/` is **personal 
 code**: gitignored, outside `vault/`, never committed, no phone-home. Each record carries
 the full prompt as sent, the completion, the model, and a `collection_scope` that **MUST**
 be one of `self` or `consented_hosted` (asserted in code) — a shipped card never logs a
-stranger's conversation home. Ratings arrive later in a sidecar and merge at export.
+stranger's conversation home. Ratings arrive later in a sidecar and merge at export (§37).
 
 ### §2.2 — The world voice route
 
@@ -343,6 +360,13 @@ none. Reads that cost nothing (the model listing behind the settings page) need 
 The same headers carry a composite `User-Agent` — `YuriOS/<version> <client>/<version>` —
 which affects no attribution and exists so a provider's logs name her, not just her plumbing.
 `yurios doctor` prints what a given `.env` actually puts on the wire.
+With `--probe-model`, it **MUST** also make a timeout-bound, read-only request to
+the house's selected chat and enabled utility model connections. LM Studio and
+Ollama probes **MUST** use their configured endpoint and connection key and report
+whether the selected model is listed; OpenRouter probes **MUST** use an authenticated
+key endpoint, since its public model listing cannot verify a key. A failed requested
+probe **MUST** make doctor exit nonzero, while the default command **MUST NOT** probe
+model connections. Unset and in-process GGUF models have no HTTP endpoint to probe.
 
 The default stack is **local and needs no key**: an LM Studio model backs the mind, while the
 in-process sentence-transformers embedder (`EMBED_BACKEND=sentence_tf`) owns memory without a
@@ -363,10 +387,23 @@ on. The load **MUST** be started after that, not before. A recall that arrives b
 weights land **MUST** behave as an empty
 Vault — `[]`, no freeze of the event loop. `embed()` itself still waits, so a write that
 needs a vector (remember, reindex, ingest) never drops one. The exception is a journal
-line's index row (§15): REFLECT runs on the tick's own coroutine, where waiting would hold
-every character on the node, and the day file is truth while the index is only its cache —
-so that one row **MUST** be skipped rather than waited for. A failed load **MUST** settle
-the board as failed and keep her talking.
+line's index row (§15): waiting there would park her tick for the rest of a cold load, and
+the day file is truth while the index is only its cache — so that one row **MUST** be
+skipped rather than waited for. A failed load **MUST** settle the board as failed and keep
+her talking.
+
+**No embed on the event loop, loaded or not.** `embed()` is blocking by contract: a forward
+pass in process, or an HTTP round trip to LM Studio or Ollama that a model swap or a queue
+behind generation can hold for the client's whole timeout. Every embed reached from the
+host's async code — recall and the knowledge shelf before a reply, remember after it, a
+journal row, an ingest, a night's facts, the rolling summary — **MUST** run on a worker
+thread (`asyncio.to_thread`), whatever the backend and whether or not its weights are
+ready. A slow embedder then delays the one character waiting on it, not every room on the
+node. Only the vector moves: ranking and index writes stay where they were, so moving the
+embed adds no reader to a file rebuilt in place. A server embedder **MUST** keep one pooled
+HTTP client for its lifetime rather than one per call, and a closed client **MUST** be
+reopened on the next call, not raised on — an injected embedder can be shared by several
+characters, and one of them stopping must not break the rest.
 
 Whatever the callers guard on to make that choice **MUST** mean *this* embedder can return a
 vector now — not that weights are loaded somewhere in the process. A wrong `EMBED_DIM` loads
@@ -434,6 +471,9 @@ promise review (§22.1a) asked for thinking and capped itself at 1,200 tokens; o
 `reasoning_tokens: 1200`) and the answer was empty — the live review failed that way on two
 consecutive attempts and a replay of the same call did too, so the promise it held was never
 filed. Given the house's 4,096 the same call thought for 878 tokens and answered.
+When reply reasoning is enabled, `CHAT_REASONING_EFFORT` **MAY** request a provider effort
+(`low`, `medium`, or `high`); an empty value leaves the provider default intact. The effort
+**MUST** ride in the raw request body, and `CHAT_THINKING=false` **MUST** override it.
 
 **Structured output degrades, like every other backend.** A utility caller **MAY** send a
 `response_format` of `json_schema`; local OpenAI-compatible servers enforce it, and where it
@@ -441,7 +481,8 @@ is enforced it is worth having. But a route is free not to serve a given schema,
 OpenAI shape gives it only one way to say so: it answers nothing — `finish_reason: "stop"`,
 zero completion tokens — which reaches the caller as a parse failure naming the wrong cause.
 Measured on `openrouter/z-ai/glm-5.2` with the promise-review schema (§22.1a): empty with the
-schema, strict or not, and correct with `json_object` or with no `response_format` at all. So
+schema, strict or not, and correct with `json_object` or with no `response_format` at all (on
+the upstream that served it then — see the next paragraph for one where it is not). So
 an empty answer under a `json_schema` **MUST** be retried once in `json_object` mode before it
 is reported as a failure, and the downgrade **MUST** be visible in the call's metadata. The
 schema is never what holds the shape — every structured utility contract is also stated in the
@@ -449,18 +490,35 @@ prompt and re-checked by its parser — so this gives up enforcement the route w
 The retry is deliberately narrow: only an *empty* answer, only at `stop`, only where a schema
 was sent, so a model with genuinely nothing to say is never asked twice.
 
+**A format MUST NOT cost a call the thought it asked for.** The quieter failure answers: on
+`openrouter/z-ai/glm-5.2` the Together upstream serves *any* `response_format` — `json_schema`
+and `json_object` alike — with no reasoning pass at all, while Wafer, Mistral and DigitalOcean
+reason under the same format. The promise review then answered a claim of "I read all 24 files",
+backed only by a `list_notes` index, with a well-formed and wrong `{"goal": null}` every time
+(17 of 17), and with a filed goal every time without the format (15 of 15). So a utility call
+that asks for thinking, sends a format, and gets a non-empty answer at `stop` with no thought in
+it (no reasoning tokens, no reasoning text, no leading `<think>` block) **MUST** be asked once
+more without the format. If the retry reasons, its answer stands, the call's metadata records
+`format_dropped`, and that model **MUST** stop sending a format on thinking calls. If it does
+not, the model does not reason: the first answer, with the format's enforcement, stands, and a
+model never seen to reason is not asked twice again — so a plain local model pays the probe
+once per process, never per call. A call with thinking off keeps its format.
+
 ### §2.5 — The situation block: she knows when and where she is
 
 Every assembled prompt — reply, greeting, and ambient speech alike — **MUST** carry one
 appended `## THE SITUATION RIGHT NOW` block, rendered fresh per prompt from surfaces the host
 owns: the current date and time from the **injected clock** (`yurios/kernel/clock.py`, never
 the wall clock), the room's sticky scene state (rain, music), and the timer board's pending
-timers with time remaining. The block **MUST** state the **embodiment truth**: her body is
+timers with time remaining. An empty board **MUST** be stated as one, not omitted: the window
+keeps the turn that set a timer but never the proactive line that announced it landing, so
+silence reads to her as a countdown still running. The block **MUST** state the **embodiment truth**: her body is
 rendered live — eyes that blink, a face that shows feeling, a mouth that moves with her voice
 — in her room or on the desktop. She **MAY** know she runs as an AI; the block **MUST** direct
 that this never means bodiless — she **MUST NOT** claim to have no body, no eyes, or no
-surroundings, and asked about them she answers plainly (the no-narration rule forbids stage
-directions, not the truth). The embodiment-truth text lives as one constant
+surroundings, and asked about them she answers plainly and in her own voice (the no-narration
+rule forbids stage directions, not the truth). The truth is the same for every character, so it
+fixes what she says and **MUST NOT** prescribe a temperament to say it in (§8). The embodiment-truth text lives as one constant
 (`yurios/world/situation.py`) so the test suite can assert it verbatim.
 
 That truth is stated **only while a page with her body on it is open** — the sanctuary or the
@@ -714,12 +772,13 @@ to every new subscriber before its first live event. Malformed JSON is logged an
 
 ## §7 — Tools via MCP: the hands
 
-- §7.1 **Four tools, real MCP.** An in-repo MCP server (`yurios/world/tools/server.py`, FastMCP
+- §7.1 **Built-in tools, real MCP.** An in-repo MCP server (`yurios/world/tools/server.py`, FastMCP
   over stdio) exposes exactly:
 
   | tool | args | returns | side effect |
   |---|---|---|---|
   | `set_timer` | `minutes` (0 < m ≤ `TIMER_MAX_MINUTES`), `label?` | `{id, label, seconds, due}` | host schedules the announcement (§7.5) |
+  | `create_goal` | `text`, `kind?` (`task` or `reach_out`) | validation contract, then `{status, id, text, kind, state}` after host realisation | host adds or deduplicates an authoritative standing goal (§7.5, §22.1) |
   | `play_music` | `action`, `track?`, `volume?` | `{playing, track}` | `music` event to the stage (§4) |
   | `take_selfie` | `look?` (the whole picture in her own words), `scene?`, `framing?`, `lighting?`, `mood?`, `wardrobe?`, `avoid?` (template keys or free-form — carried verbatim, never refused; unnamed slots are left unnamed, never rolled) | `{id, look, scene, framing, lighting, mood, wardrobe, avoid, kind:"selfie", status:"started"}` | host renders off-turn, posts the photo (§7.6) |
   | `show_picture` | `subject` (required — the whole picture in her own words; no library, no slots), `avoid?` | `{id, subject, avoid, kind:"picture", status:"started"}` | host renders off-turn *without her likeness*, posts the picture (§7.6) |
@@ -758,19 +817,39 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   way, because their configured rates encode decisions discovery cannot see.
 - §7.3 **Guardrails.** Every call **MUST** pass `yurios/world/tools/guard.py`: an **allowlist**
   (exactly the discovered tools; anything else denied), **per-tool rate limits** (token bucket
-  on the injected clock), a **per-turn call cap** (`TOOL_MAX_CALLS_PER_TURN`), a **per-call
-  timeout**, and **result truncation**. Catalog tools (`list_notes`, `read_note`) **MUST**
-  keep a higher bound than the default 600-character fact cap: a listing is the result, not a
-  fact to speak to, and cutting `list_notes` mid-JSON is how a diary folder became a days-long
-  loop (she never saw `count`). `list_notes` **MUST** put `count` first, drop `mtime`/`dir`
+  on the injected clock), a **per-turn call cap** (`TOOL_MAX_CALLS_PER_TURN`, **16**: how many
+  calls one reply — or one step of her own work, §26.2 — may chain, each result back before the
+  next), a **per-call timeout**, and **result truncation**. Catalog tools (`list_notes`, `read_note`,
+  `read_skill`) **MUST** keep a higher bound than the default 600-character fact cap: a listing is
+  the result, not a fact to speak to, and cutting `list_notes` mid-JSON is how a diary folder became
+  a days-long loop (she never saw `count`). `list_notes` **MUST** put `count` first, drop `mtime`/`dir`
   from each row, and clip from the end of the file list so a truncated payload is still valid
-  JSON that names how many files there were. A folder that is not on the desk **MUST** say so
+  JSON that names how many files there were. A catalog tool **MUST** size its own answer to fit
+  its bound as the answer is sent — FastMCP's indented JSON, escapes included, not the compact
+  form — so the guard's cut never lands inside one; and every place that hands a result back to
+  her (a reply, a goal step, a night's job) **MUST NOT** cut a catalog tool's result below that
+  bound (`guard.RESULT_LIMITS`, read through `mind/hands.bounded` on the mind's side). Live, a
+  goal step's 4,000-character cut sat below a 4,000-character page's ~4,200 on the wire, and
+  every long note reached her without the `end_line` that said where it stopped. A folder that is not on the desk **MUST** say so
   rather than returning an empty listing that reads as "kept-memory is empty". Every call —
   allowed or denied — **MUST** append one JSONL audit line
   (`ts, tool, args, verdict, duration_ms, result`) to `TOOL_LOG_DIR`. A call that ran out of time
   **MUST** say so in that `result` and in what she reads ("timed out after 10s"), never an empty
   string: a blank failure cannot be told apart from a broken tool. She can be *asked* anything; the
-  guard decides what her hands actually do.
+  guard decides what her hands actually do. **Every audited call MUST also be a notice in the
+  chat**: one `role: "tool"` row in the conversation log (§2.6) naming the tool, the argument that
+  says what it touched, and — when it was refused or failed — why, published on the `message`
+  event like any line. The row **MUST NOT** enter a prompt's window, the inbox, or a channel's
+  outbound stream; it is a record on the page, not something she said. A call she made working on
+  her own (any correlate kind but a reply, a greeting, a murmur or a reach-out) is marked
+  `background` and drawn quieter. A call made mid-reply lands above the words still arriving.
+
+  **One reply is one dedupe scope** (`Guard.turn()`): the same tool with byte-identical arguments
+  twice in one reply is refused as *already done this turn*, costing no rate budget. The read-only
+  desk hands (`READ_ONLY`: `read_note`, `list_notes`, `count_note_lines`, `read_skill`) are a
+  repeat only while nothing else has run: any other call admitted in the same reply **MUST** clear
+  them from the scope, because reading a note back after changing it is how she checks the change
+  landed, and refusing that read is refusing the check.
 
   **The mind gets a second Guard, not a share of this one** (§26). Its `rates_per_min` is built
   from `TOOL_RATE_MIND_*` over `MIND_TOOL_ALLOWLIST` alone, so a night of autonomous work cannot
@@ -780,7 +859,10 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   "what did she reach for on her own" filter. The conversational `Turn` dedupe has no counterpart
   here, because the mind has ticks rather than turns; its scope is a **persistent fingerprint
   ledger** in `state/engine.json`, per-tool and never shorter than `MIND_CONSIDER_COOLDOWN_S` — a
-  cooldown that expires before the goal is re-appraised is not a cooldown.
+  cooldown that expires before the goal is re-appraised is not a cooldown. The `READ_ONLY` hands
+  **MUST NOT** be booked on it: the loop the ledger stops is a goal re-making one call every hour,
+  and re-reading her own desk makes nothing — the step that reads is the cost, and it runs either
+  way. They still count against `MIND_TOOL_CALLS_PER_DAY` (§26.4).
 - §7.4 **The in-stream call protocol.** A `## TOOLS` block appended to the system prompt
   instructs the model: speak a short lead-in sentence first, then emit `[[tool_name {"arg":
   value}]]`. The streaming parser (`yurios/world/tooltags.py`) **MUST** strip markers from
@@ -813,10 +895,16 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   On a closed marker: guard-check → MCP
   call → a **continuation stream** (original messages + the partial reply + a `((tool result:
   …))` cue) the model finishes as the same turn — so she *speaks to* what her hands found.
+  A catalog is evidence only of its catalog: after `list_notes`, the continuation **MUST** say
+  that paths and sizes are not file contents, **MUST NOT** invite a claim that those files were
+  read, and **MUST** direct her to `read_note` or to state the scope she could not inspect.
   A continuation **MUST NOT** repeat what the previous pass already said: the model reads
   "continue from where you left off" as "say it again, then continue", so the echo is matched
   against that pass and dropped (`_EchoSkipper`). Matching **MUST** hold rather than swallow, so
   a continuation that merely *opens* the same way is released whole and never begins mid-clause.
+  A pass ends at the call it closes, so words that arrive after that call in the same streamed
+  chunk **MUST NOT** be spoken (they stay in the verbatim record): the model has often started on
+  what it expects next, and live that was a `((` copying the tool-result line into her reply.
   First audio **MUST NOT** wait on a tool: the lead-in sentence reaches TTS before the call runs.
   Barge-in **MUST** cancel the continuation, and a barged-in tool turn persists nothing.
   The block lists each discovered tool with its **whole** description, unwrapped to one line: a
@@ -836,6 +924,16 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   that cannot be made to fit so the tool's own default applies, and leave a **required** one for
   the tool to reject with its own better message. A fumbled optional scalar **MUST NOT** cost
   the call the required arguments the model got right.
+  A model's own call markup in the stream (DeepSeek's DSML, bars single or doubled) **MUST** be
+  read as the call it names and held back from speech like a marker — including a block the stream
+  cut off, which is salvaged or dropped, never spoken — and the verbatim record a turn keeps
+  **MUST** rewrite it as the `[[…]]` marker, so her own history never teaches her the other format.
+  **Every line she says goes through this loop, not only a reply.** A greeting, a murmur, a timer
+  announcement and a reach-out written for an empty room **MUST** carry the same `## TOOLS` block
+  and the same pass loop as a reply, under the same rule (§26.1): what she may reach for depends on
+  her hands, never on which door she came in by. A line composed with no hands offered but with a
+  cue that points at something she would need a hand to see is how DeepSeek's own call markup
+  became a message on 24 Sep (§18.3).
 - §7.5 **Semantics.** The MCP server is the *contract and audit point* for `set_timer` — it
   validates and records — but the **host** schedules the wake (`yurios/world/tools/timers.py`,
   on the injected clock), because only the host owns her voice; when a timer elapses she
@@ -848,6 +946,16 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   **MUST** carry `late_s` so that announcement does not describe itself as punctual. A timer
   more than a day past due — longer than `TIMER_MAX_MINUTES`' own ceiling, so no longer a
   promise anyone is still waiting on — **MUST** be dropped on the way in rather than announced.
+  Landing is not delivery: a timer that has elapsed **MUST** stay on the file until its
+  announcement is delivered, and only then be removed (`TimerBoard.ack`), so a restart between
+  the countdown landing and the announcement landing restores it as already due rather than
+  losing it. A landed timer leaves the public snapshot when it lands. A crash between delivery
+  and `ack` may announce it twice; that is the accepted side, never zero times.
+  The board's pending promises **MUST** be visible as a due-ordered `{timers:[{id,label,due}]}`
+  snapshot at `GET /api/timers`, scoped by the same character dispatcher as every other runtime
+  route. Every add and landing **MUST** publish that complete snapshot as sticky `timers` state
+  on the §10 bus, including the empty snapshot when the last countdown leaves the board; a room
+  that opens late must not need to reconstruct promises from tool-call history.
   Deliverable is a voice injector **or** a chat viewer (a text room or the
   terminal, which do not open `/ws/voice` while muted). With no injector the
   announcement **MUST** land as a proactive chat line on the EventHub rather
@@ -855,6 +963,31 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   **and** no viewer, the line **MUST** still land, stamped `unheard`, so the
   inbox and the doorbell (§18.4) carry the promise instead of the tick
   re-queuing it until someone walks in.
+  When REFLECT also files the future delivery as a goal (§22.1a), that goal **MUST**
+  retain the successful timer contract's id and actual due time. It **MUST NOT** close
+  merely because the countdown elapsed: it closes only after the announcement reaches
+  voice or chat (including an `unheard` delivery), so a failed compose remains owed. The
+  mirrored goal remains visible but **MUST NOT** enter ordinary goal appraisal or work:
+  the timer board is its sole executor, or “due soon” sends it early and the countdown
+  sends it again.
+  `create_goal` **MUST** be advertised only when the mind is on. The server validates a concise
+  goal and its kind, but the host-owned `GoalStore` **MUST** perform the mutation: `goals.md` is
+  one lifecycle read-modify-write store and the spawned tool process must not race the mind for
+  it. The continuation **MUST** receive the actual assigned id and whether an equivalent open
+  goal already existed. From a goal step the mind's hand path performs the mutation instead,
+  under §22.1c. A `write_note` under `workspace/goals/` **MUST NOT** claim or imply that
+  it created a standing goal. A request that both reviews existing goals and creates one **MUST**
+  retain the tools block while still receiving §22.6's authoritative status reminder. Because a
+  recent failed turn may show `write_note` masquerading as creation, an explicit creation request
+  **MUST** repeat the `create_goal`, not-workspace rule on the post-history user turn whenever that
+  hand is available.
+  A conversational tool that satisfies the whole of an open standing goal **MAY** carry that
+  goal's exact id plus `completes_goal=true`. Open-goal prompt lines **MUST** expose the ids, and
+  tool descriptions **MUST** reserve the flag for the entire observable success, never one step.
+  A synchronous effect such as scheduling a timer **MUST NOT** close the goal until host
+  realisation succeeds; a start-don't-await effect **MUST NOT** close it on `{status:"started"}`
+  and closes only when its successful `task_completion` lands. An absent id or flag changes no
+  goal state.
   `play_music` drives the browser-side synthesized ambience (§6.2) —
   a generative pad, not a media library; the seam is the point.
 - §7.6 **Her camera: `take_selfie` / `show_picture`, start-don't-await.** The two hands that
@@ -976,16 +1109,25 @@ to every new subscriber before its first live event. Malformed JSON is logged an
 
   Fetching **MUST** sit behind a `PageFetcher` seam (`yurios/world/tools/fetch.py`) with an offline
   fake, extract text with no new dependency, and — the load-bearing rule — **validate the URL
-  before every request and again on every redirect hop**: http(s) only, and never an address that
-  resolves into private, loopback, link-local, reserved or multicast space. `url` is the first tool
+  before every request and again on every redirect hop**: http(s) only, and only an address that
+  is globally routable — never private, loopback, link-local, reserved, multicast or shared
+  (100.64.0.0/10, which is where a Tailscale network lives), with an IPv6 address that wraps an IPv4
+  one judged by the address inside it. The test is "is this public", not "is this one of the ranges
+  someone listed". `url` is the first tool
   argument authored by a language model rather than by a person, and the local network it would
   otherwise reach includes her own control surface (§11.4). Redirects **MUST** therefore be followed
   by hand. Non-text responses and bodies past `FETCH_MAX_BYTES` **MUST** be refused.
+  Extraction **MUST** remove navigation, related-content, sharing and comment widgets identified
+  by their tags, roles, or CSS identifiers, even when a site renders them as ordinary containers,
+  while retaining the article body. A large HTML shell with too little readable body after
+  extraction **MUST** be treated as an unreadable
+  page rather than shelved as a title and controls.
 
-  **A page she read is knowledge, not a tool result.** The full text of every page — fetched by
-  `research` or by a `read_page` she made herself — **MUST** be ingested into the §20
-  `KnowledgeStore` and carry its source URL in the document, so the doc+span citation survives the
-  round trip back to where it came from. The model **MUST** see only a short `gist`: §7.3's result
+  **A page she read is durable source evidence, not a tool result.** The readable body of every
+  page — fetched by `research` or by a `read_page` she made herself — **MUST** be kept in the §20
+  `KnowledgeStore` with its source URL. Raw web pages **MUST NOT** enter default prompt retrieval;
+  a `kind: research` job's cited topic page is the retrievable product (§21.2a). The model
+  **MUST** see only a short `gist`: §7.3's result
   truncation bounds the model-facing and audit copies while the host realises against the
   untruncated one (`ToolBrain._execute`), which is the same two-audience contract the camera's
   contract JSON already relies on. With no mind running there is no shelf; she **MUST** still
@@ -1072,6 +1214,15 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   the channel it was asked from and to Telegram whatever that channel was; a job that fails **MUST**
   say so and **MUST NOT** claim a delivery that did not happen.
 
+  Before ingesting each fetched page, `research` **MUST** reserve its estimated model calls
+  against the per-run `RESEARCH_MAX_CALLS` ceiling (default 100). Concurrent fetches **MUST NOT**
+  admit pages whose combined estimates exceed that ceiling. A page that cannot be priced or would
+  exceed the remaining allowance **MUST** be shelved held and unread, so it can be resumed later;
+  other pages that fit **MAY** still be read. When the ceiling leaves no page read, the run **MUST**
+  report that pages were held rather than saying none opened, and **MUST** send a failed
+  `task_completion` to release any goal waiting for the run. This limits calls admitted by a
+  research run; an individual page's estimate is not a billing guarantee.
+
 ## §8 — Ambient life is the mind's, not a scripted machine
 
 There is no scripted idle state machine. Ambient speech and timer announcements are *decided*
@@ -1079,7 +1230,11 @@ acts of the tick loop (§15.5), and the body micro-acts (gaze drift, expression 
 rain-gazing) survive as REGULATE-owned reflexes on a seeded RNG and the same config windows
 (`IDLE_ACT_*`, `IDLE_TALK_*`, `IDLE_SETTLE_S`). The obligations of ambient speech survive as
 obligations on the mind, cited from §15: sim-time discipline (§15.1), an ambient line is a real
-turn minus the memory (§9), and the per-connection ambient seam (§9). With `MIND_ENABLED=false`
+turn minus the memory (§9), and the per-connection ambient seam (§9). The cue behind an unprompted
+line — a greeting, a murmur, an announcement, a reach-out — **MUST NOT** prescribe a temperament
+("warm", "gentle"): the cue is the instruction the model follows over the card above it, so a
+house adjective there makes every character sound like the house companion. It asks for the voice
+the character really has (`assemble.OWN_VOICE`) and may still fix length. With `MIND_ENABLED=false`
 the body still has cheap client-side aliveness (§3.5) but no host-driven ambient life.
 
 ## §9 — The voice loop
@@ -1123,8 +1278,8 @@ STT/TTS/VAD SDK, and fakes implement each seam so the whole loop runs offline (�
   line to the transcript before the first token (the model must see it) while `persist` appends
   hers, so a turn torn down in between leaves a half-written exchange behind. Every path that
   ends a turn without committing — barge-in, brain error, a client that vanished mid-turn, an
-  empty reply — **MUST** call `abandon()`, `persist()`'s opposite number, which drops the
-  pending turn and rolls the user's line back out of the §7.1 window
+  empty reply (one in which no hand ran, §10.5) — **MUST** call `abandon()`, `persist()`'s
+  opposite number, which drops the pending turn and rolls the user's line back out of the §7.1 window
   (`app/conversation.py`; it stays on the page). Without it the next
   prompt reads that line as a question still owed an answer and she answers it a second time,
   folded into the new turn.
@@ -1234,10 +1389,11 @@ keeps a socket of its own is sound.
 - **`EventHub`** (`yurios/kernel/hub.py`) — the single outbound fan-out. Every host→frontend
   event is one typed JSON dict: `hello` (her name), `message` (chat entries, including
   `image_url` selfies, and the originating `channel`), `draft` / `draft_cancel`, `avatar` (§4,
-  scene channels included), and — with the mind — `journal` and `mind` (§24). Publishes are
+  scene channels included), `timers` (the sticky pending-countdown snapshot, §7.5), `rating`
+  (§37), and — with the mind — `journal` and `mind` (§24). Publishes are
   non-blocking (a stalled client loses events, never blocks the publisher) and thread-safe (the
-  TTS thread publishes). Sticky appearance state is recorded before any subscriber and replayed
-  last-write-wins.
+  TTS thread publishes). Sticky state is recorded before any subscriber and replayed
+  last-write-wins; it includes both appearance and current runtime snapshots such as timers.
 - **`GET /api/events`** — the bus's wire: SSE, one `data:` line per event. On attach: `hello`,
   then the sticky replay, then live events. The stream **MUST** end itself on shutdown (a stop
   flag polled every second — an open tab must never hold Ctrl+C hostage) and ping while idle.
@@ -1278,7 +1434,19 @@ a frontend:
   a line break, or a bounded run of neither. Per-token drafts are quadratic in bytes on a bus whose
   per-subscriber queues are bounded and drop when full (§4), and the drop lands on whatever is
   published next — her committed `message`. It **MUST** mirror the voice route's contract minus the audio,
-  including the rule that a failed turn leaves no trace. Text turns from all channels serialise on
+  including the rule that a failed turn leaves no trace. **An empty reply is a failed turn, not a
+  quiet success:** after `abandon()` the runner **MUST** raise it, so `POST /api/chat` answers `502`
+  — and the voice socket's reply, which has its own runner, **MUST** end in an `error` frame naming
+  the `client_id` instead of `done`, persisting nothing — and every channel **MUST** tell the person
+  that no reply came, and why — a refusal, a reasoning
+  pass that spent the whole `MAX_REPLY_TOKENS` budget, or plain silence. The reply stream keeps that
+  reason (`finish_reason`, reasoning and refusal fields, token counts) for the turn that consumed it
+  (`app/providers/usage.py`), and the runner **MUST** log it: a turn that answered with nothing and
+  said nothing anywhere is, from the chair, being ignored. A reply with no words in which a hand
+  ran to `ok` is **not** empty: the act already happened (a render started, a timer set, a goal
+  filed), so failing it would roll back her record of the act and ask for a retry that does it
+  twice. It **MUST** be committed — persisted, and teed as `turn_committed` with its tool outcomes —
+  with no message drawn. Text turns from all channels serialise on
   one lock. Exposed as `POST /api/chat` (`{text, session_id?, channel, client_id?}` →
   `{session_id, user_message, message, active_selfies}`). It has `POST /api/chat/cancel` for a
   correlated browser Stop request and **MUST NOT** wait on the voice warm-up. A text channel has
@@ -1380,6 +1548,16 @@ tool caps/timeouts/log dir and per-tool rate limits, `TIMER_MAX_MINUTES`,
 `IDLE_ACT_MIN/MAX_S`, `IDLE_TALK_MIN/MAX_S`). The mind's knobs are §25; `DATA_DIR` — the root
 of the character tree — is Part III's (§29.1).
 
+`MAX_REPLY_TOKENS` is a ceiling a reasoning model may think up to, not what a reply spends. The
+context readout **MUST** count room for a working reply beside the prompt — the smaller of the
+ceiling and 2048 tokens (`world/context.REPLY_FLOOR`) — and **MUST NOT** hold the whole ceiling
+against the window: reserving 8192 put every turn on an 8k local window "over" from the first
+line, and a warning that is always on is not read the day it is true. With the window known, a
+chat provider **MUST** ask for no more than it has left after the prompt (`ContextMeter.reply_room`,
+never below 256), because a server that checks prompt + `max_tokens` against its window refuses
+an oversized ask rather than trimming it; and a reply that then runs out of room **MUST** name
+`CONTEXT_LENGTH`, not `MAX_REPLY_TOKENS`, as the knob (§10.5).
+
 A knob in `.env` is the **host default**: every character inherits it unless her registry record
 overrides that field (§31.2). The knobs a character may override are hers alone; the rest —
 the port, the room, the reflex windows, what leaves the machine — are the house's.
@@ -1440,6 +1618,14 @@ redirects. The phone never stores the token. It costs what every magic link cost
 in that device's history — which is why this is a LAN affordance, why the redirect leaves the URL
 behind at once, and why rotating is one button.
 
+A loopback bind asks for no token, and so what stands in for one is where the request came from.
+The peer address alone is not enough: a page whose own hostname has been re-pointed at 127.0.0.1
+(DNS rebinding) connects from loopback, and its GETs are same-origin and carry no `Origin`, so it
+could read `GET /api/pairing` and walk off with the token this section guards. A request the
+boundary would admit without the token because it is local **MUST** therefore also arrive under a
+loopback `Host` — `localhost`, a loopback IP, or this machine's own hostname — and is refused
+otherwise, HTTP and WebSocket alike. A browser cannot forge `Host`.
+
 `HOST=0.0.0.0` is not an address. The candidate origins **MUST** come from the machine's own
 interfaces and from the Host header the request arrived on — something on that network
 demonstrably routes there — and a loopback bind **MUST** say that no code will help rather than
@@ -1488,12 +1674,19 @@ surface between turns.
   *observer and consequence*: a `user_message` signal **MUST** preempt the activity state to
   ENGAGED from any state, mid-sleep if necessary (the bus wake), and a committed exchange
   arrives as a `turn_committed` signal whose REFLECT share is the world-model update and the
-  promise scan (§22.1). One mind at two cadences: the loop owns everything between turns; the
+  promise scan (§22.1). That signal **MUST** carry the committed turn's structured tool outcomes
+  (tool, arguments, verdict and model-facing result), and an abandoned turn **MUST** discard
+  them rather than hand them to the next exchange. One mind at two cadences: the loop owns
+  everything between turns; the
   turn pipeline stays the ENGAGED fast path. (The full one-loop unification — the reply
   generated *by* ACT — is a named next rung, §28.)
 - §15.4 **Rehydration and the suspend gap.** The engine's cursor state (`state/engine.json`:
   bus offset, interrupt counts, consideration cooldowns, last tick) **MUST** survive restart —
-  a rebooted mind resumes, it does not wake amnesiac. A real gap since the last tick (> 2 h,
+  a rebooted mind resumes, it does not wake amnesiac. The bus offset is the exception that
+  proves the rule: it indexes an in-memory queue that does not survive, so it is stored with that
+  queue's `bus_epoch` and **MUST** be restored only onto the same bus (a mind rebuilt in-process);
+  on any other it **MUST** start from 0, or the first signals of the new process are skipped
+  unread. A real gap since the last tick (> 2 h,
   or twice the DORMANT cadence) **MUST** synthesize one `suspend_gap` signal: one catch-up
   appraisal over the whole gap — goals reconsidered by commitment (§22.2), one journal line —
   never a pile of stale reactions, and never thirty good-mornings.
@@ -1504,7 +1697,10 @@ surface between turns.
   through the `TimerBoard` (whose landed timers arrive as `timer` signals; an announcement is a
   promise and **MUST** queue until deliverable). The **self-talk murmur** survives as a decided
   impulse: only in IDLE, only with the user present, only after the configured quiet window —
-  and dropped, never queued, when nobody can hear. The **body reflexes** (gaze drift, expression
+  and dropped, never queued, when nobody can hear. Its cue **MUST NOT** name a place: where she
+  is comes from the situation block (§2.5) the ambient prompt already carries, so a cue that names
+  the shipped companion's lamp and window seat tells every other character to murmur about
+  furniture she does not have. The **body reflexes** (gaze drift, expression
   pulse, posture, rain-gazing at the scene's canonical window target) survive as REGULATE-owned
   reflexes: no model, no journal, seeded RNG, silent while engaged, while the room is empty, and
   in DORMANT/DREAM.
@@ -1519,9 +1715,9 @@ what they mean — no producer may call into the mind.
   early from any cadence sleep, and **MUST** append one line per arrival to `signals.jsonl` (the
   arrival record — "what woke her at 3am" is a file you read).
 - §16.2 The type enum is open: `user_message`, `turn_committed`, `user_present`, `user_absent`,
-  `timer`, `task_completion`, `selfedit_decision`, `wakeup`, `fs_event`, `suspend_gap`. Producers
-  in this build: the world voice route (the tee), the `/api/events` route (presence), the timer
-  board, the self-edit API. Unknown types are legal and appraise low. `user_present`/`user_absent`
+  `timer`, `task_completion`, `selfedit_decision`, `wakeup`, `fs_event`, `suspend_gap`, `handed`.
+  Producers in this build: the world voice route (the tee), the `/api/events` route (presence), the
+  timer board, the self-edit API, the desk inbox route (§34.6). Unknown types are legal and appraise low. `user_present`/`user_absent`
   are bookkeeping — observed by the world model, never chosen as intentions (the greeting is the
   voice route's job). They track chat-room and live-CLI viewers only. A
   `user_message` (Telegram included) is reachable, not present, and **MUST NOT**
@@ -1535,6 +1731,16 @@ what they mean — no producer may call into the mind.
   treating the signal as a finish. Journalling a failure as one is worse than journalling nothing:
   the line is what she reads back tomorrow, so a night her camera ran out of VRAM becomes a night
   she remembers taking a picture, and the photo it names does not exist.
+- §16.4 **The queue holds what is unread, not what happened.** Offsets are absolute — the count of
+  signals posted to this bus — so the persisted `bus_offset` means the same thing however much of
+  the queue is still held. Reading (`next`) **MUST NOT** release anything; the mind releases what
+  it has read with an explicit `ack(offset)`, and **MUST** call it only after the tick that read
+  the batch has persisted its new cursor — a tick that dies before then asks again from the old
+  offset and finds the batch still held. A bus nobody drains (a character with her mind switched
+  off) **MUST** still be bounded: past `MAX_HELD` unread signals the oldest are dropped from
+  memory and a reader behind them resumes at the oldest held. `signals.jsonl` keeps them all;
+  the log, not the queue, is the record. Found by review: the queue grew by every turn for the
+  life of the process.
 
 ## §17 — Activity states and the budget governor
 
@@ -1553,7 +1759,10 @@ as a design driver: an always-on mind is affordable only because it is almost al
   pressure ≥ 1.0 REGULATE **MUST** shed IDLE to DORMANT (goal work stops). It **MUST NOT** gate
   conversation — a governor that silences her when the user speaks has failed at its one job. The
   ledger (`state/budget.json`) rolls at local midnight on the injected clock and is rendered by the
-  dashboard.
+  dashboard. The user **MAY** zero the current day's ledger by hand (`POST /api/mind/budget/reset`,
+  the reset on the debug page's spend tile); the ledger **MUST** record when it was reset and what
+  it read (`reset_at`, `reset_from`) until it next rolls. A reset **MUST NOT** move the activity
+  ladder (§17.2): a day shed to DORMANT resumes IDLE on its next drift down from ENGAGED.
 - REGULATE **MAY** shorten the next heartbeat below the state cadence when a goal comes due sooner
   or when more than one appraisal crossed gate 1 this tick (the backlog drains one intention at a
   time, never piles into one tick).
@@ -1576,6 +1785,31 @@ them is precisely the always-interrupting-assistant failure.
   (roughly 22:00–09:00) are SILENT regardless of score, and `MIND_MAX_INTERRUPTS_PER_DAY` zeroes the
   score outright. Both dials are the **user's** (§25) — you cannot tune the dial against someone who
   holds it.
+  An undated reach-out **MUST** earn a bounded waiting credit from its creation time:
+  +0.20 linearly over 24 hours, clamped to [0, 0.20], with the total score capped at 1.
+  Retry count **MUST NOT** earn credit. Dated goals retain their actual time-sensitivity
+  without this credit; absent or invalid creation times earn none. Quiet hours, the daily
+  cap and the user's threshold still apply. The trace **MUST** show the waiting credit
+  and whether silence came from quiet hours, the daily cap or the score. The default
+  threshold is 0.6. Against it an undated priority-0.7 reach-out in daytime, with none of
+  today's interrupts spent, is eligible at once when she has not reached out for a day;
+  filed the moment she last reached out, about 6 hours after it. At the earlier default of
+  0.75 it needed about 29 hours even with a day's silence behind it — hourly SILENT lines in
+  the Decisions panel for a day and more, on every reach-out she had — and before the
+  waiting credit its lifetime ceiling was 0.63. The credit's window was 48 hours until
+  2026-10-05, and that was a day too slow for the commonest reach-out there is — one she
+  files mid-morning to pick up a conversation the user just left. A priority-0.68 goal filed
+  at 10:28, an hour after a reach-out of hers had spent one of the day's interrupts, climbed
+  to 0.591 by 21:50 and was then held by quiet hours: thirteen hourly holds and not one
+  model call on it all day. Over 24 hours the same goal clears 0.6 at 18:50.
+  A **shelf life is not a date**. A goal she filed herself — a goal step's `create_goal`
+  (`goal:`), free time (`muse:`), a handed document (`handed:`), the night's stock-take
+  (`strategy:`) — carries a `due` only so that an untouched one lets go of itself; nothing
+  she files names a time. Gate 2 **MUST** score such a reach-out as undated: it earns the
+  waiting credit, and its expiry **MUST NOT** raise its time-sensitivity. Read as a
+  deadline, a three-day expiry held a self-filed reach-out at a 0.62 ceiling — no waiting
+  credit, 0.2 time-sensitivity — until its last six hours, and the Decisions panel filled
+  with hourly holds that could not end any other way.
 - §18.2a **A tool product is not a delivery** (normative, the landing rule). Work the *mind* started
   stamps its contract `_deliver: "vault"`, and `Researcher` / `SelfieLab` **MUST** honour it by
   writing the product to the shelf or the gallery and **posting nothing**; they post a
@@ -1606,10 +1840,17 @@ them is precisely the always-interrupting-assistant failure.
   stamps `_deliver: "vault"` and the lab still posts nothing — but the `task_completion` it posts
   instead carries the product's `image_url`, and the goal that dispatched the work **MUST** keep it
   (`Goal.product`). However that goal ends — kept, let go, swept, or **parked at the horizon still
-  waiting on the world** — a promise-derived one **MUST** hand the picture to its follow-up
+  waiting on the world** — one holding an undelivered picture **MUST** hand it to a follow-up
   `reach_out` goal rather than hand over a path to its own goal file, and it **MUST** do so exactly
   once however many of those exits it takes in its life (`Goal.meta.offered` names the heir; the
   open-goal dedupe of §22.1 cannot see a follow-up that has already been delivered and closed).
+  Provenance does not narrow it. A goal the user filed in chat (`user:chat`, §22.1) holds the
+  same photograph a promise does, and "goal complete" is the *kept* ending: closing the work
+  while the shot sits in `Goal.product` used to leave Gate 2 nothing to carry. The prose
+  "tell them what came of …" half stays promise-only (§22.1a); the picture does not.
+  Delivery does narrow it: a product marked `deliver: chat` is already in the conversation and
+  **MUST NOT** file a follow-up that sends it again; a vault product, including a legacy product
+  with no marker, is still waiting to be delivered.
   Parking is named here because it is not a footnote but the common case, and the one the promise
   that cost the three photographs actually took: a `single-minded` goal never reaches the let-go
   branch and `reconsider` sweeps only `open-minded` ones, so out of steps and waiting on an answer
@@ -1622,12 +1863,144 @@ them is precisely the always-interrupting-assistant failure.
   mind ever took could be talked about and none of it could be shown, and "show me" was answered
   with `goals/g-….md`. Only a **picture** travels this way, for this section's own reason — a
   research digest is not a gift.
+
+  Gate 2 is not the only door, though, because its question is not the only one. When the user is
+  *in the conversation*, nobody is being interrupted, and a finished picture held behind the
+  threshold is simply one she has not shown them yet. So the conversation **MUST** be able to show
+  it: a goal line in WHAT YOU'RE WORKING ON (§22.6) whose goal holds an undelivered picture **MUST**
+  say the picture is already taken and unseen, and the conversational hand `show_held_picture
+  {goal_id}` posts it — the same one entry a Gate 2 delivery posts, on the channel the turn came
+  through — closes the goal as kept, and re-marks the product `deliver: chat`, so no later exit
+  files a follow-up that sends it twice. The host does this, as it files `create_goal` (§7.5),
+  and anything that is not an open goal holding an unseen picture is an error she reads, never a
+  `shown` she can talk over. It is not a mind hand: a tick has no conversation to show it in, and
+  Gate 2 still owns her reaching out. Live, 3 Oct: two finished photos sat on two goals at 0.57
+  and 0.59 against a 0.6 threshold, the list said only "(active)", and asked how her goals were
+  going she said she had not taken either shot.
+
+  One photograph handed on has two holders — the goal that made it and its follow-up — and a
+  delivery through **either door** **MUST** reach both (`GoalStore.picture_shown`): every goal
+  holding that `image_url` is re-marked `deliver: chat`, and an open `followup:` goal holding it
+  is done, its errand having happened. Marking only the goal that delivered it sent the same
+  picture twice on 5 Oct: the follow-up delivered it at 09:01, the parent's goal line still said
+  it was taken and unseen, and at 09:04 she showed it again.
+
+  A picture her hands make that **no goal takes delivery of** — a night job's call names no goal,
+  and a goal can close or stop waiting before its render lands — **MUST** be handed to the same
+  errand (`acts.adopt_stray_picture`): a `single-minded` `reach_out` under `followup:<render id>`,
+  holding it, deduplicated on that provenance, so Gate 2 carries it and either door's delivery
+  closes it. The mind's contracts say they are hers (`_by: "mind"`, beside `_deliver` and
+  `_goal_id`); the owner's renders from the gallery say `_by: "owner"` and are theirs already, and
+  neither a failed render nor one already in the chat files anything. Live, 6 Oct: the stock-take
+  took the raincheck selfie at 02:10 and the selfie job a near-copy at 02:11, the owner later rated
+  them 9 and 10, and the only picture of the night that reached the chat was the one rated 6.
+
+  And whatever happens to a picture on the way, the conversation **MUST** know every one she made
+  that it has never carried. PICTURES YOU HAVEN'T SENT lists, oldest first, every render on her
+  shelf — the owner's (`by: owner`) excepted — whose `image_url` no conversation line has ever
+  carried (`world/gallery.Unsent`, which reads the ledger and the conversation on from where it
+  last stopped): its id, which camera, when, the start of her look, and the goal holding it, if
+  one is. It is shown while `show_held_picture` is offered, and that hand's other door is
+  `picture_id`: it takes exactly one of `goal_id` or `picture_id`, by picture it posts the same one
+  entry a goal's showing does, and `picture_shown` re-marks every goal holding it, so an errand
+  filed to send it closes instead of sending it again. A picture not on the list is an error she
+  reads. The lab records each render's `kind` and `by` in the ledger for this — a picture's
+  template is shaped like a selfie's — and a ledger line from before either was recorded is hers,
+  of an unnamed camera. The owner can take a picture off the list without it being posted:
+  `gallery.mark_seen` appends to `seen.jsonl` beside the ratings, append-only and refusing a name
+  not on the shelf, and the list leaves out every picture named there. Most of what was stranded
+  before the list existed had been looked at in the gallery all along.
+- §18.2b **A message she decided to send is hers to word, and still Gate 2's to time.** Every goal
+  step is offered `tell_them {"text": …}`, hands or none. It is not a hand — nothing runs, no tool
+  server is asked, and §26's switches and call cap do not apply — it files a `reach_out` goal under
+  `told:<goal>` (deduplicated on that provenance, as `followup:` is), `blind`, priority 1.0,
+  carrying her words exactly (`meta.say`, `meta.decided`). A second `tell_them` from the same goal
+  before the first has gone replaces the words rather than queueing another message. Gate 2 **MUST
+  NOT** score a decided message against the threshold — the judgement the score stands in for is
+  the one she has already made — and **MUST** still hold it for quiet hours and the daily cap,
+  which are the user's dials. Delivered, it is a SUGGEST line of *her* words, drawn (§18.3), never
+  re-composed and never spoken aloud; held, it is parked `waiting` with a wakeup at the next moment
+  both hard gates are open (`policy.next_open`) rather than retried every hour, because each retry
+  is a journal line and a night of them reads back as hesitation. The goal it came from waits on
+  it (`meta.telling`) and **MUST NOT** become `done` before the message is delivered: a done-mark
+  on the step that told closes the goal on delivery, delivery without one returns the goal to
+  work — with its consider cooldown restarted from the delivery, because what she said is often a
+  question and the answer needs time to arrive (live, "which framing do you want?" was followed
+  nineteen seconds later by her shooting her own guess) — and a message the user lets go returns
+  it to work as well. Neither end **MUST** be stranded by the other closing some other way, checked
+  every tick in SENSE before ACT: a message whose goal is closed, or no longer waiting on it,
+  **MUST NOT** be sent — it is let go, and a picture riding with it is handed on as an ordinary
+  errand (§18.2a) — and a goal waiting on a message that is no longer open returns to work. A
+  wakeup **MUST NOT** return a goal to work while the message it waits on is still open. The step
+  prompt **MUST** name
+  this as the way to reach them. Told only that nothing it wrote reached anyone, a step whose goal
+  was "tell him, directly, in conversation, not in a note" wrote a scene of saying it on her desk,
+  read its own desk back on the next step as the event, recorded the conversation in her diary,
+  and closed the goal on an `append_note` (28 Sep).
+- §18.2c **A reach-out gets ready with her hands before Gate 2 rules on it.** Gate 2 can only
+  compose a sentence, so a `reach_out` that went straight to it could never carry anything it had
+  to *make*: "send him a new selfie" was ruled on every hour and no picture ever existed. While her
+  hands are offered (§26), a reach-out that still **needs preparing** **MUST** be appraised as a
+  `tool_step` and given a preparing step before the gate — the same context, chained hands, desk
+  and start-don't-await as a task's step (§22, §26.2), less `tell_them` (this goal *is* the message,
+  and the threshold still rules on it) and `create_goal` (getting a message ready is not taking on
+  new work). A reach-out needs preparing unless it is her decided words (`told:`, §18.2b), a
+  `followup:` reporting on finished work, already holding a picture, already marked `prepared`, or
+  past `MIND_GOAL_MAX_STEPS` steps. A render it dispatches lands on it as its product (§18.2a) and
+  Gate 2 then delivers the picture; it **MUST NOT** go to the gate while that render is out. A step
+  that writes `ready to send` on its `think` line, or the last step it gets, marks it `prepared` and
+  **MUST** go to Gate 2 on the same tick — preparing is the intention's first half, not another
+  intention. A step that is not ready leaves it `active` for its next turn, unsent. A step that is
+  not ready while a hand she has is **held** (§26.3 — the camera while the room is occupied, a web
+  hand behind the budget line) **MUST NOT** spend one of its steps, and a budget hold **MUST** park it `waiting`
+  until `policy.next_open`, when the day's budget has rolled and both of Gate 2's hard gates are
+  open: spent at the horizon, those steps would send "a new selfie" with no selfie in it. A prepared
+  reach-out's compose cue carries the last entry on its own desk, as a follow-up's carries its
+  parent's.
+  A reach-out with a real date (§18.2 — not a shelf life) **MUST** get the preparing step with her
+  hands off too, as a moment to think, and the step **MUST** tell her its date and the time now.
+  Early is hers to choose, but the score cannot tell "remind him before Thursday" from "ask how
+  Tuesday's interview went", and at the default threshold it clears the gate for the second a day
+  before the interview. Writing `not yet` on the `think` line, while the date is still ahead,
+  **MUST** park the goal `waiting` until six hours before its date (or leave it `active` for its
+  next turn if that is already past), **MUST NOT** spend one of its steps, and **MUST NOT** take it
+  to Gate 2. An undated reach-out with her hands off goes straight to Gate 2 as it always did.
 - §18.3 **Outcomes, ascending imposition:** **SILENT** — the default: do it quietly and journal it
   (a stale non-blind goal is let go with a journal line; the journal, not notifications, carries the
   value); **SUGGEST** — one composed line posted to the chat, waiting for the user's next glance,
   never spoken aloud; **SPEAK** — aloud through the ambient seam if a page is open (full turn
   pipeline, barge-in-able), as a `proactive` chat line if the room is empty. Every delivery **MUST**
   bump the daily count, note the contact in the world model, and close the goal.
+  **The journal line says what happened, not what it resembled.** A delivery's line **MUST**
+  carry what was said — her words, quoted and bounded — or, when they went aloud through the turn
+  pipeline this act never sees, that they did and where they are. A held reach-out's line **MUST**
+  name what held it (quiet hours, today's cap, not pressing enough yet) and **MUST NOT** say she
+  chose silence. The journal is what the diary, the stock-take and recall read back: "left a quiet
+  note" about a message that had in fact been sent read to them as one more note written instead
+  of speaking, and a week of "chose not to interrupt" about a threshold she could not clear read
+  as avoidance — until a night filed a goal to say what she had already said (§18.2b).
+  **A hold is journaled once, not once per look.** A held reach-out's line **MUST** be written
+  once per reason per day; a later look that finds it held for the same reason that day writes
+  nothing. Free time reads back only her newest two dozen lines, and an hourly "not sent" on two
+  goals filled every one of them: a day of the gate holding read back as a day of her hesitating,
+  and the night kept it as a fact. A hold by a hard gate — quiet hours or the daily cap — **MUST**
+  park the goal `waiting` until the next morning's open (§18.2b's moment), say on its line when
+  she will look again, and its wake **MUST NOT** journal "came back to". A below-threshold hold
+  keeps its hourly look, because what it waits on — contact license, waiting credit, a due date
+  coming near, a priority or threshold edit — can clear the gate at any time. A stale open-minded
+  reach-out is still let go on the look that finds it stale, and a picture is still never let go
+  for being old (§18.2a). A compose
+  that comes back empty with no picture to carry is not a delivery: no interrupt is spent, the goal
+  stays open, and the line says the words did not come.
+  The composed line has no hands, so its cue **MUST** carry what it is about rather than point at
+  it: a follow-up on a kept promise quotes the last entry of that goal's desk file, never just its
+  path. Told "it's in goals/…md" she reached for `read_note` in her model's native call markup, and
+  that markup was the message. Such markup **MUST NOT** reach a composed line — none is better.
+  A composed line **MUST** be drawn the way the turn pipeline draws a reply before it is posted —
+  her `[expression]` tags taken out wherever they fall, `*narration*` kept — because it never
+  passes through that pipeline, and a tag left mid-line is shown as a word ("It's done. [tender]
+  The frame…"). Lines already on disk with a tag in them are redrawn once, keeping the original
+  as `raw`.
 
 ### §18.4 — Delivery: her inbox and the doorbell
 
@@ -1753,18 +2126,49 @@ turn** — separate files, separate indexes, separate `inspect()`.
   The ingest impulse **MUST NOT** fire while a read holds the shelf lock. `scan()`
   already steps aside rather than queueing; scoring "new document on the shelf"
   and then ingesting nothing is the retry loop that check exists to prevent
-  (measured: 320 empty ingests against one overnight research run).
+  (measured: 320 empty ingests against one overnight research run). A raw web
+  source (`web-`) — read by a DREAM research job, a conversational `research` run or
+  `read_page`, or a held page resumed — **MUST** be archived under the same shelf lock
+  with a seen marker but **MUST NOT** be embedded, and pricing one **MUST** come to zero
+  model calls: §20.2 never retrieves it, so every call spent reading it would buy chunks
+  nothing can find. If an earlier run indexed that source, archiving it again **MUST**
+  remove its old rows. A DREAM job's compiled topic page is indexed instead.
+  A person **MAY** also hand her a document over HTTP — `POST /api/mind/research`, a
+  one-file multipart upload, which the files tab's shelf and `yurios shelf add` (§36.6) both
+  call. It **MUST** land on the shelf exactly as a dropped file does: pending for SENSE, never
+  read inside the request, which answers at once with what the read will cost. It **MUST**
+  refuse, with the reason, anything the drop folder would ignore in silence — a suffix other
+  than `.md`/`.txt`/`.pdf`, bytes that are not UTF-8 text, an empty file, one over
+  `MAX_SHELF_BYTES` — and a `web-` or `research-` name, which belong to her own reading (a
+  source is never retrieved; a topic page is overwritten by its job). A `.pdf` (up to
+  `MAX_PDF_BYTES`) **MUST** be converted once, at upload and off the event loop, into the
+  `.md` of its text — paragraphs rebuilt from the page's lines, one `[page N]` marker per
+  page — and the PDF itself **MUST NOT** be kept, so the shelf stays text and a span still
+  indexes into the file. A PDF with no text layer, a password, or a mangled body is refused
+  with that reason; so is any PDF where `pypdf` is not installed. The drop folder itself stays
+  `.md`/`.txt`. A new version of a held
+  document **MUST** clear its hold; the same bytes again resume it. The upload names something
+  a person did, so it commits at once (§2.1) and publishes a `shelf` event. With the mind off
+  there is no shelf, and the route answers 503.
 - §20.2 **Retrieval is grounded, and it reaches the prompt.** Every returned `Chunk` carries `doc`
   + `span` (character range) — a citation she can show. `search()` **MUST** run on every assembled
   turn and join conversation as the assembler's knowledge slot (§7.1 block 8), carrying its
   citations with it; a store that indexes what it is never asked for is not a knowledge layer.
   The store is late-bound onto the brain (`set_knowledge`, the `set_world` pattern), because it
   belongs to the MindLoop and there is no shelf with the mind off. Retrieval is an **enhancement,
-  never a dependency**: a search that raises costs the block, not the reply. Every route onto the
-  shelf — a dropped file, `read_page`, `research` — is the same store and therefore the same slot.
+  never a dependency**: a search that raises costs the block, not the reply. A dropped file or
+  curated research page reaches the slot; raw pages fetched by `read_page` or `research` remain
+  source evidence outside it.
   `search()` **MUST NOT** re-parse the index per turn (cache on the index file's own size+mtime, so
   a fresh ingest is picked up without a signal). `forget(selector)` drops a doc off the shelf and
-  out of the index. The index (`knowledge/index/`) is derived, gitignored, rebuildable.
+  out of the index. The index (`knowledge/index/`) is derived, gitignored, rebuildable. Retrieval
+  **MUST** exclude raw `web-` source documents, including chunks indexed before this rule;
+  source files remain on the shelf for verification. A completed `kind: research` job **MUST**
+  attempt to publish one cited, stable `research-<job>.md` topic page to this store, replacing its
+  previous version, and report an indexing failure while preserving its desk report. A published
+  page **MUST** be eligible for retrieval. Retrieval **MUST** cap a single
+  document at two of the returned chunks so one long page cannot occupy the entire default
+  prompt slot.
 
 ## §21 — DREAM consolidation
 
@@ -1842,7 +2246,7 @@ that set and a poor place to stop.
   wrong answers, not a backlog worth eating. It follows that a standing job keeps the ladder
   entering DREAM on quiet nights, which is the point of it and not a leak.
 - **The roster is hers, not this file's.** `vault/dreams/<name>.md` — YAML frontmatter (`title`,
-  `description`, `priority`, `per_day`, `enabled`, `soul`, `output`) over a body that **is** the
+  `description`, `priority`, `per_day`, `enabled`, `soul`, `max_hands`, `output`) over a body that **is** the
   system prompt — is loaded after the builtins and overlaid on them. A file named after a builtin
   **MUST** retune it and **MUST NOT** replace its `work`: `diary` stays a `DiaryJob` and keeps
   `relabel()` and its day bookkeeping however its prompt is rewritten, because those are
@@ -1864,6 +2268,33 @@ that set and a poor place to stop.
   down is a fact the next reader inherits wrong. Overridable per character like any other flag.
   `DreamJob.cost()` **MUST** price the preamble it will send, or the night's first item is
   underbilled and §21.2's anti-wedge rule starves everything queued behind it.
+  `selfie` carries her soul and **MUST NOT** be offered her hands (§26.2): it *is* the night's
+  camera, and its answer is a photograph's description and nothing else. Offered them on 5 Oct, it
+  worked a goal instead — reread the plan, rendered a second picture with `show_picture`, wrote
+  "message sent" on her desk — and answered with the message itself, which was rendered as the
+  look.
+- **A night job's hands are bounded per job.** `max_hands` is how many hand calls one job's call
+  may chain before it answers; `0` offers none and the call is the plain call, with no hands block.
+  A job that names none gets the house's `TOOL_MAX_CALLS_PER_TURN`, and a file **MUST NOT** raise
+  it past that (§26.1's two-switch rule, one layer down); the clamp is applied where the call is
+  made, so an `.env` change reaches a file nobody touched. A mangled value **MUST** leave the
+  job's default. This is the dial for what a night costs, because each round resends the whole
+  transcript and a chain's cost grows with the square of its length. `diary` and `strategy` ship
+  with `4`. Uncapped, on 6 Oct, the stock-take reread her desk fourteen times, took a selfie and
+  stepped a goal — 158k tokens of a 200k day for a hundred and fifty words — but it does need a
+  look or two, since its prompt carries each goal's summary and not its progress. Every result in
+  a chain — a night job's or a goal step's — **MUST** tell her how many hands she has left, so she
+  can plan the rest rather than spend the allowance reading and reach the answer with none.
+  A goal the stock-take files is worked under the goal step's cap (§26.2), not the job's: on
+  7 Oct the night itself chained nothing and the goal it filed spent twelve hands the next tick.
+- **What a night wrote reaches the journal as its conclusion.** The desk is not indexed and the
+  journal is, so a job's journal line is the only part of its writing that recall, consolidation
+  and the conversation ever see — and "wrote a diary entry for <day>" told them only that one
+  existed. The diary is asked, after its own prompt, for a closing `takeaway:` line; it is taken
+  off the entry and journalled as "what I took from <day>: …". The instruction is appended in code,
+  as `STRATEGY_OUTPUT` is, because `vault/dreams/diary.md` replaces the prompt text for every vault
+  seeded since that folder existed. The stock-take journals the reason for the goal it filed, or
+  the close of its reflection.
 - **Priority order over one shared budget — and one job may declare its own lane.** Jobs run
   highest-priority first and share `MIND_DREAM_TICK_TOKENS`; `consolidate` runs first because the
   others read `facts.md`. A job with `own_budget` is billed instead against
@@ -1916,18 +2347,32 @@ written from a vault alone.
   beside `ask()` and `put()`, backed by the `Researcher` the runtime already built (§7.7) — so a
   night reaches the web through the same `SearchProvider` and `PageFetcher` seams a turn does,
   with the same SSRF validation, and both have offline fakes. A page she reads at night **MUST**
-  be shelved like one she reads at noon (§7.7's *what she reads she keeps*), unless the job file
-  says `shelve: false`.
+  be kept as source evidence like one she reads at noon (§7.7), unless the job file says
+  `shelve: false`. DREAM source pages **MUST** be archived without embedding (§20.1).
+  Raw source pages **MUST NOT** be retrieved into ordinary context (§20.2).
+  A successful report **MUST** also become a stable topic page keyed by job name; a later run
+  **MUST** see that page and revise it from newly opened sources, retaining sourced useful findings
+  and resolving stale or conflicting ones. The page **MUST** tell the writer to synthesize rather
+  than copy fetched text, cite source URLs beside material claims, and include a deterministic list
+  of pages opened. A visibly cut-off writing call **MUST** get one shorter rewrite from the same
+  evidence; if that also ends mid-sentence, the draft **MUST** remain on the desk marked incomplete
+  and **MUST NOT** replace the topic page. A dry run or empty report **MUST NOT** update the topic
+  page.
 - **Agentic, and hard-bounded.** She chooses each next search from what the last one returned,
   because following the one thing that turned out to matter is most of what makes research worth
   reading — and a fixed query list cannot. The cost of that is every way an unattended loop goes
   wrong at 4am, so the failure mode **MUST** always be a *shorter report*, never no report:
   `max_steps` rounds, `max_searches`, `max_pages`, a context ceiling, and a write step that runs on
   whatever was gathered even when the loop raised. A loop that raised with **nothing** gathered
-  re-raises, so the day stays unmarked and it retries.
+  re-raises, so the day stays unmarked and it retries. A search requested after `max_searches`
+  **MUST** be refused as one move, leaving later rounds to open an already found result; exceeding
+  the search cap **MUST NOT** end the night while opened pages are still below `min_pages`.
+  `max_pages` **MUST** count pages with readable text, not failed fetches; every failed fetch still
+  spends a `max_steps` move and repeated URLs remain refused.
 - **Stopping early means *she* stopped reaching — never that the web failed to cooperate.** Two
   consecutive rounds in which she reached for nothing end the night, and a dead page, a paywall, a
-  page that needs a browser and a repeated URL **MUST NOT** count among them. This is not a
+  page that needs a browser and a repeated URL **MUST NOT** count among them. Quiet rounds
+  **MUST NOT** end a run before `min_pages` readable pages have been gathered. This is not a
   refinement: against the real web the first version ended a night two steps into a twelve-step
   budget — one search, one Morningstar page that returned zero characters, one retry — and wrote
   nothing. Those failures are bounded by `max_steps` and the caps, which is enough. A bare thought
@@ -1989,7 +2434,10 @@ written from a vault alone.
 - **One catalog, one parser, shared with §26.** The rounds use `hands.py`'s `parse_intent` and its
   one-line-of-intent format rather than the conversational marker grammar, for the reason that
   file gives: a reply is a stream she is talking through and a tick is not, and anything
-  unparseable **MUST** fail safe towards thinking rather than towards an error.
+  unparseable **MUST** fail safe towards thinking rather than towards an error. No call declares
+  tools, so a model trained on its own call markup sometimes writes that instead of the `use` line
+  (DeepSeek's DSML). It **MUST** be read as the same call when the hand is offered, and stripped
+  from the thought when it is not: journalled as a thought, it went into her memory verbatim.
 - **Every round is told what is left of the night.** The move, search and page counts still
   standing ride in each round's prompt. A model that cannot see its budget spends it: the first
   full live night went all twelve rounds without once saying it had enough, five of them bare
@@ -2066,12 +2514,14 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
 `pending → active → waiting → done | abandoned`.
 
 - §22.1 **Goal genesis is designed, not assumed.** Sources, stamped as provenance: the user's
-  explicit asks (`user:remind-me`, scanned from their turns); **her own promises**
+  explicit asks (`user:remind-me`, scanned from their turns, and `user:chat`, created through
+  the conversational `create_goal` hand when they explicitly ask to set or add a goal); **her own promises**
   (`promise:her-own-words`) — REFLECT scans every committed reply for first-person commitments
   ("I'll look into that") and files each one, because a companion who forgets her own promises is
   worse than one who forgets yours; maintenance (DREAM backlog, shelf drops); and **her own
   judgement** (`strategy:<day>`) — the night's stock-take (§21.2) already asks her for the one thing
-  worth doing next, and MAY file it. A companion whose every intention traces back to something the
+  worth doing next, and MAY file it — a goal step's (`goal:<id>`, §22.1c), and her free time's
+  (`muse:<day>`, §22.7). A companion whose every intention traces back to something the
   user said is a queue with a voice. Near-duplicate open goals **MUST** merge, not multiply —
   **except a goal that names a parent** (`followup:<id>`, the news half of a kept promise). That
   one is a second act about content she already has a goal for, so its words are the wrong test:
@@ -2089,6 +2539,9 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   the goals page stays a thing you read *before* the fact. At most `MIND_SELF_GOALS_MAX` of hers may
   be open at once; each is filed `open-minded` with a due date so §22.2's `reconsider()` lets go of
   what she never advanced; and `MIND_GOAL_FILING_ENABLED` **MUST** take effect without a restart.
+  The stock-take's answer is read from the object it opens with, whatever follows it; one that
+  opens as an object and still cannot be read **MUST** be reported as unreadable — never as a
+  night that chose nothing — and its raw text **MUST NOT** become her strategy note.
   The cap bounds how many she may hold, **not how many times she may hold the same one**, so she
   **MUST NOT** file a goal she is already carrying under another wording — measured against every
   open goal, whatever filed it, because where the first copy came from does not change that she has
@@ -2116,7 +2569,46 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   ever a `task`, so goal work and her hands had no subject and she talked about work she had not
   done. **A `task` she finishes on her own promise MUST file the news half** (`followup:<goal>`,
   `open-minded`) rather than closing silently, or the split loses the half you were waiting for.
-- §22.1c **A promise made in German is a promise.** Every opener the scan knew was English, so a
+  Quoted examples of first-person promises **MUST NOT** become candidates. Semantic review
+  **MUST** receive the tool outcomes from the completed turn and **MUST NOT** accept narration as
+  proof of an action: `list_notes` proves an index, `read_note` proves only its returned path and
+  range, and a quantified claim requires outcomes covering its scope. Errors and denials prove no
+  work completed; a `status: started` result proves dispatch, not the eventual product. Pending
+  reviews **MUST** retain this evidence across retry and restart. A promise whose future delivery
+  is owned by a successful `set_timer` call **MUST** retain that timer id (and its real due time)
+  and becomes `done` when §7.5 delivers the timer announcement, not when REFLECT files it or the
+  countdown merely elapses. While linked it is not independently actionable goal work.
+- §22.1c **A goal step may file a goal, and what it reads back is what was filed.** `create_goal` is
+  one of her hands (§26.1), so a goal step may reach for it; the mind **MUST** then file the goal
+  itself, as `ToolBrain` does for a reply (§7.5), because the tool server only validates. Before
+  this, a step that used it read the server's `ready`, journalled `ok`, and nothing was filed — the
+  audit, the trace, her desk and the journal all said a goal existed that did not. The goal is
+  stamped `goal:<parent id>` and filed like the night's own (§22.1b): `open-minded`, with a due
+  date, ranked under a promise, marked hers on the inner-life surface, and refused while
+  `MIND_GOAL_FILING_ENABLED` is off. A parent **MUST** have at most one such goal open, and a goal
+  filed this way **MUST NOT** file another — the bound that keeps a step from growing the list by
+  a goal per tick. It **MUST NOT** file a goal she is already carrying (the rewording test against
+  every open goal but its parent, which it quotes by nature) or DREAM's own work (`night_owned`).
+  A refusal is a denial she reads, audited before anything is spent. A filed or already-carried
+  goal **MUST** come back to her with its real id, and the audit line and the journal **MUST**
+  record the goal as filed, not the contract. A night job is not offered `create_goal`: the
+  stock-take is how a night files a goal, and a hand every call of which is refused is not one to
+  describe (§26.1).
+- §22.1d **A goal she files is a title, she is told so before she writes one, and fixing it is
+  free.** The text of a goal filed with `create_goal` — from a goal step (§22.1c), free time
+  (§22.7) or a handed document (§34.6) — **MUST** be one line of at most `GOAL_TEXT_MAX` (**200**)
+  characters with no `|`, and its kind `task` or `reach_out`; one check (`goal_shape_refused`)
+  says so on every path. Her reasons are not the goal: they are the `think` line above the call,
+  which free time and a handed document keep as the goal's `rationale`. The limit **MUST** be
+  stated where she reads the hand — its example row — and in the free-time and handed-document
+  instructions, because live, 3 Oct, she filed a 374-character goal with the rule written nowhere
+  she could see it. A shape refusal is checked before anything is dispatched or spent, and is the
+  one refusal she can fix by writing the same call again; so it **MUST NOT** cost one of the
+  step's or sitting's calls, up to `GOAL_REWORDS` (**3**) per step — the same sitting had made
+  that refusal its sixth and last call, and ended with the goal she had decided on unfiled. Past
+  three, a shape refusal costs a call like any other, so a model that cannot shorten a line is
+  not asked again forever.
+- §22.1g **A promise made in German is a promise.** Every opener the scan knew was English, so a
   companion who answers in German could commit to nothing the store would keep: given a task and
   answering "Ich mach's fertig und meld mich", she filed no goal, the turn ended, and the work was
   gone — and the one promise of hers the store ever did keep was kept because she had switched to
@@ -2155,12 +2647,33 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   a machine left on.
 - §22.3 **The lifecycle is used, not decorative.** A goal becomes `active` on its first working
   step and stays there across ticks; it becomes `waiting` when it is blocked on the user or on work
-  it dispatched and will not await (§7.6); it becomes `done` only when a step says so in as many
-  words. Each step's product **MUST** be written to `workspace/goals/<id>.md` as well as journalled,
+  it dispatched and will not await (§7.6), or on a message it decided to send (§18.2b); it becomes
+  `done` only when a step says so in as many words — and a step that said so beside `tell_them` is
+  done when that message is delivered, not when it is queued. A done-mark on an answer that also
+  writes out a call which did not run — a hand she was not offered, or one dropped past the step's
+  cap — **MUST NOT** finish the goal: that is a finish she narrated, not one she did, and the desk
+  **MUST** say which hand never ran. Live, a whole chain glued into one paragraph ran nothing and
+  closed its goal on "skill written, verified" about a skill that did not exist. The step's journal line **MUST**
+  carry where the step ended (her last `think` line, else the note's closing sentences), not how it
+  began: the journal is what recall and the night read, and the first 160 characters of a step
+  that opened in scene were the one part that said nothing. Each step's product **MUST** be written to `workspace/goals/<id>.md` as well as journalled,
   and the next step **MUST** read it back — a private step that starts from the goal's one-line text
   every time is a goal that never advances. A `list_notes` result **MUST** be kept whole on that
   desk file: clipping the catalog to a sentence is the same failure as truncating the tool, one
-  tick later. The horizon is bounded by `MIND_GOAL_MAX_STEPS`
+  tick later. A step **MUST** write its desk file **once**, at its end, however many calls it
+  chained: her words for the step, then — under the line `done in this step:` — one line per call
+  naming the hand, what it touched (a path, a skill, a query) and whether it worked, with the last
+  sentence of her reason beside a change and none beside a read. An entry per call was seven
+  entries in twenty seconds, each carrying the goal's whole text and a clip of raw JSON, and since
+  the next step reads the desk back from its tail it saw only the last step's calls and redid the
+  work the entries before them recorded. Readers that want her words (§34.5's block, a follow-up's
+  cue, §18) **MUST** stop at that line. A step **MUST** be told its own desk file by path — in what
+  it is told about the goal, from its first step, before the file exists — and that the file is
+  written for it, and the section that reads the file back **MUST** name the path too; wherever the
+  desk is listed with the goal store in reach (a step, free time, a handed document, a reply), each
+  `goals/<id>.md` **MUST** say whose goal it is and in what state. Unnamed, and with five goal
+  files listed by id alone, a skill goal's first step took the newest — the finished diary goal's —
+  for its own and logged its progress there twice. The horizon is bounded by `MIND_GOAL_MAX_STEPS`
   (`meta.steps`), after which the goal waits or the commitment strategy lets it go.
 - §22.3a **A step that reads gets what it read.** `list_notes` was the first catalog to be kept
   whole; a read is the other. The desk line clipped every result to 160 characters, and that line
@@ -2168,12 +2681,13 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   the first words of its description and nothing of the method. She opened her own Elecrow skill
   seven times in three days, each time looking for one parameter name it held, and never saw a
   line of its body; guessing `app=` for `name=` then cleared the autostart she was trying to set.
-  A read (`read_skill`, `read_note`, `device_read_app`) **MUST** therefore reach the goal's next
-  step whole, up to a bound (16,000 characters), as its own block and not on the desk: the desk
-  keeps the one-line trail, because a file that grew by a whole skill each time she read it would
-  soon be nothing but skills. The block is spent by that next step, after its call — not when the
-  context is assembled, which is also how a page shows a step — and it **MUST** survive a restart,
-  since steps are an hour apart. The conversational path had the same hole one layer up: the
+  A read (`read_skill`, `read_note`, `device_read_app`) **MUST** therefore reach the step that
+  made it whole, up to a bound (16,000 characters for a skill or an app): since a step chains its
+  hands (§26.2) the text comes back as that hand's own answer in the same step, cut no lower than
+  the Guard's bound for the tool, and the desk keeps the one-line trail, because a file that grew
+  by a whole skill each time she read it would soon be nothing but skills. (Before steps chained,
+  this installation carried the text into the goal's *next* step instead; that block is gone, the
+  rule it served is not.) The conversational path had the same hole one layer up: the
   Guard's 600-character result cap applied to `read_skill` and `device_read_app` as to any fact,
   and those two **MUST** take the catalog bound instead, like `read_note`.
 - §22.4 **A working step gets the same context as a conversational turn.** The desk digest, the
@@ -2199,16 +2713,77 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   built from the goal's own text, which is itself indexed, so recall's best matches are echoes of
   the prompt above it — and holding the exchange `about` was copied from is what lets MMR suppress
   the *reply* to it as a near-duplicate. A recalled memory quoting the probe **MUST** be dropped.
+  **And the plan she filed it with**: a goal the night's stock-take filed (§22.1b) carries a
+  rationale, the evidence behind it, a first bounded action and an observable finish, and a reviewed
+  promise the first and last; a working step **MUST** be shown whichever of those the goal has, since
+  a step handed the title alone reconsiders the objective from scratch rather than doing what she
+  had already decided to do first. A field that only restates the goal's text is not a plan and is
+  left out.
+  **And what previous attempts actually did**: the six most recent goal attempts **MUST**
+  persist on the goal, each bounded to 400 characters, with timestamps, action outcomes
+  and any Gate 2 outcome, score and blocking reason. Working steps and reach-out composition
+  **MUST** receive this history newest-last. REST ticks **MUST NOT** displace it. The prompt
+  **MUST** distinguish attempted work from completion and a blocked reach-out from delivery;
+  history is context for progress, never permission to bypass an interrupt gate.
 - §22.5 **Provenance covers dispatched work.** `meta.dispatched` names the tool a `waiting` goal is
   blocked on and when it went out; `task_completion` (§16) returns the goal to `active`, and a
   scheduled `wakeup` is the floor under how long it may be stranded by a run that never reports.
+  The same return path closes explicitly-linked conversational work (§7.5): a successful
+  `task_completion` carrying `complete_goal` may move any open lifecycle state to `done`; failure
+  never does, and an unlinked conversational product remains an observation rather than a guessed
+  goal transition.
   Maintenance provenance (`maintenance:shelf`, `maintenance:dream`) is created for **standing**
   leftovers only: ingest and DREAM remain cheap impulses, and the goal that stands for a leftover
-  closes itself when the leftover clears.
-- §22.6 **Her open goals are in the conversational prompt** (§7.1, block 5b). Without them the
+  closes itself when the leftover clears — immediately, from whichever path cleared it (the
+  impulse act, the goal's own working of it, or a night run by hand), not only at the next
+  morning's reconciliation. For DREAM the timing is load-bearing: the daily reconciliation runs
+  at the local-midnight rollover, the very tick yesterday's journal becomes new backlog, so it
+  alone can never observe the leftover cleared while any conversation happens.
+- §22.6 **Her open goals are in the conversational prompt** (§2.1, block 5b). Without them the
   talking-self and the intending-self are two people who have never met, and she re-promises what
   she is already working on. The block is droppable on overflow — last, after the lorebook — and
-  `USER.md` never is.
+  `USER.md` never is. Every shown goal is still open: `waiting` means blocked, not done, and
+  `workspace/goals/*.md` are working notes rather than the standing list. A goal holding a
+  picture nobody has seen says so on its line (§18.2a). A surviving block
+  **MUST** mark itself `COMPLETE` only when every open goal is present; if `GOALS_IN_PROMPT` or
+  overflow omitted any, it **MUST** mark itself `PARTIAL` and forbid presenting the snapshot as a
+  complete review. A goal-status request **MUST** repeat that same snapshot on the post-history
+  user turn and **MUST NOT** advertise or execute `list_notes`, `read_note`, or
+  `count_note_lines`; those inspect work products, not the lifecycle store the question asks
+  about. The host **MUST** deny a copied marker before MCP execution and return the model to the
+  standing list — this is policy, not prompt compliance.
+
+- §22.7 **Free time: an empty list is not a stop condition.** Every other source of intention is
+  something happening — a signal, a promise, a goal the night filed, a leftover — so a mind whose
+  list had run dry rested until spoken to: live, her one goal closed at 02:14 and every tick for the
+  next seventeen hours was `DORMANT → REST`, nothing sensed and nothing that ever could be. When no
+  appraisal crosses gate 1, no open goal is merely cooling down between steps (a working goal that
+  would clear gate 1 once its consider cooldown is up — that is work in progress; one that never
+  would is stuck, and free time is for exactly that case; a `reach_out` is neither, since Gate 2 may
+  hold one all night), no goal an earlier sitting filed (provenance `muse:`) is still open — her
+  list then holds something of her own, and live, three sittings two hours apart found the
+  selfie goal Gate 2 was holding and filed it again in new words —, the state is IDLE or DORMANT
+  with no turn in flight, `UTILITY_ENABLED` is on, budget pressure is under 0.75, and `MIND_MUSE_COOLDOWN_S`
+  (**7200**; 0 = never) has passed since the last sitting, APPRAISE **MUST** offer the `muse`
+  impulse, scored exactly at `MIND_ACT_THRESHOLD` so it can never outrank anything that crossed it.
+  The act (`mind/muse.py`, correlate kind `muse`) is one soul-carrying call (§22.4) handed her
+  recent days — the situation, the last lines said, her journal for yesterday and today (without
+  a goal step's per-call `reached for` lines or their `wrote up where I got to` echo, and with a
+  line written more than once kept only at its last time: live, those were most of the lines she
+  was shown), the goals
+  she finished or let go of, what is still on her list, her desk, skills, shelf, durable facts, and
+  what she concluded in her last free time — and asked, in her own voice, what is worth doing next.
+  Its one consequential answer is a goal: `create_goal` is always offered while
+  `MIND_GOAL_FILING_ENABLED` is on, and is filed by the mind itself (not the tool server, so it works
+  with her hands off) with provenance `muse:<day>`, `open-minded`, a three-day due date and the
+  step-goal priority, under the same limits as the night's — one cap shared with `strategy:`
+  goals (`MIND_SELF_GOALS_MAX`), the rewording test against every open goal, `night_owned` refused
+  — and at most one per sitting. Her reason above the call becomes the goal's `rationale`, so its
+  first step starts from what she decided. Before deciding she **MAY** read her own desk and skills
+  (`list_notes`, `read_note`, `count_note_lines`, `read_skill`, when offered, up to six calls);
+  nothing else, because anything that changes the world is a goal's step (§26.2). A sitting that
+  ends on a thought alone is kept, on `workspace/free-time/<day>.md` and in the journal. The
+  cooldown is stamped when the sitting starts, so a failed one is not retried next tick.
 
 ## §23 — The SOUL split and gated self-edits
 
@@ -2258,15 +2833,23 @@ The product half of autonomy: what converts an always-on process from creepy to 
   `POST /api/mind/edits/{id}` (`{"approve": bool, "content"?: str}` → a signal, §23.2). Each pending
   edit in the snapshot **MUST** carry `diff`, its changed lines against the file as it stands: a
   whole-file proposal whose change is two lines at the bottom must show those two lines, not the
-  file's opening. The browser page's chat column
-  grows a second tab — **inner life** (`web/js/mind.js`): right-now state and budget, edits waiting on
-  you (what each changes, the whole file folded under it, one-click approve/reject, and an edit
-  control that lets you rewrite it before approving), goals with provenance and a one-click control
-  that opens the matching desk file (`workspace/goals/<id>.md`, §22.3) through
-  `GET /api/mind/workspace/file`, the shelf, and the journal,
-  refreshed live off the same one bus (`journal`/`mind` events). Everything reads *through* the mind's
+  file's opening. The browser page's chat column grows a second tab — **inner life**
+  (`web/js/mind.js`) — organized into three stable views rather than one growing feed: **Now**
+  carries right-now state and budget, the §7.5 pending timers, work currently reading or held,
+  and edits waiting on you (what each changes, the whole file folded under it, one-click
+  approve/reject, and an edit control that lets you rewrite it before approving); **Plans** carries
+  goals with provenance and a one-click control that opens the matching desk file
+  (`workspace/goals/<id>.md`, §22.3) through `GET /api/mind/workspace/file`, system upkeep and the
+  shelf; **History** carries completed research and the journal. The selected view **MUST** survive
+  live refreshes. The surface is refreshed live off the same one bus (`journal`/`mind`/`timers`
+  events). Everything reads *through* the mind's
   own stores; the dashboard can never disagree with the files. The snapshot **MUST** name each
-  goal's `desk` path so the panel does not invent it.
+  goal's `desk` path so the panel does not invent it. It carries `next_tick_at`, the epoch second
+  the loop's current sleep ends (a signal may wake her sooner, never later; null before the first
+  sleep), and two counts the **Now** view keeps apart: `spoke_first_today`, every line of today's
+  conversation tagged `proactive` — the chat's own "she spoke first", a greeting included — and
+  `interrupts_today` of `interrupts_per_day`, the §18 reach-outs Gate 2 spent, which **MUST** read
+  zero once her local day has rolled even if no reach-out has run since.
   Cached goal previews **MUST** be invalidated by workspace events, including
   missing-file results; reopening a missing file retries it. An invalidated fetch
   **MUST NOT** overwrite a newer preview when its response arrives late.
@@ -2293,10 +2876,16 @@ The product half of autonomy: what converts an always-on process from creepy to 
   is her effective `MIND_ACT_THRESHOLD`, never a default. A row without an id gets one derived from
   its content, not its position, so rotation cannot move a bookmark onto a different record; and the
   single-record lookups (`…/debug/ticks/{id}`, `…/debug/prompts/{id}`) fall back to the `.1`
-  generation, because the graph links into it. A tick's detail **MUST** describe the tick in the
+  generation, because the graph links into it. The Context section's day index and per-day lists
+  (`…/debug/prompts/days`, `…/debug/prompts`) **MUST** read both generations as one newest-first
+  log: the prompt log rolls whole, and its live file is recreated only by her next model call, so an
+  index that read the live file alone would go blank on every quiet day after a roll. A tick's detail **MUST** describe the tick in the
   same shape and sentence the graph does. The six views share one loaded window, one range, one set
   of kind filters, one search and one selection, all carried in the hash; a bus event that means new
-  records marks them stale and says so, and **MUST NOT** redraw them under the reader.
+  records marks them stale and says so, and **MUST NOT** redraw them under the reader. A successful
+  manual reload **MUST** clear the stale notice; when the visible range reached the previous window's
+  newest edge, it **MUST** advance to the new edge while retaining its duration. A range focused on older
+  records **MUST** stay in place.
 
 ## §25 — Config (the mind's knobs)
 
@@ -2308,10 +2897,13 @@ timeouts `MIND_{ENGAGED,IDLE,DORMANT,DREAM}_CADENCE_S`, `MIND_ENGAGED_TIMEOUT_S`
 `MIND_DREAM_START_HOUR`/`END_HOUR`; and the reflex windows `IDLE_SETTLE_S`, `IDLE_ACT_MIN/MAX_S`,
 `IDLE_TALK_MIN/MAX_S` (§15.5). Her desk (§34): `WORKSPACE_ENABLED`, `WORKSPACE_DIGEST_FILES`,
 `SKILLS_ENABLED`, `TOOL_RATE_DESK`. The goal lifecycle (§22.3): `MIND_GOAL_MAX_STEPS`,
+`MIND_GOAL_MAX_HANDS` (§26.2),
 `MIND_DISPATCH_TIMEOUT_S`, `GOALS_IN_PROMPT`; and goals of her own (§22.1b):
-`MIND_GOAL_FILING_ENABLED` (**true**) with `MIND_SELF_GOALS_MAX`. Her hands in the loop (§26) — every one of these is
-inert until the first is true: `MIND_TOOLS_ENABLED` (**false**), `MIND_TOOL_ALLOWLIST` (**empty**),
-`MIND_TOOL_CALLS_PER_DAY`, `MIND_TOOL_PRESSURE_CEILING`,
+`MIND_GOAL_FILING_ENABLED` (**true**) with `MIND_SELF_GOALS_MAX`; free time (§22.7):
+`MIND_MUSE_COOLDOWN_S` (**7200**). Her hands (§26.1) — one rule for
+every call she makes, in a reply or on her own: `MIND_TOOLS_ENABLED` (**true**),
+`MIND_TOOL_ALLOWLIST` (**`*`**, every hand the machine can offer), `MIND_TOOLS_DURING_CHAT`
+(**auto**), `MIND_TOOL_CALLS_PER_DAY` (**64**), `MIND_TOOL_PRESSURE_CEILING`,
 `MIND_TOOL_COOLDOWN_{CHEAP,EXPENSIVE}_S` plus the per-tool `MIND_TOOL_COOLDOWN_S` override, and the
 mind guard's own buckets `TOOL_RATE_MIND_{DESK,WEB,CAMERA,OTHER}`. The self-edit door (§23) is
 rationed by `TOOL_RATE_SELFEDIT`. The DREAM pipeline's per-job switch is not a knob but a file:
@@ -2330,7 +2922,7 @@ measurable and reversible. The port is **8768**.
 This is a reference implementation of *initiative*, not the fully productised runtime. **No sandboxed
 workshop**: no code execution, no shell, no build step, no wiki authoring — the heavy hands remain
 the named next rung, and §23.2's gate is where their products would cross into the mind. (Autonomous
-*reading* is no longer in this list: §26.1–§26.5 below ship it, default-off. What a sandbox is for is
+*reading* is no longer in this list: §26.1–§26.5 below ship it. What a sandbox is for is
 running code, which is a different threat model from fetching a page.) **No multimodal sensing**: SENSE reads text, time, files, and its own completions — no vision,
 no prosody — which is enough to prove an interrupt threshold can stay silent. **The world model stops
 at the snapshot**: no temporal knowledge graph, no multi-hop queries (§19.1 names the stage). **One
@@ -2349,18 +2941,25 @@ broker that comes with the workshop." That was wrong about where the difficulty 
 already here — `ToolBrain._execute` does allowlist → rate bucket → dedupe → timeout → truncate →
 audit → host realisation, never raises, and has no dependency on the streaming loop that calls it.
 What was actually deferred was **policy**: which hands, where the product lands, what stops a
-repeat, who pays, and how the answer comes back. `yurios/mind/hands.py` answers those five, and the
-capability ships **off** (§26.1). The omission that remains is the *workshop* — code execution and
+repeat, who pays, and how the answer comes back. `yurios/mind/hands.py` answers those five, under
+the one rule every call she makes obeys (§26.1). The omission that remains is the *workshop* — code execution and
 a shell — which is a different capability with a different threat model, and the one that genuinely
 needs a sandbox.
 
-- §26.1 **The mind's hands are default-off, and off means invisible** (normative). Two switches in
-  series, the §18.4.6 notify pattern: `MIND_TOOLS_ENABLED` (house, **false**) says whether anything
-  on this machine may reach for a tool unasked, and `LoopSwitches.hands` (per-character) says
-  whether she is one of the ones that may. A character **MUST NOT** be able to talk her way past the
-  house switch. `MIND_TOOL_ALLOWLIST` names the permitted tools explicitly — no wildcard, no
-  inheritance from the conversational allowlist, **empty by default even when the switch is on**.
-  An explicit allowlist is a debt to whoever has to write it: the hands are one table
+- §26.1 **One rule for every call she makes, and off means invisible** (normative). A hand is
+  usable — in a reply, a greeting, a murmur, a reach-out, a goal step or a night's job alike —
+  exactly when three things hold: the house switch `MIND_TOOLS_ENABLED` (**true**) is on, her own
+  `LoopSwitches.hands` is on (in series, the §18.4.6 notify pattern: a character **MUST NOT** be
+  able to talk her way past the house switch), and `MIND_TOOL_ALLOWLIST` admits it. There is no
+  separate conversational set: her hands in a reply and on her own are the same hands, and turning
+  hers off takes them out of every prompt. The allowlist is `*` by default — every hand this
+  machine can offer, including one a later build adds, and every tool a mounted server (§7.2)
+  discovers — or explicit names; **empty means none**, because empty is what unticking every box
+  saves. The chat-only tools (`play_music`, `create_goal`, `propose_edit`, `delete_skill`) are rows
+  in the table like the rest. What she does *on her own* stays metered by §26.3–§26.4; a reply to
+  you is metered by §7.3. This replaces "default-off, empty by default": a room that had hands and
+  a mind that did not was two people, and the switch that said which was not one anybody could
+  find. An explicit allowlist is a debt to whoever has to write it: the hands are one table
   (`hands.HANDS` — cost class, what each one does, its example arguments, the backend it needs),
   and both settings surfaces **MUST** publish that vocabulary rather than offer a text box (§11).
   A hand dropped because its backend is off **MUST** say so, once, in the log: "she never
@@ -2370,20 +2969,66 @@ needs a sandbox.
   into her config at start: hers is a *live* switch (§26.5), and a config that had absorbed a
   `false` could never be told `true` again without a restart — so her config carries the house's
   word, and the grant the switchboard writes lives on the runtime.
-- §26.2 **A call is a step of a goal, never free-floating.** A `tool_step` act is reachable only
-  from `_act_goal_work`, and every call carries the id of the open goal that wanted it — so
-  `goals.md` stays the complete, readable list of what her hands might do. At most **one** call per
-  tick (§15's one-intention rule, applied one level down). The step's verdict in the tick trace
-  **MUST** be the call's verdict in `calls.jsonl` — `ok`, `denied` or `error` — and a call that
-  did not succeed **MUST NOT** be realised or counted as dispatched.
+- §26.2 **A call on her own is a step of her own work, and a step may chain.** She reaches for a
+  hand unasked in exactly two places: a goal step (`_act_goal_work`), where every call carries the
+  id of the open goal that wanted it, and a DREAM job written in her own voice (`soul: full`,
+  §21.2) — extraction jobs (consolidation, fact lists, summaries for search), the `selfie` job
+  (§21.2) and a dry run never get hands. Free time (§22.7) is not a third: it may only *read* her desk and skills before it
+  decides, and what it decides to do is filed as a goal and done in that goal's steps. One tick is still one intention (§15), but the step it takes is worked as far as her
+  hands go: she answers with a `use` line — a `use <hand> {` run onto the end of a sentence is the
+  same call, and **MUST** be read as one (live, GLM wrote a whole chain as one paragraph and none of
+  it ran); mid-line the brace is what separates a call from prose about one — the hand runs through
+  every precondition below, its
+  result comes back as the next message, and she is asked again — until she ends on prose or
+  the step's calls are spent, past which a `use` line is dropped rather than run
+  (`mind/handwork.py`). A goal step's calls are `MIND_GOAL_MAX_HANDS` (**4**), a night job's its
+  `max_hands` (§21.2), and both **MUST** stay within `TOOL_MAX_CALLS_PER_TURN`, the number a
+  reply gets; the clamp is applied where the call is made, and the number her prompt states **MUST** be
+  the clamped one. A step has its own number because each round resends the whole step: on 7 Oct a
+  goal the stock-take had filed, under the reply's sixteen, read her desk ten times and listed it
+  once before writing a single note — twelve hands, ~113k tokens of a 200k day in one tick. A step is shown each hand as one example line (`HANDS[tool].args`) and
+  never the tool's description, so that example **MUST** name every argument she needs to use the
+  hand fully; one it leaves out is listed, with its reason, in
+  `tests/test_mcp_contract.py::UNSHOWN_TO_THE_MIND`, which fails on any other. `read_note` shown
+  with a path alone is how she paged a 206-line document by deleting each page she had read. A done-mark beside any call in the step that ran finishes the goal (one
+  beside a call that did not is §22.3's narrated finish) — beside
+  `tell_them`, which is offered on every goal step and is not a hand (§18.2b), it finishes the goal
+  once the message is delivered, and `tell_them` ends the step as off-tick work does. What she wrote
+  *above* a `use` line is her reason for it; lines *below* it **MUST** be discarded, because they
+  were written before the result existed — live, they were results she had invented. Discarded
+  means from the step's transcript too: her turn goes back to her only as far as the end of the
+  call that ran, so a second call written under the first is asked for again rather than left in
+  the transcript with one result under both — live, she then wrote the missing result herself.
+  Work that
+  finishes off-tick (§7.6) ends a goal step early, and the goal waits for it. A research night
+  (§21.2a) offers her other hands in its rounds beside the web moves, each costing a move, and
+  never `research` itself. The trace names every call with its verdict — `ok`, `denied` or
+  `error`, the verdict in `calls.jsonl` — and a call that did not succeed **MUST NOT** be realised
+  or counted as dispatched.
 - §26.3 **Preconditions are checked in DECIDE, not ACT.** Switches, allowlist membership, the cost
   class against the current activity state, budget pressure against `MIND_TOOL_PRESSURE_CEILING`,
   the daily cap `MIND_TOOL_CALLS_PER_DAY`, and the fingerprint cooldown. A blocked hand **MUST**
   appear in the tick trace as a scored runner-up carrying its reason, not as an exception inside an
   act that already committed. Two cost classes: **cheap** (the desk, `set_timer`) is a step in goal
-  work and is allowed in any state except ENGAGED; **expensive** (`research`, `read_page`,
-  `web_search`, the two cameras) is one whole tick's intention and additionally requires its backend
-  to be configured, budget pressure under the ceiling, and DORMANT/DREAM **or** the user absent.
+  work and is allowed in any state. While she is ENGAGED, cheap hands **MUST** stand down when
+  `MIND_TOOLS_DURING_CHAT` says so: `off` always, `on` never, and `auto` (the default) exactly when
+  `UTILITY_MODEL` names a local route (`ollama/`, `lm_studio/`, `gguf/`). A local utility model is
+  the machine her reply is using, and it cannot do both; a hosted one can, so her hands keep
+  working through the conversation. An unrecognised value **MUST** be read as `auto`. **expensive**
+  (`research`, `read_page`, `web_search`, the two cameras) is one whole tick's intention and
+  additionally requires its backend to be configured and DORMANT/DREAM **or** the user absent —
+  including while she is talking, when the cheap hands are not standing down. The web hands
+  additionally require budget pressure under `MIND_TOOL_PRESSURE_CEILING`; the cameras **MUST NOT**.
+  The ceiling measures model tokens, and a web hand's result is read back into her prompts, so it
+  spends them; a render's cost is the image, which the token budget never counts, and the cameras
+  have their own rate bucket, the daily call cap and the fingerprint cooldown. Gated on tokens, a
+  selfie she had been asked for sat held all afternoon behind a ceiling her goal work had spent
+  (3 Oct). An expensive hand held back on those grounds while cheap ones are offered
+  **MUST** still be named in the step's prompt, as hers but waiting, with the reason (the room, or
+  the budget); a hand simply missing from the list reads as one she does not have, and live she
+  wrote on her desk that she had no web tool about a search that was only waiting for the room to
+  empty. A reach for a held hand anyway is refused with that same reason, not with the activity
+  state.
   Her tool server is spawned unawaited (§7.2), so the mind starts before her hands exist, and
   the first tick after a restart is the one carrying the suspend gap and every overdue wakeup.
   When her hands could be offered at all, that first tick **MUST** wait for discovery to answer —
@@ -2392,7 +3037,7 @@ needs a sandbox.
   has not answered yet **MUST** say *her hands are still starting*, not that no tool server is
   running: the second is the answer for a server that is absent or failed, and the trace must not
   report a restart as an outage.
-- §26.4 **Hard caps, absolute.** `MIND_TOOL_CALLS_PER_DAY` is a cap and not a governor: unlike
+- §26.4 **Hard caps, absolute.** `MIND_TOOL_CALLS_PER_DAY` (**64**) is a cap and not a governor: unlike
   `MIND_DAILY_TOKENS`, which is a post-hoc estimate, it is checked *before* dispatch and refuses.
   It rolls at local midnight beside `MIND_MAX_INTERRUPTS_PER_DAY`. For the mind and only the mind,
   budget pressure is likewise a precondition rather than an estimate reconciled afterwards.
@@ -2585,7 +3230,9 @@ changes; a runtime does not know it has neighbours.
   directory `fsync`, `characters/registry.py`), and an in-memory mutation that fails to persist
   **MUST** be rolled back, so the file on disk and the process never disagree. Persisted paths
   **MUST** be relative to `DATA_DIR` and **MUST NOT** escape it on load — a registry is portable,
-  and a path that climbs out of the tree is a rejected registry, not a warning.
+  and a path that climbs out of the tree is a rejected registry, not a warning. On a failed
+  upsert, rollback **MUST** restore the persisted row even if the caller mutated an in-memory
+  record before the write.
 - §29.3 **Ids.** A character id is 1–64 characters of lowercase ASCII, digits, `.`, `_` or `-`,
   derived from her display name, with `_v2`, `_v3`… appended when the name is taken. The id is
   the URL segment, the env-var suffix (§10.5) and the directory name — one identifier, everywhere.
@@ -2600,6 +3247,14 @@ changes; a runtime does not know it has neighbours.
   `failed` and its error kept for the board — one broken companion is never a down house. At boot
   the host starts every character that is `enabled` **and** `autostart` **and** not under review,
   and a failure there is skipped, not fatal. Shutdown stops runtimes in reverse start order.
+  Stopping a runtime **MUST** reject new turns and cancel or finish admitted HTTP and voice
+  turns before closing their model, voice, and memory dependencies or reporting Stop complete.
+  A turn whose reply has already posted is past cancelling: its post-turn writes **MUST** run
+  to completion, and Stop waits for them — for a text turn, for the whole turn, so its request
+  is answered as the turn it was. A request whose turn Stop cancelled is answered 503, and an
+  open voice socket is closed with 1012 (service restart), not dropped.
+  Disabling a running character through her profile **MUST** stop that runtime, including when
+  the same save changes a setting that would otherwise require a restart.
 - §29.6 **Archive and purge are different acts.** `archive` stops the runtime and *renames* her
   root under `archives/<id>-<timestamp>` — her files survive, she leaves the board. The archive
   folder **MUST** carry `archive.json`, a snapshot of the registry row (bindings, loops,
@@ -2654,6 +3309,12 @@ changes; a runtime does not know it has neighbours.
   frontmatter, `creator_notes` → `NOTES.md`, `name` → `soul.yaml`), and **MUST** commit the
   Vault. Prompts are assembled from the SOUL (§2.1), never from `card.json` — so an edit that
   did not reach the files would be an edit that did not happen.
+  The converse binds as hard: a save **MUST** rewrite only the fields it *changed*, measured
+  against what `GET …/profile` returned, never every field it carried. The profile route reads
+  `card.json`, which a SOUL edited in the studio can outgrow and a character seeded from
+  `soul-src/` does not have at all — so re-sending a value that was only shown can duplicate a
+  section the importer split, or replace `## Identity` with a blank. A blank `name` is not a
+  rename, and reaches neither the registry nor `soul.yaml`.
 - §30.5 **Export is identity, never intimacy.** An exported PNG carries her portrait with both a
   `chara` (V2) and a `ccv3` (V3) chunk built from `card.json` — identity, persona, scenario, lore.
   It **MUST NOT** carry `USER.md`, relationship memory, the corpus, traces, tool audit, selfies
@@ -2721,7 +3382,10 @@ changes; a runtime does not know it has neighbours.
   `models.options` (`temperature`, the reasoning switches, `MAX_REPLY_TOKENS`, `CONTEXT_LENGTH`…),
   coerced to that field's own type — the registry is JSON, and a value that will not coerce is
   dropped with a warning rather than taking her runtime down. A blank binding therefore means
-  *inherit*, which is what makes one `.env` still configure a house.
+  *inherit*, which is what makes one `.env` still configure a house. A model id written through
+  the API **MUST** be refused (400) when no provider could ever answer it — whitespace in it, or
+  an empty `/` segment — rather than saved and left to fail every turn after; whether the
+  server actually has that model is not checked at save time.
   **A named profile is the only custom connection grant**: a character record may select a
   profile but **MUST NOT** select an endpoint or environment variable directly. Character API
   writes carrying `endpoint` or `api_key_env` are rejected before any mutation. The profile's
@@ -2736,7 +3400,9 @@ changes; a runtime does not know it has neighbours.
 - §31.3 **Loop switches are per character.** `mind`, `utility` and `dream` are registry fields, not
   just `.env` knobs: one companion may be a fully autonomous mind while another is reactive-only.
   Toggling `mind` **MUST** take effect on the live runtime without a restart; toggling `utility`
-  or `dream` **MAY** restart her runtime, because they are wired at construction.
+  or `dream` **MAY** restart her runtime, because they are wired at construction. A mind switched
+  on live **MUST** be built exactly as one started at boot — in particular carrying her hands
+  switch (§26.1), since a fresh mind's hands default to granted.
 - §31.4 **Her brain settings change without a restart.** The model a character speaks through,
   its route, its key and its per-call knobs **MUST** be swappable on a running runtime: the
   providers are rebuilt from the live `Config` — which is *mutated in place*, since one object is
@@ -2750,9 +3416,9 @@ changes; a runtime does not know it has neighbours.
   which is what the gear in her room calls) is the surface. A profile save (§30.4) **MUST** take
   the same path rather than restarting whenever it left everything the runtime was *built* with —
   her name, her voice, her body, the utility and dream loops — where it found it. That decision is
-  made by comparing the record before and after the save, not by which keys were sent: the
-  switchboard posts the whole form every time, and re-submitting an unchanged voice is not a
-  reason to take her conversation down.
+  made by comparing the record before and after the save, not by which keys were sent: a client
+  may post the whole form, and re-submitting an unchanged voice is not a reason to take her
+  conversation down.
 
 ## §32 — The switchboard
 
@@ -2820,6 +3486,12 @@ changes; a runtime does not know it has neighbours.
   when the file is absent — a portrait the user replaced or the forge rendered is hers and is
   never overwritten. A missing packaged portrait is a cosmetic loss and **MUST NOT** fail a
   migration.
+- §33.5 **Her description reaches the board.** When a legacy SOUL manifest maps the card's
+  `description` to readable, exportable SOUL sections, migration **MUST** copy that resolved
+  description into the new character's display metadata. Later starts **MUST** fill this field
+  for an already-migrated character only while it remains blank; they **MUST NOT** replace a
+  nonblank profile description. An absent, broken, or runtime-only reference **MUST NOT** put
+  private SOUL content on the board or prevent migration.
 
 ## §34 — Her desk and her skills
 
@@ -2865,6 +3537,12 @@ the things she *is* and the wrong shape for the things she is *doing*.
   **MUST** say what a working path looks like: "denied" teaches nothing and the same path is tried
   again next turn.
 
+  `read_note` answers one page — whole lines, `NOTE_READ_MAX_CHARS` of them at most, within §7.3's
+  bound on the wire. Where she is **MUST** come before the text (`start_line`, `end_line`,
+  `line_count`, `next_start_line`, `truncated`), and `next_start_line` **MUST** name the line the
+  note goes on from, or be null at its end, so reading the rest is one more call and never an
+  edit. A single line longer than a page comes back as its start, with a `note` saying so.
+
   The tool server is a separate process writing straight to disk, so a desk write **MUST** be
   reported back to the host (`_realise` → `MindLoop._desk_written`), which marks the Vault dirty
   and journals it. Without that a note she wrote at noon lands in whatever commit fires next,
@@ -2876,12 +3554,52 @@ the things she *is* and the wrong shape for the things she is *doing*.
   loaded only through `read_skill`, once she has decided this is the skill the moment calls for.
   Twenty skills therefore cost twenty lines of context until one is used. The `description` is
   written as *when to reach for this*, not as a title. The desk gets the same treatment: the prompt
-  carries a listing of the newest `WORKSPACE_DIGEST_FILES` files, never their contents. A mangled
+  carries a listing of the newest `WORKSPACE_DIGEST_FILES` files, never their contents — the one
+  exception is §34.5's bounded block of her own recent thinking. A mangled
   `SKILL.md` **MUST** cost that one entry, never the block.
 
 - §34.4 **Nothing here executes.** The desk holds inert text. The coming code harness (§28's
   workshop) gets its own workspace **outside** the Vault precisely so that "she can write here" and
   "this can run" never become the same sentence, and its own skills folder for the same reason.
+- §34.5 **What is on her mind reaches the conversation, labelled.** Every conversational prompt
+  carries an `ON YOUR MIND` block (`Workspace.on_your_mind`): the close of her newest dated diary
+  entry and of her newest stock-take, each with its date, and the last words she left on the desk
+  file of each goal she is working (`active` or `waiting`; not a queued `told:` message, whose words
+  are already its title, and not the night's maintenance). Whole sentences within fixed bounds —
+  500 characters each for the diary and the stock-take, 240 for each of at most four goals — so it
+  costs a few hundred tokens a turn. Without it the self that talks never met the self that writes:
+  the goals block is titles, the digest is paths, and the desk is not indexed for recall. The block
+  **MUST** be labelled as her own writing and not a record of events, and **MUST** say that only
+  the conversation and the memory blocks can confirm that something happened — the desk has held a
+  diary entry describing a conversation that never took place (§18.2b), and shown unlabelled she
+  would have spoken as though it had. Building it never raises: a failure costs the block, not the
+  turn.
+- §34.6 **A document you hand her is hers to decide about.** The shelf (§20) is what she looks
+  things up in; this is the other thing a person does with a document, which is give it to
+  somebody. `POST /api/mind/workspace/inbox` (the files tab's desk, `yurios desk add`, §36.6)
+  takes one file under the shelf's rules for what a document is — `.md`/`.txt`, or a `.pdf` as the
+  `.md` of its text — writes it to `workspace/inbox/<name>` through the desk's own sandbox and
+  limits, and posts a `handed` signal (§16.2). It **MUST NOT** be indexed or retrieved: nothing
+  reaches her about it except that signal and her own reading. SENSE **MUST** note the arrival at
+  once, with no model — one journal line, and a persisted record (the bus is not replayed,
+  §16.4) that goes `waiting` → `read` (with when, and what came of it: the goal she filed or
+  her takeaway) or `gone` (taken off the desk first). She may read it before its sitting — in a
+  reply to you, or in a goal's step — and then it **MUST** go `read` on that call: a `read_note`
+  of its path that comes back `ok`, from either guard, and no sitting follows. The same path handed again holds one
+  record, waiting again. The inner-life panel (§24.3) lists them, unread marked, each openable;
+  only the oldest *read* records are let go to keep the list bounded. Then one *sitting* per document,
+  an impulse scored above a goal's priority and below a timer: shown the head of the document,
+  her list and her desk, she decides in her own voice what it means for what she is doing. She may
+  open her notes (the free-time review hands, §22.7, when her hands are on) and file at most one
+  goal; the sitting itself changes nothing else. A goal filed from it carries `handed:<path>` as
+  provenance and the path in its meta, and every step of it **MUST** be shown the document again.
+  It is not a goal of her own judgement — it traces back to what you did — so neither
+  `MIND_GOAL_FILING_ENABLED` nor `MIND_SELF_GOALS_MAX` applies to it. `MIND_INBOX_WAKE` decides
+  *when*: on (the default), from any activity state; off, only in `ENGAGED` or `IDLE` — noticed
+  now, decided once you are back. Either way it **MUST NOT** run during a conversational turn or
+  once the day's budget is spent, and a document taken off the desk before the sitting costs no
+  model call. With the mind off the file still lands, unannounced, and the route says so
+  (`noticed: false`).
 
 ---
 
@@ -2951,10 +3669,62 @@ The terminal is a first-class client of the host, not a second implementation of
   character directory (Vault, memory, journal, dreams, selfies, traces) under a new id. Export +
   import remains the identity-only duplicate. The copy is transactional: stage, rename, then the
   registry row. A clone of an approved companion **MUST NOT** be placed under review; a clone
-  still under review stays under review.
+  still under review stays under review. A running source **MUST** be stopped for the copy and
+  restarted afterward so the duplicate sees a quiet tree. The recursive copy **MUST** run off
+  the shared event loop; publishing the new registry row stays on the event loop. A source that
+  fails to restart is reported beside the clone's own answer, never in place of it.
 - §36.4 **The optimiser still proposes.** `yurios character optimize` (and `improve-setting`)
   **MUST NOT** write unless `--apply` is given. That is §30.6, applied to the terminal: a model
   pass on a card from the internet is a proposal a person then accepts.
 - §36.5 **Owner camera routes.** `POST /api/selfie` and `POST /api/picture` start a render on the
   running character's lab (§7.6) without a hand. They stamp `_deliver: "vault"`. The CLI may wait
   on `selfie_status` events or exit with the id (`--no-wait`).
+- §36.6 **Handing her a document.** `yurios shelf add <id> FILE…` uploads each file to the
+  running character's shelf (§20.1), one request per file so one refusal does not cost the
+  rest, and prints what each read will cost; `yurios shelf list <id>` prints the shelf.
+  `yurios desk add <id> FILE…` hands each to her desk's inbox instead (§34.6) and prints when she
+  will read it; `yurios desk list <id>` prints the desk. A path
+  argument **MUST** be resolved against the directory it was typed in, before `yurios`
+  changes into the installation.
+
+---
+
+## §37 — Rating her replies
+
+The corpus (§2.1) records every reply she makes; a 👍/👎 is the one judgement it cannot record on
+its own — whether that reply was any good. It is training data *about* her, for the export, and
+nothing else.
+
+- §37.1 **Only a reply with a record behind it can be rated, and the host says which.** A line
+  is rateable when it is hers and carries a corpus `turn_id` — a reply she made in a turn, by
+  voice or text. A greeting, a murmur, a reach-out, a selfie, a tool chip and your own words have
+  no record, and a frontend **MUST NOT** offer the control on them. It **MUST NOT** infer
+  rateability from `role` or `proactive` either: the host marks it. A history row (§2.6) carries
+  `rateable: true`, plus `thumbs` when a rating stands. A voice reply is filed before the socket
+  draws it, so its `message` event carries `rateable` itself. A text reply is drawn before the
+  turn persists, so the host publishes `rating` (`thumbs: 0`) for it once the record exists.
+  That gives one rule for the page and two orders on the host, the same split §2.6 already lives
+  with.
+
+- §37.2 **Rated by transcript id; resolved by the host.** `POST /api/rate {id, thumbs}` names
+  the line the page drew. `thumbs` is `1`, `-1`, or `0` to take a rating back, and the same
+  thumb pressed again sends `0`. The host resolves the id to the record. The page never holds a
+  corpus id, so it cannot file a rating against anything that is not a reply of hers. An unknown
+  line is a 404 and a line with no record is a 409. Every accepted rating is published as a
+  `rating` event `{id, thumbs}` (§10), so every open room shows the same thumb.
+
+- §37.3 **An append-only sidecar, keyed by turn id.** Ratings land in `corpus/ratings.jsonl`
+  (`yurios/app/corpus.py`) as `{id, thumbs, by, timestamp}`. They are never patched into
+  `turns.jsonl`, the last line about a turn wins, and `0` removes it. The file lives in
+  `corpus/`, which is personal data and a private surface. A rating **MUST NOT** reach a prompt,
+  the journal, her memory or the Vault: she is not told what you thought of her, and a rating is
+  not a turn.
+
+- §37.4 **The export joins them.** `scripts/export_corpus.py` reads one character's
+  `turns.jsonl` and `ratings.jsonl` and writes JSONL. `raw` is every turn record verbatim, plus
+  a `rating` object on the rated ones (`--rated-only` narrows it). `kto` is the rated turns as
+  `prompt` / `completion` / `label` — the conversational shape a KTO trainer reads. The export
+  only reads: it **MUST NOT** write under `corpus/` or the character registry (§36.1), and a
+  rating whose turn the log no longer holds is counted, not joined. This is the one deliberate
+  way the corpus leaves the machine, and it is the owner's to run; a card export still never
+  carries it (§30).

@@ -13,6 +13,7 @@ These pin both against the real files rather than against a copy of the table.
 """
 from __future__ import annotations
 
+import importlib.metadata
 import re
 import subprocess
 import tomllib
@@ -168,8 +169,12 @@ def test_the_cpu_torch_recipe_takes_torchaudio_from_the_same_index(monkeypatch, 
                     f"{path.name}: `{line.strip()}` installs torch without torchaudio "
                     f"— kokoro and silero-vad will fall back to fakes")
 
+    # Only torch and torchaudio are faked: anything imported for the first time
+    # while the patch is up (an order-dependent `mcp` lookup, once) asks too.
     versions = {"torch": "2.13.0+cpu", "torchaudio": "2.11.0"}
-    monkeypatch.setattr("importlib.metadata.version", lambda pkg: versions[pkg])
+    real_version = importlib.metadata.version
+    monkeypatch.setattr("importlib.metadata.version",
+                        lambda pkg: versions.get(pkg) or real_version(pkg))
     assert "libcudart" not in doctor.torch_pair_mismatch()   # no scary strings, just the fix
     assert "whl/cpu" in doctor.torch_pair_mismatch()
 
@@ -295,12 +300,19 @@ def test_the_doctor_agrees_with_the_real_router_about_what_is_hosted():
     only thing stopping it — the doctor would otherwise cheerfully tell someone
     their local model is being billed to OpenRouter, or say nothing while it is."""
     from yurios.app.providers.openrouter import _route
-    from yurios.doctor import _hosted_on_openrouter
+    from yurios.doctor import _LOCAL_PREFIXES, _OTHER_HOSTS, _hosted_on_openrouter
+    from yurios.models import (LOCAL_MODEL_PREFIXES, OTHER_HOSTED_PREFIXES,
+                               hosted_on_openrouter)
+
+    assert _LOCAL_PREFIXES == LOCAL_MODEL_PREFIXES
+    assert _OTHER_HOSTS == OTHER_HOSTED_PREFIXES
 
     for model in ("gemma-4", "openrouter/z-ai/glm-5", "lm_studio/gemma-4",
                   "ollama/qwen3", "openai/gpt-5.2", "anthropic/claude-opus-4"):
         assert _hosted_on_openrouter(model) == _route(model).startswith("openrouter/"), \
             f"the doctor and the router disagree about {model!r}"
+        assert hosted_on_openrouter(model) == _route(model).startswith("openrouter/"), \
+            f"the connection probe and the router disagree about {model!r}"
 
 
 def test_the_hosted_lines_name_the_app_and_the_client(cfg):
@@ -404,3 +416,35 @@ def test_install_sh_offers_a_web_search_flag_pair():
     assert "--web-search)" in script and "--no-web-search)" in script
     # …and unattended runs must not stand up a service nobody asked for
     assert "WEB_SEARCH=false" in script
+
+
+# ---- opt-in model connection probe (SPEC §3) -------------------------------
+
+def test_probe_lines_fail_doctor_on_a_broken_model_and_skip_an_unset_one(cfg, monkeypatch):
+    import httpx
+
+    from yurios.doctor import model_probe_lines
+
+    def time_out(request):
+        raise httpx.ReadTimeout("secret-url")
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: client(
+        transport=httpx.MockTransport(time_out), **kw))
+    lines, failed = model_probe_lines(cfg.model_copy(update={
+        "chat_model": "ollama/qwen3", "utility_model": "NONE"}))
+    text = "\n".join(lines)
+    assert failed
+    assert "NOT WORKING — timed out after 3s" in text
+    assert "secret-url" not in text
+    assert "skipped" in text
+
+
+def test_doctor_model_probe_is_opt_in(monkeypatch):
+    from yurios import cli, doctor
+
+    calls = []
+    monkeypatch.setattr(doctor, "main", lambda **kw: calls.append(kw) or 0)
+    assert cli.main(["doctor"]) == 0
+    assert cli.main(["doctor", "--probe-model"]) == 0
+    assert calls == [{}, {"probe_models": True}]

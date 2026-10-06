@@ -16,15 +16,24 @@ For lm_studio/… the server's base url is passed as `api_base` (LMSTUDIO_BASE_U
 from __future__ import annotations
 
 import logging
+import re
 from typing import AsyncIterator
 
 import litellm
 
 from yurios import attribution
 from yurios.app.providers.admission import inference_admission
-from yurios.app.providers.usage import chunk_prompt_tokens, chunk_text
+from yurios.app.providers.usage import (StreamTally, chunk_prompt_tokens,
+                                        chunk_text)
 
 log = logging.getLogger("app.providers")
+
+# LiteLLM asks itself whether a model supports reasoning on every call, and for
+# an OpenRouter id missing from its price map (z-ai/glm-5.2, say) that question
+# raises inside LiteLLM, is caught there, and first prints a red "Provider List"
+# banner straight to stdout — thousands of lines in the daemon log, none of them
+# about a failed request. A real failure still reaches us as an exception.
+litellm.suppress_debug_info = True
 
 
 def _route(model: str) -> str:
@@ -90,6 +99,36 @@ def _schema_refused(answer: str, meta: dict, call: dict) -> bool:
             and meta.get("finish_reason") == "stop"
             and not meta.get("completion_tokens"))
 
+def _thought(answer: str, meta: dict) -> bool:
+    """Did this completion carry a reasoning pass?
+
+    Three ways a route shows one: the usage count, the reasoning text beside the
+    content, or — on a local server that streams it inline — a `<think>` block
+    at the head of the content. Any of them is a thought; none is not.
+    """
+    if meta.get("reasoning_tokens") or meta.get("reasoning_chars"):
+        return True
+    head = re.match(r"\s*<think>(.*?)</think>", answer or "", flags=re.S)
+    return bool(head and head.group(1).strip())
+
+
+def _thought_lost(answer: str, meta: dict, call: dict) -> bool:
+    """Did a response format cost this call the reasoning it asked for?
+
+    Measured on `openrouter/z-ai/glm-5.2` (SPEC §2.4): the Together upstream
+    serves a `json_schema` or a `json_object` request with no reasoning pass
+    at all — while Wafer, Mistral and DigitalOcean reason under the same
+    format — and answers the promise review with a confident, well-formed,
+    wrong `{"goal": null}`. An answer, at `stop`, with no thought in it, from a
+    call that sent a format: narrow, like `_schema_refused`, so an empty or
+    truncated answer is left to the rule that owns it.
+    """
+    return (bool(call.get("response_format"))
+            and bool((answer or "").strip())
+            and meta.get("finish_reason") == "stop"
+            and not _thought(answer, meta))
+
+
 # Routes that accept OpenAI's `stream_options` — verified against LM Studio 0.4,
 # which otherwise sends no usage at all (its streams end on a plain finish_reason
 # chunk). Asking turns the context gauge from a ~4-chars/token estimate into the
@@ -136,12 +175,14 @@ class LiteLLMChatModel:
     attached — Build #1's brain runs with `meter = None`."""
 
     def __init__(self, model: str, api_key: str = "", temperature: float = 0.9,
-                 *, api_base: str = "", thinking: bool = True, meter=None):
+                 *, api_base: str = "", thinking: bool = True,
+                 reasoning_effort: str = "", meter=None):
         self.model = _route(model)
         self.api_base = api_base or None
         self.api_key = api_key or None
         self.temperature = temperature
         self.thinking = thinking
+        self.reasoning_effort = reasoning_effort
         self.meter = meter
 
     async def stream(self, messages: list[dict], **params) -> AsyncIterator[str]:
@@ -149,15 +190,25 @@ class LiteLLMChatModel:
             extra = {}
             if not self.thinking:
                 messages, extra["extra_body"] = _thinking_off(self.model, messages)
+            elif self.reasoning_effort:
+                extra["extra_body"] = {
+                    "reasoning_effort": self.reasoning_effort}
+            max_tokens = asked = params.get("max_tokens", 1024)
             if self.meter is not None:
                 self.meter.note_prompt(messages)      # the estimate, before the call
+                # …and no bigger an ask than the window has left: a server that
+                # checks prompt + max_tokens refuses rather than trims.
+                room = getattr(self.meter, "reply_room", None)
+                if callable(room):
+                    max_tokens = room(max_tokens)
+            tally = StreamTally(max_tokens, window_bound=max_tokens < asked)
             response = await litellm.acompletion(
                 model=self.model,
                 messages=messages,
                 api_key=self.api_key,
                 api_base=self.api_base,
                 temperature=params.get("temperature", self.temperature),
-                max_tokens=params.get("max_tokens", 1024),
+                max_tokens=max_tokens,
                 stream=True,
                 **_attribution(self.model),
                 **_ask_for_usage(self.model, self.meter),
@@ -171,8 +222,10 @@ class LiteLLMChatModel:
                     if prompt_tokens:
                         self.meter.note_usage(prompt_tokens)
                 text = chunk_text(chunk)
+                tally.note(chunk, text)
                 if text:
                     yield text
+            tally.settle()                    # why, if that was nothing (usage.py)
 
 
 def _plain_json(response_format: dict | None) -> dict | None:
@@ -206,6 +259,13 @@ class LiteLLMUtilityModel:
         self.api_key = api_key or None
         self.max_tokens = max_tokens
         self.thinking = thinking
+        #: Has this model shown a reasoning pass? None until a call says, then
+        #: True, or False for a model that never reasons — which is what keeps a
+        #: plain local model from paying for `_thought_lost`'s retry every call.
+        self.reasons: bool | None = None
+        #: Learned: sending a response format with thinking on costs this route
+        #: its reasoning pass, so thinking calls stop sending one (SPEC §2.4).
+        self.format_costs_thought = False
         #: Set the first time this route refuses a strict schema, so the cost is
         #: one rejected call per process rather than one per request.
         self._plain_json_only = False
@@ -293,11 +353,21 @@ class LiteLLMUtilityModel:
         # caller that knows it is asking for a long one may say so.
         if params.get("timeout"):
             extra["timeout"] = params["timeout"]
+        thinking = bool(params.get("thinking", self.thinking))
+        dropped = False
         if params.get("response_format") is not None:
-            # OpenAI-compatible local servers, including LM Studio, enforce
-            # JSON Schema as a top-level completion parameter. A hosted route
-            # may not take the strict form at all — see `_downgraded` below.
-            extra["response_format"] = _plain_json(params["response_format"])                 if self._plain_json_only else params["response_format"]
+            if thinking and self.format_costs_thought:
+                # Already learned on this model: the format would cost the
+                # thought the caller asked for, and the format is not what holds
+                # the shape — the prompt states it and the parser re-checks it.
+                dropped = True
+            else:
+                # OpenAI-compatible local servers, including LM Studio, enforce
+                # JSON Schema as a top-level completion parameter. A hosted route
+                # may not take the strict form at all — see `_downgraded`.
+                extra["response_format"] = (
+                    _plain_json(params["response_format"])
+                    if self._plain_json_only else params["response_format"])
         call = dict(
             model=self.model,
             messages=messages,
@@ -327,10 +397,41 @@ class LiteLLMUtilityModel:
                 # this route was not performing, and buys back the answer.
                 log.info("%s answered nothing under a json_schema; "
                          "retrying in json_object mode", self.model)
-                answer, meta = await self._complete(
-                    {**call, "response_format": {"type": "json_object"}})
+                call = {**call, "response_format": {"type": "json_object"}}
+                answer, meta = await self._complete(call)
                 meta["schema_downgraded"] = True
+            if thinking and self.reasons is not False and _thought_lost(answer, meta, call):
+                answer, meta = await self._without_format(call, answer, meta)
+            elif thinking and _thought(answer, meta):
+                self.reasons = True
+            if dropped:
+                meta["format_dropped"] = True
             return answer, meta
+
+    async def _without_format(self, call: dict, answer: str,
+                              meta: dict) -> tuple[str, dict]:
+        """Ask again without the format that may have cost the thought.
+
+        The retry settles which it was. It reasons: the format was the cost, so
+        its answer stands and this model stops sending one on a thinking call.
+        It doesn't either: this model does not reason, the first answer — which
+        had the format's enforcement — stands, and a model never seen to reason
+        is never asked twice again. A model already known to reason whose retry
+        still shows no thought was an upstream having a moment; the first answer
+        stands and nothing is learned.
+        """
+        log.info("%s answered with no reasoning under a response_format; "
+                 "asking again without it", self.model)
+        plain = {k: v for k, v in call.items() if k != "response_format"}
+        again, again_meta = await self._complete(plain)
+        if _thought(again, again_meta):
+            self.reasons = True
+            self.format_costs_thought = True
+            again_meta["format_dropped"] = True
+            return again, again_meta
+        if self.reasons is None:
+            self.reasons = False
+        return answer, meta
 
     async def _complete(self, call: dict) -> tuple[str, dict]:
         """One completion, unpacked. Its own method so a retry is the same call."""
@@ -338,7 +439,9 @@ class LiteLLMUtilityModel:
         choice = response.choices[0]
         usage = getattr(response, "usage", None)
         details = getattr(usage, "completion_tokens_details", None)
+        thought = getattr(choice.message, "reasoning_content", "") or ""
         return (choice.message.content or "", {
+            "reasoning_chars": len(thought) if isinstance(thought, str) else 0,
             "finish_reason": getattr(choice, "finish_reason", "") or "",
             "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
             "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,

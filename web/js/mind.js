@@ -2,15 +2,16 @@
  * as a page, not a vibe.
  *
  * Second tab of the chat column. Reads /api/mind (activity state, budget,
- * goals, queued self-edits) and /api/mind/journal (her [she] lines out of the
- * shared episodic journal), and refreshes live off the same one bus chat.js
- * already subscribes to: every event is re-dispatched as a `world-ev`
- * CustomEvent, and this panel reacts to the `journal` and `mind` ones. The
+ * goals, queued self-edits), /api/timers, and /api/mind/journal (her [she]
+ * lines out of the shared episodic journal), and refreshes live off the same
+ * one bus chat.js already subscribes to: every event is re-dispatched as a
+ * `world-ev` CustomEvent, and this panel reacts to the relevant state events. The
  * approve/reject buttons on a queued self-edit POST a decision — which lands
  * as a signal the loop consumes on its next tick, exactly like everything
  * else that happens to her.
  */
 import { STATE_META, canonicalState } from '../shared/activity-state.js';
+import { detailMessage } from '../shared/http.js';
 
 (() => {
   const runtimeReady = window.YuriOSRuntime
@@ -31,6 +32,7 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
   if (!panel || !filesPanel || !tabChat || !tabMind || !tabFiles) return;
 
   let open = false;
+  let activeView = 'now';
   let refreshTimer = null;
   let busy = false;               // is she reading? decides the refresh cadence
   const droppingGoals = new Set();
@@ -56,6 +58,62 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
 
   function section(title, bodyHtml) {
     return `<section class="il-sec"><h3>${title}</h3>${bodyHtml}</section>`;
+  }
+
+  function navigation(counts) {
+    const item = (id, label, count) => {
+      const on = activeView === id;
+      return `<button type="button" role="tab" class="${on ? 'on' : ''}" ` +
+        `data-il-view="${id}" aria-controls="il-page-${id}" ` +
+        `aria-selected="${on}"><span>${label}</span>` +
+        (count ? `<small>${count}</small>` : '') + '</button>';
+    };
+    return '<nav class="il-nav" role="tablist" aria-label="Inner life sections">' +
+      item('now', 'now', counts.now) + item('plans', 'plans', counts.plans) +
+      item('history', 'history', counts.history) + '</nav>';
+  }
+
+  function page(id, html) {
+    const on = activeView === id;
+    return `<div id="il-page-${id}" class="il-page" role="tabpanel" ` +
+      `data-il-page="${id}"${on ? '' : ' hidden'}>${html}</div>`;
+  }
+
+  function remaining(due) {
+    const seconds = Math.max(0, Number(due) - Date.now() / 1000);
+    if (seconds < 60) return seconds > 0 ? 'in less than a minute' : 'due now';
+    const minutes = Math.ceil(seconds / 60);
+    if (minutes < 60) return `in ${plural(minutes, 'minute', 'minutes')}`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return `in ${plural(hours, 'hour', 'hours')}${rest ? ` ${rest}m` : ''}`;
+  }
+
+  function nextBeat(at) {
+    const d = new Date(Number(at) * 1000);
+    if (at == null || Number.isNaN(d.getTime())) return '';
+    if (d.getTime() <= Date.now()) return ', next due now';
+    const clock = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit',
+                                             second: '2-digit' });
+    return `, next by <time datetime="${d.toISOString()}">${esc(clock)}</time>`;
+  }
+
+  function timerSection(timerState) {
+    const timers = [...(timerState?.timers || [])]
+      .filter(timer => Number.isFinite(Number(timer.due)))
+      .sort((a, b) => a.due - b.due);
+    const body = timers.length
+      ? '<ol class="il-timers">' + timers.map(timer => {
+          const at = new Date(Number(timer.due) * 1000);
+          const clock = Number.isFinite(at.getTime())
+            ? at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+          return `<li><span class="il-timer-label">${esc(timer.label || 'timer')}</span>` +
+            `<strong>${esc(remaining(timer.due))}</strong>` +
+            (clock ? `<time datetime="${at.toISOString()}">${esc(clock)}</time>` : '') +
+            '</li>';
+        }).join('') + '</ol>'
+      : '<p class="il-off">no timers pending</p>';
+    return { html: section('timers', body), count: timers.length };
   }
 
   // A quiet stretch writes the same line every time she wakes — "thought about
@@ -165,11 +223,11 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
       '</div>';
   }
 
-  function readingSection(read) {
+  function readingSections(read) {
     const n = countLive(read);
     busy = n > 0;
     markTab(n);
-    if (!read) return '';
+    if (!read) return { now: '', history: '', live: 0, held: 0 };
     // forget the optimistic notes for anything that has since finished — a run
     // id that comes round again must not inherit an old click's "pausing"
     if (!read.reading) asked.delete('');
@@ -178,29 +236,32 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
 
     const runs = (read.runs || []).slice().reverse();
     const live = runs.filter(r => !OVER.includes(r.stage));
-    let html = '';
+    let now = '';
     if (read.reading || live.length) {
-      html += section('she is reading',
+      now += section('she is reading',
         (readingNow(read.reading) + live.map(runRow).join('')) ||
         '<p class="il-off">looking things up</p>');
     }
     if ((read.held || []).length) {
-      html += section('held — waiting on you',
+      now += section('held — waiting on you',
         '<p class="il-off">stopped, and kept. Nothing here is read again ' +
         'until you say so.</p>' + read.held.map(heldRow).join(''));
     }
     const past = runs.filter(r => OVER.includes(r.stage));
+    let history = '';
     if (past.length && !live.length) {
-      html += section('what she looked up', past.slice(0, 3).map(runRow).join(''));
+      history = section('what she looked up', past.slice(0, 3).map(runRow).join(''));
     }
-    return html;
+    return { now, history, live: n, held: (read.held || []).length };
   }
 
   // Her own goals are marked as hers and nothing else about them is hidden:
   // the raw provenance stays visible beside the plain-language tag, because
   // `strategy:2026-08-23` is the thing you would grep for and "she filed this"
-  // is the thing you can read at a glance. Both, not one.
-  const HERS = 'strategy:';
+  // is the thing you can read at a glance. Both, not one. `goal:<id>` is one a
+  // goal step filed (SPEC §22.1c) and `muse:<day>` one her free time filed
+  // (§22.7) — hers as much as the night's.
+  const HERS = ['strategy:', 'goal:', 'muse:'];
 
   function visibleIntentions(goals) {
     const crossed = (g) => g.state === 'abandoned' || droppingGoals.has(g.id);
@@ -224,7 +285,7 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
 
   function goalRow(g) {
     deskPaths.set(g.id, deskPath(g));
-    const hers = String(g.provenance || '').startsWith(HERS);
+    const hers = HERS.some(p => String(g.provenance || '').startsWith(p));
     const abandoned = g.state === 'abandoned';
     if (abandoned) droppingGoals.delete(g.id);
     const dropping = !abandoned && droppingGoals.has(g.id);
@@ -251,6 +312,43 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
       '</li>';
   }
 
+  // ---- documents you handed her (SPEC §34.6) ---------------------------------
+  // Newest first. A waiting one says when she will get to it; a read one says
+  // what came of it. Each opens in place, in the viewer a goal's desk file uses.
+  function when(iso) {
+    const d = new Date(iso || '');
+    if (Number.isNaN(d.getTime())) return '';
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toDateString() === new Date().toDateString() ? time
+      : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+  }
+
+  function handedRow(h, wakes) {
+    const id = `handed:${h.path}`;
+    deskPaths.set(id, h.path);
+    const looking = openDesks.has(id);
+    const read = h.state === 'read';
+    const gone = h.state === 'gone';
+    const status = read ? `read ${when(h.read_at)}`
+      : gone ? 'gone from her desk before she read it'
+      : wakes ? 'not read yet' : "not read yet — she'll read it when you're back";
+    const cached = deskCache.get(id);
+    const body = !cached ? 'opening…'
+      : cached.missing ? 'it is no longer on her desk.' : cached.text;
+    return `<li class="h-${esc(h.state || 'waiting')}">` +
+      `<span class="il-goal-line">` +
+      (read || gone ? '' : '<span class="il-unread">unread</span> ') +
+      `${esc(h.name || h.path)}</span>` +
+      `<span class="il-prov">${esc(status)} · handed ${esc(when(h.at))} · ` +
+      `${esc(h.path)}</span>` +
+      (read && h.outcome ? `<span class="il-outcome">${esc(h.outcome)}</span>` : '') +
+      (gone ? '' : `<span class="il-goal-actions"><button type="button" class="il-look" ` +
+        `data-desk="${esc(id)}" data-path="${esc(h.path)}">` +
+        `${looking ? 'fold it away' : 'view document'}</button></span>`) +
+      (looking ? `<pre class="il-content il-desk">${esc(body)}</pre>` : '') +
+      '</li>';
+  }
+
   // The switch sits here, on the list it governs, rather than in the settings
   // dialog — a permission you can only find by leaving the page that shows you
   // why you'd want it is a permission nobody revokes in time. Two buttons side
@@ -268,15 +366,22 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
 
   async function render() {
     await runtimeReady;
-    let state, journal, read = null;
+    let state, journal, timerState, read = null;
     try {
-      const [a, b, c] = await Promise.all([
+      // Timers live even when the mind is off and have their own runtime route.
+      // Treat an older/degraded host without that route as an empty board rather
+      // than losing the rest of this surface with it.
+      const timerRequest = Promise.resolve()
+        .then(() => fetch(apiPath('/api/timers')))
+        .catch(() => null);
+      const [a, b, c, d] = await Promise.all([
         fetch(apiPath('/api/mind')), fetch(apiPath('/api/mind/journal?days=3')),
-        fetch(apiPath('/api/mind/reading'))]);
+        fetch(apiPath('/api/mind/reading')), timerRequest]);
       if (!a.ok) throw new Error(await a.text());
       state = await a.json();
       journal = b.ok ? await b.json() : { days: [] };
       read = c.ok ? await c.json() : null;
+      timerState = d?.ok ? await d.json() : { timers: [] };
     } catch {
       busy = false;              // nothing to watch; back to the slow cadence
       markTab(0);
@@ -286,18 +391,28 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
     }
 
     const stateLabel = STATE_META[canonicalState(state.state)].label;
-    let html = section('right now',
+    // "by": a signal wakes her early, nothing wakes her late. Two different
+    // counts on purpose — every line the chat tags "she spoke first" (a
+    // greeting among them), and the Gate 2 reach-outs spent against the cap.
+    let nowHtml = section('right now',
       `<p class="il-state"><b>${esc(stateLabel)}</b> · a heartbeat every ` +
-      `${Math.round(state.cadence_s)}s · spoke first ` +
-      `${state.interrupts_today}× today` +
+      `${Math.round(state.cadence_s)}s` + nextBeat(state.next_tick_at) +
+      (state.spoke_first_today != null
+        ? ` · spoke first ${state.spoke_first_today}× today` : '') +
+      ` · ${state.interrupts_today} of ${state.interrupts_per_day ?? '?'} ` +
+      'reach-outs today' +
       (state.dream_backlog.length
         ? ` · ${state.dream_backlog.length} day(s) to dream on` : '') +
       `</p><p class="il-budget">budget: ${state.budget.spent_tokens} / ` +
       `${state.budget.daily_tokens} tokens today</p>`);
 
-    // above the goals and the journal on purpose: this is the only block with
-    // something spending the machine *while you read it*
-    html += readingSection(read);
+    const timers = timerSection(timerState);
+    nowHtml += timers.html;
+
+    // Above decisions and plans on purpose: this is the only block with
+    // something spending the machine *while you read it*.
+    const reading = readingSections(read);
+    nowHtml += reading.now;
 
     const edits = state.pending_edits || [];
     pendingById.clear();
@@ -306,7 +421,7 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
       if (!pendingById.has(id)) { editDrafts.delete(id); editErrors.delete(id); }
     }
     if (edits.length) {
-      html += section('she asks — edits waiting on you', edits.map(editBlock).join(''));
+      nowHtml += section('she asks — edits waiting on you', edits.map(editBlock).join(''));
     }
 
     const goals = (state.goals || []).filter(g => g.state !== 'done');
@@ -314,32 +429,53 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
       String(g.provenance || '').startsWith('maintenance:'));
     const intentions = visibleIntentions(goals.filter(g => !maintenance.includes(g)));
     const filing = state.goal_filing;
+    let plansHtml = '';
     if (intentions.length || filing) {
-      html += section('on her mind', filingSwitch(filing) +
+      plansHtml += section('on her mind', filingSwitch(filing) +
         (intentions.length
           ? '<ul class="il-goals">' + intentions.map(goalRow).join('') + '</ul>'
           : '<p class="il-off">nothing she means to do right now</p>'));
     }
     if (maintenance.length) {
-      html += section('system upkeep',
+      plansHtml += section('system upkeep',
         '<p class="il-off">automatic work kept separate from her own intentions</p>' +
         '<ul class="il-goals il-maintenance">' + maintenance.map(goalRow).join('') +
         '</ul>');
     }
 
+    const handed = [...(state.handed || [])].reverse();
+    const unread = handed.filter(h => (h.state || 'waiting') === 'waiting').length;
+    if (handed.length) {
+      plansHtml += section('handed to her',
+        `<p class="il-off">${unread ? `${unread} not read yet` : 'all read'}` +
+        ' · documents you gave her desk to read and decide about</p>' +
+        '<ul class="il-goals il-handed">' +
+        handed.map(h => handedRow(h, state.inbox_wake !== false)).join('') + '</ul>');
+    }
+
     if ((state.shelf || []).length) {
-      html += section('the shelf',
+      plansHtml += section('the shelf',
         '<ul class="il-shelf">' + state.shelf.map(d =>
           `<li>${esc(d)}</li>`).join('') + '</ul>');
     }
 
-    html += section('the journal',
-      (journal.days || []).map(d =>
+    if (!plansHtml) plansHtml = section('plans', '<p class="il-off">nothing queued</p>');
+
+    const days = journal.days || [];
+    const historyHtml = reading.history + section('the journal',
+      days.map(d =>
         `<h4>${esc(d.day)}</h4><ul class="il-journal">` +
         collapse(d.entries.filter(e => e.hers)).map(journalLine).join('') + '</ul>'
       ).join('') || '<p class="il-off">nothing yet — she hasn’t been ' +
         'alone with her thoughts long enough</p>');
 
+    const openGoals = goals.filter(g => g.state !== 'abandoned').length;
+    const needsAttention = timers.count + reading.live + reading.held + edits.length;
+    const html = navigation({
+      now: needsAttention,
+      plans: openGoals + unread,
+      history: days.length,
+    }) + page('now', nowHtml) + page('plans', plansHtml) + page('history', historyHtml);
     repaint(html);
   }
 
@@ -412,6 +548,21 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
     }
   }
 
+  panel.addEventListener('click', (ev) => {
+    const next = ev.target.closest?.('[data-il-view]')?.dataset.ilView;
+    if (!next || next === activeView) return;
+    activeView = next;
+    panel.querySelectorAll('[data-il-view]').forEach(button => {
+      const on = button.dataset.ilView === activeView;
+      button.classList.toggle('on', on);
+      button.setAttribute('aria-selected', String(on));
+    });
+    panel.querySelectorAll('[data-il-page]').forEach(view => {
+      view.hidden = view.dataset.ilPage !== activeView;
+    });
+    panel.scrollTop = 0;
+  });
+
   // stop / resume. The stop button carries the run id, or "" for "whatever she
   // is reading this second" — the two are separate because a run can be stopped
   // before it has started reading anything.
@@ -465,7 +616,7 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
       if (res.status === 422) {
         // your version was refused: keep it, say why, let you fix it
         const why = await res.json().catch(() => ({}));
-        editErrors.set(id, `not applied — ${why.detail || 'the server refused it'}`);
+        editErrors.set(id, `not applied — ${detailMessage(why, 'the server refused it')}`);
         ev.target.disabled = false;
         render();
         return;
@@ -704,7 +855,8 @@ import { STATE_META, canonicalState } from '../shared/activity-state.js';
       deskPending.clear();
       for (const id of openDesks) loadDesk(id, deskPaths.get(id));
     }
-    if (open && (t === 'journal' || t === 'mind' || t === 'research_status')) {
+    if (open && (t === 'journal' || t === 'mind' || t === 'research_status' ||
+                 t === 'timers')) {
       render().then(pace);
     } else if (!open && !filesPanel.hidden && t === 'workspace') {
       window.dispatchEvent(new Event('files-refresh'));

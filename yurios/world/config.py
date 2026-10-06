@@ -27,11 +27,12 @@ class Config(VoiceConfig):
     # offline results (tests, and a no-deps demo). off = no hands — she talks
     # about doing things instead of doing them (Build #2 behaviour).
     tools_backend: str = "mcp"                  # mcp | fake | off
-    tool_max_calls_per_turn: int = 2            # per-turn cap (§7.3)
+    tool_max_calls_per_turn: int = 16           # calls one reply or one step may chain (§7.3)
     tool_timeout_s: float = 10.0                # per-call timeout (§7.3)
     tool_log_dir: Path = Path("./tool-logs")    # JSONL audit, one line per call (§7.3)
     tool_rate_timer: int = 6                    # calls/minute, token bucket (§7.3)
     tool_rate_music: int = 6
+    tool_rate_goal: int = 6                     # explicit conversational goals
     tool_rate_desk: int = 20                    # her workspace + skills (§34.2):
                                                 #   local writes, no outside party
                                                 #   — a loop-catcher, not a ration
@@ -90,6 +91,7 @@ class Config(VoiceConfig):
     fetch_timeout_s: float = 8.0                # one page, inside TOOL_TIMEOUT_S
     fetch_max_bytes: int = 2_000_000            # read_page stops here
     research_max_pages: int = 5                 # ceiling on `research(depth=…)`
+    research_max_calls: int = 100               # estimated model calls per run (§7.7)
     tool_rate_search: int = 6                   # calls/minute
     tool_rate_read: int = 6
     tool_rate_research: int = 2                 # a run is many requests — cheap
@@ -172,7 +174,7 @@ class Config(VoiceConfig):
     # 30 steps / CFG 5 / hires fix on. ~7 GB fp16 resident; cpu_offload trades
     # speed for headroom. Missing deps or checkpoint degrade to mock, loudly.
     selfie_local_model: str = ""                # path to the .safetensors checkpoint
-    selfie_local_device: str = "cuda"           # cuda | cpu (cpu is for emergencies)
+    selfie_local_device: str = "cuda"           # cuda | mps (either = this machine's GPU) | cpu
     selfie_local_steps: int = 30
     selfie_local_cfg: float = 5.0
     selfie_local_hires: bool = True             # the A1111 "Hires fix" second pass
@@ -237,7 +239,7 @@ class Config(VoiceConfig):
     mind_enabled: bool = True                   # off = Build #4 behaviour minus ambient life
     mind_seed: int = 0                          # 0 = unseeded; tests pin a seed
     mind_act_threshold: float = 0.4             # gate 1: salience-to-act (§18.1)
-    mind_interrupt_threshold: float = 0.75      # gate 2: salience-to-interrupt (§18.2)
+    mind_interrupt_threshold: float = 0.6       # gate 2: salience-to-interrupt (§18.2)
     mind_max_interrupts_per_day: int = 3        # the hard daily cap (§18.2)
     mind_consider_cooldown_s: float = 3600.0    # min gap between re-chewing one goal
     # How many working ticks one goal gets before it has to wait or be let go
@@ -245,6 +247,13 @@ class Config(VoiceConfig):
     # becoming "she chews the same goal forever": three steps is enough to read
     # the desk, do a thing, and write down where it got to.
     mind_goal_max_steps: int = 3
+    # How many hands one of those steps may chain before it answers (SPEC
+    # §26.2), never past `tool_max_calls_per_turn`. Its own number, not the
+    # reply's: each round resends the whole step, so a chain costs the square
+    # of its length. On 7 Oct a goal the stock-take filed spent its step
+    # rereading the desk — twelve hands, ~113k of a 200k day — before writing
+    # one note. Four is enough to read and then write, three steps running.
+    mind_goal_max_hands: int = 4
     # Goals of her own, out of the night's stock-take (§22.1). On, because a
     # companion who can only ever want what you asked her to want is the thing
     # this project is trying not to build — and off is one click away, next to
@@ -254,6 +263,16 @@ class Config(VoiceConfig):
     # never advanced.
     mind_goal_filing_enabled: bool = True
     mind_self_goals_max: int = 3
+    # Free time (§22.7): with nothing on her list ready and nothing to react
+    # to, how often she looks back over her days and decides what to do next.
+    # 0 = never, which is a mind that stops the day its list runs dry.
+    mind_muse_cooldown_s: float = 7200.0
+    # A document you hand to her desk (§34.6). On: it wakes her, from any state,
+    # to read it and decide what to do with it — model calls, at 4am if that is
+    # when it arrived. Off: she notices it at once (a journal line, no model)
+    # and decides when she is next active — ENGAGED or IDLE, i.e. once you are
+    # back. Either way the decision is hers, and nothing about the file changes.
+    mind_inbox_wake: bool = True
     # How long a goal sits in `waiting` on work it dispatched before the loop
     # wakes it anyway. `task_completion` is the ordinary way back; this is the
     # safety net for the run that died without posting one, because a goal
@@ -308,26 +327,33 @@ class Config(VoiceConfig):
     mind_prompt_capture: bool = True            # off = no assembled prompts on disk
     mind_prompt_max_chars: int = 200_000        # per-message cap inside a prompt record
 
-    # --- her hands, in the loop (SPEC §26, as amended — mind-initiated tools) ---
-    # The house switch, and it is OFF. Everything below is inert until this is
-    # true, and off means the hands are not described to her at all — a
-    # capability she may not use is not advertised (the SEARCH_BACKEND=off rule,
-    # generalised). The character's own `hands` switch is in series with this
-    # one (characters/models.py, LoopSwitches): the house decides whether
-    # anything on this machine may act unasked, hers decides whether she is one
-    # of the ones that may, and she can never talk her way past the house.
-    mind_tools_enabled: bool = False
-    # Explicit names, comma-separated. No wildcard, no inheritance from the
-    # conversational allowlist, and EMPTY BY DEFAULT even when the switch above
-    # is on — turning the capability on and choosing which hands are two
-    # separate decisions.
+    # --- her hands (SPEC §26, as amended) — one rule for every call she makes ---
+    # The house switch, ON by default. A hand is usable — in a reply, a greeting,
+    # a reach-out, or her own goal and night work — when this is on, the
+    # character's own `hands` switch is on (characters/models.py, LoopSwitches;
+    # in series, so she can never talk her way past the house) and the
+    # allowlist below admits it. Off means the hands are not described to her
+    # at all — a capability she may not use is not advertised (the
+    # SEARCH_BACKEND=off rule, generalised).
+    mind_tools_enabled: bool = True
+    # While she is mid-conversation, do her hands keep working? A local utility
+    # model is the same machine her reply is using, and it cannot do both; a
+    # hosted one can. `auto` (the default) stands down only when UTILITY_MODEL
+    # is local (`ollama/`, `lm_studio/`, `gguf/`). `on` keeps working through a
+    # conversation even on a local model. `off` is the old rule: always stand
+    # down while she is talking. The expensive class still waits for an empty
+    # room either way (SPEC §26.3).
+    mind_tools_during_chat: str = "auto"
+    # `*` (the default) is every hand this installation can offer; otherwise
+    # explicit names, comma-separated. Empty means none — that is what
+    # unticking every box in the settings panel saves.
     #   e.g. MIND_TOOL_ALLOWLIST=write_note,append_note,read_note,list_notes
-    mind_tool_allowlist: str = ""
+    mind_tool_allowlist: str = "*"
     # A cap, not a governor. Unlike MIND_DAILY_TOKENS — which is a post-hoc
     # estimate and cannot stand between a call and the run it starts — this is
     # checked *before* dispatch and refuses. Rolls at local midnight, beside
     # MIND_MAX_INTERRUPTS_PER_DAY, which it is deliberately shaped like.
-    mind_tool_calls_per_day: int = 8
+    mind_tool_calls_per_day: int = 64
     # Budget pressure above which the expensive class is simply unavailable.
     # Also a precondition rather than an estimate: for the mind and only the
     # mind, spending is checked before the money leaves.
@@ -359,8 +385,13 @@ class Config(VoiceConfig):
     # its own buckets, not a share of conversation's: a night of autonomous
     # work must not leave the morning's request denied, and the reverse must
     # hold too. Conservative on purpose — these are ticks, not a conversation.
-    tool_rate_mind_desk: int = 4                # calls/minute
-    tool_rate_mind_web: int = 1
+    # Web matches the desk because a step chains (§26.2): at one a minute, a
+    # step got one search and one page and the rest were refused. The desk is
+    # conversation's 20, for the reason it is there: local files, no outside
+    # party, and a step's own call cap already bounds a loop. At 4, a step
+    # that read a fifth note inside a minute was refused it.
+    tool_rate_mind_desk: int = 20               # calls/minute
+    tool_rate_mind_web: int = 4
     tool_rate_mind_camera: int = 1
     tool_rate_mind_other: int = 1               # anything else on the allowlist
 

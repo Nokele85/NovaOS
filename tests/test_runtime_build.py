@@ -73,6 +73,21 @@ def test_the_self_edit_door_needs_a_mind_to_be_a_door():
         v for k, v in with_mind.items() if k != "propose_edit")
 
 
+def test_conversational_goal_creation_needs_the_host_goal_store():
+    with_mind = runtime.tool_rates(conf(mind_enabled=True))
+    without = runtime.tool_rates(conf(mind_enabled=False))
+    assert with_mind["create_goal"] == with_mind["set_timer"]
+    assert "create_goal" not in without
+
+
+def test_showing_a_held_picture_needs_the_goal_store_not_the_camera():
+    """The picture is already in the gallery; the camera being off now does
+    not unshow it (§18.2a)."""
+    assert "show_held_picture" in runtime.tool_rates(
+        conf(mind_enabled=True, selfie_backend="off"))
+    assert "show_held_picture" not in runtime.tool_rates(conf(mind_enabled=False))
+
+
 # ---- the camera and the reading desk ----
 
 def _half_built(cfg, clock):
@@ -140,6 +155,13 @@ def test_the_desk_asks_for_the_knowledge_store_rather_than_holding_one(cfg, cloc
     assert desk.knowledge() == "the store"             # …and it follows the mind
 
 
+def test_research_call_ceiling_reaches_the_desk(cfg, clock):
+    rt = _half_built(cfg.model_copy(update={"search_backend": "fake",
+                                            "research_max_calls": 7}), clock)
+    desk, _ = runtime.build_reading(rt)
+    assert desk is not None and desk.max_calls == 7
+
+
 def test_building_the_brain_does_not_wait_for_the_embedder(monkeypatch):
     """The sentence-transformers load is the slow part of a cold boot, and it
     used to sit in front of her hands and mind. Construction now returns
@@ -172,6 +194,7 @@ def test_building_the_brain_does_not_wait_for_the_embedder(monkeypatch):
                  character_id="adia"),
         boot=BootBoard(),
         guard=None, timers=None, controller=None, selfies=None, research=None,
+        post_message=None,
         model_configured=True,
     )
     assert runtime.build_brain(rt, chat_model=None, utility_model=None,
@@ -224,6 +247,7 @@ def test_the_embedder_load_starts_after_the_brain_is_built(monkeypatch):
                  character_id="adia"),
         boot=BootBoard(),
         guard=None, timers=None, controller=None, selfies=None, research=None,
+        post_message=None,
         model_configured=True,
     )
     assert runtime.build_brain(rt, chat_model=None, utility_model=None,

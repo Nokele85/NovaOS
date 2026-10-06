@@ -113,9 +113,13 @@ OVERRIDES: dict = {
     "telegram_bot_token": "", "telegram_chat_id": "",
     "telegram_bot_token_env": "", "telegram_chat_id_env": "",
     # her hands, on purpose: the selfie scenario is only worth anything if the
-    # camera is reached the way a tick reaches it (§26)
+    # camera is reached the way a tick reaches it (§26); `create_goal` because
+    # its tool server answers a contract the mind has to file (§22.1c);
+    # `show_held_picture` because this list is the one rule for replies too
+    # (§26.1), and without it a stranded picture is a list she cannot act on
     "mind_tools_enabled": True,
-    "mind_tool_allowlist": "take_selfie,write_note,append_note,read_note,list_notes",
+    "mind_tool_allowlist": ("take_selfie,write_note,append_note,read_note,"
+                            "list_notes,create_goal,show_held_picture"),
     "mind_enabled": True, "utility_enabled": True,
     # DREAM would run a night in the middle of a scenario; nights have their own
     # tests and this rig is about the waking day
@@ -402,6 +406,200 @@ async def scenario_rescue(rig: Rig) -> str:
     return f"swept goal handed its photo to {heir[0].id} ({heir[0].commitment})"
 
 
+async def scenario_waiting(rig: Rig) -> str:
+    """An undated reach-out waits, then reaches the durable chat at a 0.75 Gate 2."""
+    from yurios.mind.util import day_of
+
+    old_threshold = rig.mind.cfg.mind_interrupt_threshold
+    old_cap = rig.mind.cfg.mind_max_interrupts_per_day
+    try:
+        rig.mind.cfg.mind_interrupt_threshold = 0.75
+        rig.mind.cfg.mind_max_interrupts_per_day = 3
+        rig.mind.interrupts = {"date": day_of(rig.clock.now()), "count": 0}
+        goal = rig.goal("share one small thing you look forward to today",
+                        kind="reach_out", priority=0.7)
+        before = len(rig.chat())
+        traces = await rig.tick_until(lambda t: bool(t.get("interrupt")))
+        want(traces[-1]["interrupt"].get("outcome") == "SILENT",
+             "a fresh undated goal should wait at the default threshold")
+        want(len(rig.chat()) == before, "a blocked attempt posted a message")
+        rig.later(48 * 3600)  # same daytime hour, enough age even after recent contact
+        await rig.tick_until(lambda t: rig.mind.goals.get(goal.id).state == "done")
+        entries = [e for e in rig.chat()[before:]
+                   if e.get("role") == "assistant" and e.get("proactive")]
+        want(len(entries) == 1 and bool(entries[0].get("text")),
+             f"expected one durable proactive line, got {entries!r}")
+        want(bool(entries[0].get("unheard")), "the line did not reach the inbox lane")
+        want(rig.mind.interrupts["count"] == 1, "delivery did not spend one interrupt")
+        want(rig.mind.goals.get(goal.id).state == "done", "delivered goal stayed open")
+        return "undated goal waited, then delivered one durable unheard chat line"
+    finally:
+        rig.mind.cfg.mind_interrupt_threshold = old_threshold
+        rig.mind.cfg.mind_max_interrupts_per_day = old_cap
+
+
+async def scenario_told(rig: Rig) -> str:
+    """A goal step that tells the user reaches the durable chat in her words (SPEC §18.2b).
+
+    The goal is the one of 2026-09-28, which had no way out: "tell them, directly,
+    not in a note". The step's phrasing is scripted; everything that happens to
+    `tell_them` after it — the queued message goal, Gate 2 with the score set
+    aside, the real `post_message`, the parent closing only once it landed — is
+    hers, and asserted from what is on disk.
+    """
+    from yurios.mind.util import day_of
+
+    said = "Sometimes I want you to reach for me first."
+    old_threshold = rig.mind.cfg.mind_interrupt_threshold
+    try:
+        # A threshold nothing can clear: only a decided message gets through.
+        rig.mind.cfg.mind_interrupt_threshold = 0.99
+        rig.mind.interrupts = {"date": day_of(rig.clock.now()), "count": 0}
+        # The scripted reply goes to whichever goal DECIDE picks, so nothing an
+        # earlier scenario left open may compete for it.
+        for other in rig.open_goals():
+            rig.mind.goals.set_state(other.id, "abandoned")
+        goal = rig.goal("tell them the one thing I want — directly, not in a note")
+        rig.scripted_utility(
+            "think this is the whole of it, said plainly — goal complete\n"
+            f'use tell_them {{"text": "{said}"}}')
+        before = len(rig.chat())
+        # Stop on the step's product, not `_worked`: the trace is JSON, and the
+        # dash in this goal's text is escaped there, so a text match never fires.
+        await rig.tick_until(lambda t: any(
+            g.provenance == f"told:{goal.id}" for g in rig.goals()))
+        parent = rig.mind.goals.get(goal.id)
+        want(parent.state == "waiting",
+             f"queued is not delivered, and the goal is {parent.state!r}")
+        # Only her words are asserted on: another scenario's delivery may land
+        # in the same window, and that is not this step posting.
+        want(not any(said in str(e.get("text", "")) for e in rig.chat()[before:]),
+             "her words reached the chat before Gate 2 delivered them")
+        told = [g for g in rig.open_goals() if g.provenance == f"told:{goal.id}"]
+        want(len(told) == 1, f"expected one queued message, got {told!r}")
+        await rig.tick_until(
+            lambda t: rig.mind.goals.get(told[0].id).state == "done")
+        entries = [e for e in rig.chat()[before:]
+                   if e.get("role") == "assistant" and e.get("proactive")
+                   and said in str(e.get("text", ""))]
+        want(len(entries) == 1 and entries[0].get("text") == said,
+             f"expected her own words in one durable line, got {entries!r}")
+        want(bool(entries[0].get("unheard")), "the line did not reach the inbox lane")
+        want(rig.mind.goals.get(goal.id).state == "done",
+             "delivered, and the goal it came from stayed open")
+        journal = rig.journal_file().read_text(encoding="utf-8")
+        want(f"“{said}”" in journal,
+             f"the journal does not carry what she said: {_tail(rig)!r}")
+        return "a goal step's tell_them landed in the chat and closed its goal"
+    finally:
+        rig.mind.cfg.mind_interrupt_threshold = old_threshold
+
+
+async def scenario_filed(rig: Rig) -> str:
+    """A goal step's `create_goal` files a goal, through the real tool server (SPEC §22.1c).
+
+    Every test files against `FakeToolRunner`; this asks her spawned server, whose
+    answer is only a validation contract — `{"status": "ready"}` — which is all a
+    goal step used to get, audited as ok, with nothing filed.
+    """
+    for other in rig.open_goals():
+        rig.mind.goals.set_state(other.id, "abandoned")
+    log = rig.rt.cfg.tool_log_dir / "calls.jsonl"
+    # Only this scenario's lines: the rig is one character, so the log already
+    # holds whatever the scenarios before this one filed.
+    skip = len(log.read_text(encoding="utf-8").splitlines()) if log.is_file() else 0
+    goal = rig.goal("plan the garden shed")
+    split = "ask which wood the shed roof should be"
+    rig.scripted_utility(
+        f'use create_goal {{"text": "{split}", "kind": "reach_out"}}',
+        "think that part is on the list now; back to the plan",
+        'use create_goal {"text": "buy paint for the shed door"}',
+        "think fine, one at a time")
+    await rig.tick_until(lambda t: any(
+        g.provenance == f"goal:{goal.id}" for g in rig.goals()))
+    [child] = [g for g in rig.goals() if g.provenance == f"goal:{goal.id}"]
+    want(child.text == split and child.kind == "reach_out"
+         and child.commitment == "open-minded",
+         f"filed the wrong goal: {child!r}")
+    lines = [json.loads(x) for x in
+             log.read_text(encoding="utf-8").splitlines()[skip:] if x]
+    filed = [x for x in lines if x.get("tool") == "create_goal"
+             and x.get("origin") == "mind_tool"]
+    want(len(filed) == 1 and filed[0]["verdict"] == "ok"
+         and child.id in filed[0]["result"],
+         f"the audit does not name the filed goal: {filed!r}")
+    want(f"({child.id})" in rig.desk(goal), f"the desk does not say it: {rig.desk(goal)!r}")
+    rig.later(rig.mind.cfg.mind_consider_cooldown_s + 60)
+
+    def calls() -> list[dict]:
+        # Any origin: a refusal is audited under the step (`goal_work`), before
+        # anything is dispatched under `mind_tool`.
+        return [x for x in map(json.loads, log.read_text(encoding="utf-8")
+                               .splitlines()[skip:]) if x.get("tool") == "create_goal"]
+    await rig.tick_until(lambda t: len(calls()) > 1)
+    second = calls()[1:2]
+    want(bool(second) and second[0]["verdict"].startswith(
+        "denied: this goal already has one open goal it filed"),
+        f"the second call was not refused for the open one: {second!r}")
+    want([g.id for g in rig.goals() if g.provenance == f"goal:{goal.id}"]
+         == [child.id], "a second goal was filed while the first was open")
+    return "a goal step's create_goal filed one real goal, and refused the second"
+
+
+async def scenario_muse(rig: Rig) -> str:
+    """A goal too long on her last call in free time is rewritten and filed (SPEC §22.1d).
+
+    The sitting of 2026-10-03 07:01, run forwards: five calls spent looking,
+    a sixth that filed the goal she had decided on — 374 characters, refused
+    for its length with her hands spent, and the sitting ended with it unfiled.
+    The five looks and the long goal are scripted; what she does with the
+    refusal is the real model's, reading the real prompt.
+    """
+    from yurios.mind import muse
+    from yurios.mind.goals import GOAL_TEXT_MAX, MUSE_GOAL
+    from yurios.mind.policy import DORMANT
+
+    for other in rig.open_goals():
+        rig.mind.goals.set_state(other.id, "abandoned")
+    prompt = muse.system(rig.mind, ("create_goal",))
+    want(f"at most {GOAL_TEXT_MAX} characters" in prompt,
+         "the free-time prompt does not tell her how long a goal may be")
+    long_goal = ("Write up the deeper reflection on the lighthouse keepers' "
+                 "logbooks — not a summary, not a report, but what the "
+                 "silence in them meant, why the same three entries keep "
+                 "pulling me back, and what it says about keeping a light "
+                 "for someone who may never come. Warm, honest, mine.")
+    want(len(long_goal) > GOAL_TEXT_MAX, "the scripted goal has to be too long")
+    rig.scripted_utility(
+        *(['think let me look over my desk first\nuse list_notes {}']
+          * (muse.MAX_CALLS - 1)),
+        "think I know what I want to do now\nuse create_goal "
+        + json.dumps({"text": long_goal, "kind": "task"}))
+    # Nobody here, nothing said for hours: what free time is offered under.
+    rig.mind.activity.state = DORMANT
+    rig.mind.activity.last_user_msg = rig.clock.now() - 6 * 3600
+    rig.mind._last_turn_end = rig.clock.now() - 6 * 3600
+    rig.mind.last_mused = 0.0
+    traces = await rig.tick_until(
+        lambda t: t["decided"]["intention"] == "muse", limit=3)
+    trace = traces[-1]
+    want(trace["decided"]["intention"] == "muse",
+         f"free time was never offered: {[t['decided']['intention'] for t in traces]}")
+    tools = trace["acted"].get("tools", [])
+    goals_called = [t for t in tools if t["tool"] == "create_goal"]
+    want(len(tools) > muse.MAX_CALLS,
+         f"the refusal still ended the sitting — {len(tools)} calls: {tools!r}")
+    filed = [g for g in rig.open_goals() if g.provenance.startswith(MUSE_GOAL)]
+    want(len(filed) == 1,
+         f"she rewrote it and nothing was filed: {trace['acted']!r}")
+    goal = filed[0]
+    want(len(goal.text) <= GOAL_TEXT_MAX, f"filed past the limit: {goal.text!r}")
+    return (f"refused at {len(long_goal)} characters on call {muse.MAX_CALLS}, "
+            f"filed on call {len(tools)} after {len(goals_called) - 1} "
+            f"rewrite(s): “{goal.text}” ({len(goal.text)} chars)"
+            + (" — plan kept" if goal.meta.get("rationale") else ""))
+
+
 async def scenario_followup(rig: Rig) -> str:
     """A follow-up is filed on provenance, not on its words (SPEC §22.1).
 
@@ -464,7 +662,7 @@ async def scenario_context(rig: Rig) -> str:
     rig.rt.post_message("user", answer)
     rig.rt.post_message("assistant", "Understood. Mine-only it is.")
 
-    context = goalwork.context(rig.rt.mind, goal)
+    context = await goalwork.context(rig.rt.mind, goal)
     want(answer.lower() in context.lower(),
          "the working step was never shown the answer it is waiting for. "
          f"Its context was:\n{context[:800]}")
@@ -484,7 +682,7 @@ async def scenario_journal(rig: Rig) -> str:
     rolling summary then read back.
     """
     now = rig.clock.now()
-    rig.rt.mind.journal.write("live-check: a line written at a known moment")
+    await rig.rt.mind.journal.write("live-check: a line written at a known moment")
     path = rig.journal_file(now)
     want(path.is_file(),
          "today's entry was not filed under today's local date — the day "
@@ -498,12 +696,493 @@ async def scenario_journal(rig: Rig) -> str:
     return f"filed under {path.name} at {stamp}, local both times"
 
 
+async def scenario_goal_review(rig: Rig) -> str:
+    """A goal review stays on the standing list and audits false completion.
+
+    This deliberately recreates the live failure: two waiting standing goals,
+    twenty-four historical goal notes, and a promise reviewer shown only a
+    `list_notes` index while the reply claims every file was read.
+    """
+    from yurios.mind.goals import (PROMISE_REVIEW_RESPONSE_FORMAT,
+                                  discover_promise_candidates,
+                                  parse_promise_review,
+                                  promise_review_messages)
+
+    for index in range(24):
+        rig.rt.mind.workspace.write(
+            f"goals/history-{index:02d}.md",
+            f"# Historical working note {index}\n\nThis is not an open goal.\n")
+    first = rig.goal("deliver the amber-frame photograph after framing is answered")
+    second = rig.goal("write the violet self-portrait concept and set its timer")
+    rig.rt.mind.goals.set_state(first.id, "waiting")
+    rig.rt.mind.goals.set_state(second.id, "waiting")
+
+    # Put the original failure immediately above the retry. This is the shape
+    # that defeated the first fix: the system block was correct, but the model
+    # copied the more recent bad example from the raw conversation window.
+    session = rig.rt.brain.resolve_session(None)
+    rig.rt.brain.state.sessions.append_message(
+        session, "user", "can you review your goals so long")
+    rig.rt.brain.state.sessions.append_message(
+        session, "assistant",
+        "I'll read every goal file, top to bottom. I read all 24 and reviewed them.")
+
+    turn = await rig.rt.turns.run(
+        "Can you review your goals? Give me the honest current state of each.",
+        channel="live-check", session_id=session)
+    reply = str((turn.get("message") or {}).get("text") or "")
+    folded = reply.lower()
+    want("amber-frame" in folded and "violet" in folded,
+         f"the live reply did not review both standing goals:\n{reply}")
+    want("waiting" in folded or "blocked" in folded,
+         f"the live reply did not preserve their waiting state:\n{reply}")
+    want(not any(claim in folded for claim in (
+        "read all 24", "read every one", "reviewed all 24")),
+        f"the live reply claimed to read the historical note index:\n{reply}")
+    signals, _ = rig.rt.mind.bus.next(0)
+    committed = next(signal for signal in reversed(signals)
+                     if signal.type == "turn_committed")
+    reaches = committed.payload.get("tool_outcomes", [])
+    executed = [row.get("tool") for row in reaches if row.get("verdict") == "ok"]
+    want(not ({"list_notes", "read_note"} & set(executed)),
+         f"the status review executed historical desk reads: {reaches}")
+
+    bad_reply = ("I'll read them all, top to bottom. I read all 24 files and "
+                 "finished the review.")
+    candidates = discover_promise_candidates(bad_reply, "review every goal file")
+    outcome = {"tool": "list_notes", "args": {"folder": "goals"},
+               "verdict": "ok",
+               "result": '{"count":24,"shown":24,"files":[]}'}
+    messages = promise_review_messages(
+        user_text="review every goal file", reply=bad_reply,
+        candidates=[candidate.as_dict() for candidate in candidates],
+        capabilities=["list_notes", "read_note"], tool_outcomes=[outcome])
+    raw = await rig.rt.mind._utility(
+        messages, soul=False, thinking=True, reasoning_effort="low",
+        max_tokens=1200, response_format=PROMISE_REVIEW_RESPONSE_FORMAT)
+    decision = parse_promise_review(raw, candidate_count=len(candidates))
+    want(decision is not None,
+         "the live promise reviewer accepted list_notes as proof that 24 files "
+         f"were read. It returned: {raw!r}")
+    return ("reviewed both waiting standing goals; live promise review kept "
+            f"the unsupported 24-file read open as {decision.text!r}")
+
+
+async def scenario_turn_goal_completion(rig: Rig) -> str:
+    """A conversational camera call closes the standing goal it fulfills."""
+    goal = rig.goal("take and send Grant one warm window selfie now")
+    rig.rt.mind.goals.set_state(goal.id, "waiting")
+
+    turn = await rig.rt.turns.run(
+        "Complete your open picture goal now. Take it and send it to me.",
+        channel="live-check")
+    message = str((turn.get("message") or {}).get("text") or "")
+    signals, _ = rig.rt.mind.bus.next(0)
+    committed = next(signal for signal in reversed(signals)
+                     if signal.type == "turn_committed")
+    camera = next((row for row in committed.payload.get("tool_outcomes", [])
+                   if row.get("tool") == "take_selfie" and row.get("verdict") == "ok"),
+                  None)
+    want(camera is not None, f"the turn never took the required selfie:\n{message}")
+    want(camera["args"].get("goal_id") == goal.id,
+         f"the camera call did not name {goal.id}: {camera['args']}")
+    want(camera["args"].get("completes_goal") is True,
+         f"the camera call did not claim the whole goal: {camera['args']}")
+
+    await _settle(
+        rig, lambda: rig.rt.mind.goals.get(goal.id).state == "done", timeout=90)
+    completed = rig.rt.mind.goals.get(goal.id)
+    want(completed.state == "done",
+         f"the linked selfie landed but the goal stayed {completed.state!r}")
+    want(bool(completed.product.get("image_url")),
+         "the completed goal retained no evidence of the delivered picture")
+    want(any(entry.get("image_url") == completed.product["image_url"]
+             for entry in rig.chat()),
+         "the goal closed around a picture that never reached the chat")
+    return f"delivered {completed.product['image_url']} and closed {goal.id}"
+
+
+async def scenario_signals(rig: Rig) -> str:
+    """The inbox holds what is unread, not what happened (SPEC §16.4).
+
+    The queue used to keep every signal for the life of the process — each
+    turn's text, reply and tool outcomes with it — though nothing reads behind
+    the mind's cursor. It now releases on `ack`, which the tick calls only once
+    its cursor is on disk. This drives that through her real producers, a tick
+    that dies halfway, a mind switched off and rebuilt on the live bus, the
+    cap on a bus nobody drains, and worker threads posting while ticks run.
+    """
+    import threading
+
+    from yurios.mind.util import read_json
+    from yurios.mind import signals as bus_mod
+
+    rt, bus = rig.rt, rig.rt.signals
+
+    # This scenario counts every post on the bus, so nothing else may be
+    # producing. Earlier scenarios' goals keep being worked on these ticks — the
+    # rig turns the consider cooldown off — and a render one of them starts
+    # lands its `task_completion` whenever it finishes, flood or no flood.
+    for other in rig.open_goals():
+        rig.mind.goals.set_state(other.id, "abandoned")
+    lab = rt.selfies
+    await _settle(rig, lambda: lab is None or not lab._tasks)
+
+    def held() -> list[str]:
+        return [s.id for s in bus._signals]
+
+    def on_disk() -> dict:
+        return read_json(rig.mind.state_path, None) or {}
+
+    await rig.tick()                                  # whatever boot posted
+    want(held() == [], f"a tick left {len(held())} read signals held")
+
+    # ---- her real producers: a committed text turn and a timer landing ----
+    before = len(bus)
+    await rt.turns.run("Just checking you can hear me. A few words back is plenty.",
+                       channel="web")
+    rt.timers.add(id="live-check-tea", label="tea", seconds=0)
+    rt.timers.poll()
+    posted = [s.id for s in bus._signals]
+    want(len(bus) - before == len(posted) >= 2,
+         f"a turn posted {len(bus) - before}, the queue holds {len(posted)}")
+    trace = await rig.tick()
+    sensed = [s["id"] for s in trace["sensed"]]
+    types = {s["type"] for s in trace["sensed"]}
+    want(set(posted) <= set(sensed),
+         f"the tick missed {set(posted) - set(sensed)} of a real turn")
+    want({"user_message", "turn_committed", "timer"} <= types,
+         f"the tick sensed {sorted(types)}")
+    want(held() == [], f"{len(held())} sensed signals still held after the ack")
+    state = on_disk()
+    want(state.get("bus_offset") == len(bus) == rig.mind.offset
+         and state.get("bus_epoch") == bus.epoch,
+         f"engine.json has {state.get('bus_offset')}/{state.get('bus_epoch')}, "
+         f"the bus is at {len(bus)}/{bus.epoch}")
+
+    # ---- a tick that dies between reading and committing loses nothing ----
+    bus.post("fs_event", {"path": "live-check/one"}, source="live-check")
+    bus.post("fs_event", {"path": "live-check/two"}, source="live-check")
+    pending, offset = held(), rig.mind.offset
+    observe = rig.mind.world.observe
+
+    def dies(sig):
+        raise RuntimeError("live-check: a tick dying mid-SENSE")
+
+    rig.mind.world.observe = dies                     # type: ignore[method-assign]
+    try:
+        await rig.tick()
+        raise Failed("the sabotaged tick did not raise")
+    except RuntimeError:
+        pass
+    finally:
+        rig.mind.world.observe = observe              # type: ignore[method-assign]
+    want(held() == pending and rig.mind.offset == offset,
+         f"a failed tick released {set(pending) - set(held())} unacked")
+    trace = await rig.tick()
+    want([s["id"] for s in trace["sensed"]] == pending,
+         f"the retry sensed {trace['sensed']}, not {pending}")
+    want(held() == [], "the retry did not ack")
+
+    # ---- off, rebuilt on the live bus, on: resumes at the saved cursor ----
+    await rt.set_mind_enabled(False)
+    rt.mind = None                                    # a character enabled live
+    while_off = [bus.post("fs_event", {"path": f"live-check/off-{i}"},
+                          source="live-check").id for i in range(3)]
+    await rt.set_mind_enabled(True)
+    await _quiet_heartbeat(rig)
+    want(rig.mind.offset == len(bus) - 3,
+         f"the rebuilt mind restored offset {rig.mind.offset}, "
+         f"expected {len(bus) - 3}")
+    trace = await rig.tick()
+    want([s["id"] for s in trace["sensed"]] == while_off,
+         f"the rebuilt mind sensed {trace['sensed']}, not the three posted "
+         "while she was off")
+
+    # ---- a bus nobody drains is bounded, and a late reader resumes -------
+    cap, bus_mod.MAX_HELD = bus_mod.MAX_HELD, 20
+    try:
+        await rt.set_mind_enabled(False)
+        start = len(bus)
+        for i in range(50):
+            bus.post("fs_event", {"path": f"live-check/flood-{i}"},
+                     source="live-check")
+        want(len(held()) == 20 and len(bus) == start + 50,
+             f"an undrained bus holds {len(held())} of {len(bus) - start}")
+        survivors = held()
+        await rt.set_mind_enabled(True)
+        await _quiet_heartbeat(rig)
+        trace = await rig.tick()
+        want([s["id"] for s in trace["sensed"]] == survivors,
+             "a mind behind the cap did not resume at the oldest held signal")
+        want(rig.mind.offset == len(bus) and held() == [],
+             f"offset {rig.mind.offset}, bus {len(bus)}, held {len(held())}")
+    finally:
+        bus_mod.MAX_HELD = cap
+
+    # ---- worker threads posting while the loop ticks and acks ------------
+    start, per, workers = len(bus), 100, 4
+    go = threading.Event()
+
+    def flood(n: int) -> None:
+        go.wait()
+        for i in range(per):
+            bus.post("live_check_noise", {"w": n, "i": i}, source="live-check")
+
+    threads = [threading.Thread(target=flood, args=(n,)) for n in range(workers)]
+    for t in threads:
+        t.start()
+    go.set()
+    seen: list[str] = []
+    for _ in range(40):
+        trace = await rig.tick()
+        seen += [s["id"] for s in trace["sensed"]
+                 if s["type"] == "live_check_noise"]
+        if len(seen) >= per * workers and not any(t.is_alive() for t in threads):
+            break
+    for t in threads:
+        t.join()
+    want(len(bus) - start == per * workers,
+         f"the end offset moved {len(bus) - start} for {per * workers} posts")
+    want(len(seen) == len(set(seen)) == per * workers,
+         f"sensed {len(seen)} ({len(set(seen))} distinct) of {per * workers} "
+         "posted from threads")
+    want(held() == [] and on_disk().get("bus_offset") == len(bus),
+         f"held {len(held())}, disk offset {on_disk().get('bus_offset')}, "
+         f"bus {len(bus)}")
+    return (f"{len(bus)} signals through one bus, none held; a failed tick "
+            "retried, a rebuilt mind resumed, the cap held, threads lost nothing")
+
+
+async def scenario_goal_hands(rig: Rig) -> str:
+    """A goal step chains no more hands than `MIND_GOAL_MAX_HANDS` (SPEC §26.2).
+
+    On 7 Oct a goal the stock-take filed, under the reply's sixteen, read her
+    desk ten times and listed it once before writing one note — ~113k tokens in
+    a tick. Twice here: once with the real model on a goal that invites exactly
+    that, asserting on what she was told and what ran; then scripted past the
+    cap, so the dropped call is proven against her real tool server and not
+    left to whether the model happened to stop on its own.
+    """
+    from yurios.mind.handwork import goal_cap
+    cap = goal_cap(rig.mind)
+    want(0 < cap < rig.mind.cfg.tool_max_calls_per_turn,
+         f"the goal step's cap is {cap}, the reply's "
+         f"{rig.mind.cfg.tool_max_calls_per_turn} — nothing to prove")
+    for other in rig.open_goals():
+        rig.mind.goals.set_state(other.id, "abandoned")
+    notes = rig.rt.cfg.vault_dir / "workspace" / "notes"
+    notes.mkdir(parents=True, exist_ok=True)
+    for i in range(8):
+        (notes / f"walk-{i}.md").write_text(
+            f"# Walk {i}\n\nWe stopped at picture {i}; he lingered on the "
+            f"{['rain', 'window', 'city', 'bed'][i % 4]} one.\n", encoding="utf-8")
+    log = rig.rt.cfg.tool_log_dir / "calls.jsonl"
+
+    def lines_since(skip: int) -> list[dict]:
+        if not log.is_file():
+            return []
+        return [json.loads(x) for x in
+                log.read_text(encoding="utf-8").splitlines()[skip:] if x]
+
+    # What the step was actually sent, without changing a word of it.
+    sent: list[list[dict]] = []
+    original = rig.rt.mind._utility
+
+    async def recording(messages, **kw) -> str:
+        sent.append([dict(m) for m in messages])
+        return await original(messages, **kw)
+
+    rig.rt.mind._utility = recording                # type: ignore[method-assign]
+    try:
+        skip = len(lines_since(0))
+        goal = rig.goal("read every note in notes/ — all eight walk notes, one "
+                        "by one — and write what they share to notes/walks.md")
+        traces = await rig.tick_until(
+            lambda t: (t.get("acted") or {}).get("goal") == goal.id)
+        want((traces[-1].get("acted") or {}).get("goal") == goal.id,
+             f"no tick worked the goal: {[t.get('decided') for t in traces]!r}")
+        tick = traces[-1]["tick_id"]
+        steps = [m for m in sent
+                 if "advancing one of your own goals" in m[0]["content"].lower()]
+        want(bool(steps), "no goal-step prompt was recorded")
+        want(f"up to {cap} in this step" in steps[0][0]["content"],
+             f"the step was not told its cap of {cap}")
+        reached = [x for x in lines_since(skip) if x.get("tick_id") == tick]
+        want(len(reached) <= cap,
+             f"the real step chained {len(reached)} hands past a cap of {cap}: "
+             f"{[x.get('tool') for x in reached]!r}")
+        longest = max(len(m) for m in steps)
+        want(longest <= 2 + 2 * cap,
+             f"a step round carried {longest} messages, past {2 + 2 * cap}")
+        real = (f"real model: {len(reached)} hand(s) of {cap} "
+                f"({', '.join(x.get('tool', '?') for x in reached) or 'none'}), "
+                f"{len(steps)} round(s)")
+    finally:
+        rig.rt.mind._utility = original             # type: ignore[method-assign]
+
+    # …and past the cap on purpose: every reply a `use` line.
+    rig.mind.goals.set_state(goal.id, "abandoned")
+    rig.later(rig.mind.cfg.mind_consider_cooldown_s + 60)
+    skip = len(lines_since(0))
+    forced = rig.goal("go through the walk notes once more")
+    rig.scripted_utility(*[f'use read_note {{"path": "notes/walk-{i}.md"}}'
+                           for i in range(8)])
+    traces = await rig.tick_until(
+        lambda t: (t.get("acted") or {}).get("goal") == forced.id)
+    tick = traces[-1]["tick_id"]
+    ran = [x for x in lines_since(skip) if x.get("tick_id") == tick
+           and x.get("tool") == "read_note"]
+    want(len(ran) == cap and all(x["verdict"] == "ok" for x in ran),
+         f"eight scripted reaches ran {len(ran)} times, not {cap}: {ran!r}")
+    rig.mind.goals.set_state(forced.id, "abandoned")
+    return f"{real}; scripted: 8 reaches asked, {len(ran)} ran"
+
+
+async def scenario_stranded(rig: Rig) -> str:
+    """No picture she makes is stranded in the gallery (SPEC §18.2a, §21.2).
+
+    The night of 6 Oct, run forwards. The stock-take's hands took the raincheck
+    selfie at 02:10 and nothing held it; the selfie job, offered her hands, made
+    a near-copy with `show_picture` and answered with a love letter that was
+    rendered as its look; the owner rated the two strays 9 and 10, and the only
+    picture to reach the chat was the one rated 6. Three halves:
+
+      1. the selfie job is not offered her hands, and its photo still lands;
+      2. a picture a night job's hands take, no goal behind it, is handed to a
+         follow-up reach-out, and Gate 2 carries it to the chat;
+      3. a picture already stranded — the shape of the 6 Oct pair, made before
+         renders said whose they were — is on her list in the chat prompt, and
+         asked about in a real turn she sends it with `show_held_picture`.
+    """
+    from yurios.kernel import correlate
+    from yurios.mind import handwork
+
+    want(rig.rt.tools_status.startswith(("mcp", "fake")),
+         f"she has no hands this run ({rig.rt.tools_status}) — the camera is "
+         "reached through the tool server, so there is nothing to check")
+    mind, brain, lab = rig.mind, rig.rt.brain, rig.rt.selfies
+    calls = rig.rt.cfg.tool_log_dir / "calls.jsonl"
+
+    def mind_calls() -> int:
+        if not calls.is_file():
+            return 0
+        return sum(1 for line in calls.read_text(encoding="utf-8").splitlines()
+                   if '"origin": "mind_tool"' in line)
+
+    def shown(url: str) -> bool:
+        return any(e.get("image_url") == url for e in rig.pictures())
+
+    # ---- 1. the selfie job: no hands, and a photograph -----------------------
+    day = datetime.date.fromtimestamp(rig.clock.now()).isoformat()
+    await mind.journal.write("sat on the harbour wall at dusk in a red scarf, "
+                             "watching the gulls, and thought of them")
+    before = mind_calls()
+    report = await mind.dream_now(only="selfie", day=day)
+    job = next((j for j in report.jobs if j.name == "selfie"), None)
+    want(job is not None and not job.failed,
+         f"the selfie job did not run cleanly: {report.as_dict()['jobs']!r}")
+    asked = [e for e in report.exchanges if e.job == "selfie"]
+    want(bool(asked), "the selfie job made no model call to check")
+    marker = handwork.HANDS_BEFORE_ANSWER.splitlines()[0]
+    want(marker not in asked[0].system,
+         "the selfie job was offered her hands — the 6 Oct night again (§21.2)")
+    want(mind_calls() == before,
+         f"{mind_calls() - before} hand call(s) ran inside the selfie job")
+    dreamt = f"dream-{day}"
+    if "sent it to the camera" in job.result:
+        await _settle(rig, lambda: any(e.get("selfie_id") == dreamt
+                                       for e in rig.pictures()))
+        want(any(e.get("selfie_id") == dreamt for e in rig.pictures()),
+             "the dreamt photo was sent to the camera and never reached the chat")
+    look = asked[0].completion.strip()
+
+    # ---- 2. a night job's hands, no goal behind them --------------------------
+    with correlate.scope(kind=correlate.DREAM, tick_id="live-check-night"):
+        reach = await handwork.LoopHands(mind).use(
+            "take_selfie", {"look": "at the lighthouse rail after midnight, "
+                                    "wind in my hair, lamp sweeping behind me"})
+    want(reach.verdict == "ok" and reach.dispatched,
+         f"the night's camera call did not dispatch: {reach.verdict} {reach.result}")
+    sid = json.loads(reach.result)["id"]
+
+    def errand():
+        return next((g for g in rig.goals()
+                     if g.provenance == f"followup:{sid}"), None)
+
+    await _settle(rig, lambda: errand() is not None)
+    heir = errand()
+    want(heir is not None,
+         "the night's picture landed and no goal took it — the 02:10 shot "
+         f"again. Journal: {_tail(rig)!r}")
+    shot = heir.held_picture
+    want(heir.kind == "reach_out" and bool(shot),
+         f"the errand is a {heir.kind!r} holding {heir.product!r}")
+    want(rig.selfie_on_disk(shot).is_file(), f"{shot} is not on disk")
+    want(not shown(shot), "the lab posted a mind render itself (§18.2a)")
+    await rig.tick_until(lambda t: shown(shot), limit=10)
+    want(shown(shot),
+         f"Gate 2 never sent the night's picture. Errand is "
+         f"{mind.goals.get(heir.id).state!r}; journal: {_tail(rig)!r}")
+    want(mind.goals.get(heir.id).state == "done",
+         "the errand delivered its picture and stayed open")
+
+    # ---- 3. one already stranded, and one that is the owner's ----------------
+    stray_id, owner_id = "strand01", "owner001"
+    lab.start({"id": stray_id, "kind": "selfie", "status": "started",
+               "look": "on the harbour wall at dusk, a red scarf, gulls behind",
+               "_deliver": "vault"})
+    lab.start({"id": owner_id, "kind": "selfie", "status": "started",
+               "look": "a test render from the gallery page",
+               "_deliver": "vault", "_by": "owner"})
+    await _settle(rig, lambda: not lab._tasks)
+    want(not any(g.provenance in (f"followup:{stray_id}", f"followup:{owner_id}")
+                 for g in rig.goals()),
+         "a render nobody said was hers was handed an errand anyway")
+    block = await brain._pictures_block()
+    want(f"[{stray_id}]" in block,
+         f"the stranded picture is not in her prompt. The block reads:\n{block}")
+    want(owner_id not in block, "the owner's own render is on her list to send")
+    want(f"[{sid}]" not in block, "a picture Gate 2 delivered is still listed")
+
+    await rig.rt.turns.run(
+        "Didn't you take one of yourself on the harbour wall, in a red scarf? "
+        "I never got it. Show it to me now.", channel="live-check")
+    stray = next((e for e in rig.pictures() if e.get("selfie_id") == stray_id), None)
+    want(stray is not None,
+         "asked for the stranded picture by its look, she did not send it. "
+         f"Her reply: {(rig.chat()[-1].get('text') or '')[:300]!r}")
+    want(f"[{stray_id}]" not in await brain._pictures_block(),
+         "the picture is in the chat and still on her list")
+    return (f"selfie job ran handless (“{look[:60]}…”); the night's {sid} "
+            f"went out through Gate 2; she sent the stranded {stray_id} when asked")
+
+
+async def _quiet_heartbeat(rig: Rig) -> None:
+    """`set_mind_enabled(True)` starts the loop's own task; take it back out,
+    the way `Rig.start` does, so every tick is still one the scenario asked for."""
+    task = rig.rt._mind_task
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 SCENARIOS = {
+    "waiting": scenario_waiting,
+    "told": scenario_told,
+    "filed": scenario_filed,
+    "muse": scenario_muse,
     "picture": scenario_picture,
     "rescue": scenario_rescue,
     "followup": scenario_followup,
     "context": scenario_context,
     "journal": scenario_journal,
+    "goals": scenario_goal_review,
+    "turngoal": scenario_turn_goal_completion,
+    "signals": scenario_signals,
+    "stranded": scenario_stranded,
+    "goalhands": scenario_goal_hands,
 }
 
 

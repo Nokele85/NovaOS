@@ -42,9 +42,9 @@ log = logging.getLogger("desktop.brain")
 GREETING_LOOKBACK = 6
 
 GREET_CUE = ("(({user} just opened the sanctuary and put their headset on — no "
-             "words yet; you speak first. One short, warm spoken greeting in your "
-             "own voice that surfaces something {user} told you before. Lead with "
-             "an expression tag.))")
+             "words yet; you speak first. One short spoken greeting that "
+             "surfaces something {user} told you before. "
+             f"{asm.OWN_VOICE} Lead with an expression tag.))")
 
 
 @dataclass
@@ -77,6 +77,8 @@ class BrainAdapter:
         # Without it the goals block simply isn't assembled — which is Build #1's
         # behaviour and every mindless runtime's.
         self.goals = None
+        self._on_goal_write = None
+        self.goal_creation_available = False
 
     def set_prompt_log(self, prompt_log) -> None:
         """Wire the sink that records what she was actually asked (SPEC §24.2)."""
@@ -91,7 +93,7 @@ class BrainAdapter:
         """
         self.knowledge = store
 
-    def set_goals(self, store) -> None:
+    def set_goals(self, store, on_write=None) -> None:
         """Wire her own standing list into the §7.1 assembly (the §22 block).
 
         Late-bound like the shelf and the desk, and for the same reason: the
@@ -100,26 +102,55 @@ class BrainAdapter:
         up promising the same thing three evenings running.
         """
         self.goals = store
+        self._on_goal_write = on_write
 
-    def _open_goals(self) -> list[str]:
+    def _open_goals(self) -> tuple[list[str], bool]:
         """Her open goals, newest last, as one line each. Never raises: a
         `goals.md` somebody hand-edited into nonsense is a turn without the
         block, not a turn that doesn't happen (the shelf's rule)."""
-        if self.goals is None or getattr(self.cfg, "goals_in_prompt", 12) <= 0:
-            return []
+        limit = getattr(self.cfg, "goals_in_prompt", 12)
+        if self.goals is None or limit <= 0:
+            return [], True
         try:
             open_goals = self.goals.open_goals()
         except Exception:       # noqa: BLE001 — a mangled goals.md
             log.warning("goal list failed; assembling without it", exc_info=True)
-            return []
+            return [], True
         lines: list[str] = []
-        for goal in open_goals[-getattr(self.cfg, "goals_in_prompt", 12):]:
+        selected = open_goals[-limit:]
+        for goal in selected:
             # The state is worth a word: "waiting" is the difference between a
             # thing she has not started and a thing she is blocked on, and only
             # one of those is worth asking them about.
             mark = "" if goal.state == "pending" else f" ({goal.state})"
-            lines.append(f"{goal.text}{mark}")
-        return lines
+            lines.append(f"[{goal.id}] {goal.text}{mark}{self._held_mark(goal)}")
+        return lines, len(selected) == len(open_goals)
+
+    #: The hand that puts a goal's held picture into the conversation (§18.2a).
+    SHOW_HELD = "show_held_picture"
+
+    def _held_mark(self, goal) -> str:
+        """What the goal line says about a picture it is holding (§22.6).
+
+        Live, 3 Oct: two finished photos sat on two goals waiting for Gate 2,
+        the list said only "(active)", and asked how her goals were going she
+        said she had not taken either shot yet. The line is the one place the
+        talking-self learns the picture exists.
+        """
+        held = getattr(goal, "held_picture", "")
+        if not held:
+            return ""
+        user = self.cfg.user_name
+        mark = f" — the picture is already taken; {user} hasn't seen it yet"
+        if self.held_picture_showable:
+            mark += f" (`{self.SHOW_HELD}` with this goal_id shows it to them now)"
+        return mark
+
+    @property
+    def held_picture_showable(self) -> bool:
+        """Whether this brain has the hand that shows a held picture. A
+        mindless desktop brain has no hands at all."""
+        return False
 
     def set_workspace(self, workspace, skills, on_write=None) -> None:
         """Wire her desk and her skills into the prompt (SPEC §34.3).
@@ -161,8 +192,12 @@ class BrainAdapter:
                 "get the actual instructions before you follow one.\n\n"
                 + catalog)
         try:
+            # Which goal each goals/<id>.md is — by id alone they name nothing
+            # (§22.3). Before the mind wires its store in, there are none.
+            labels = self.goals.desk_labels() if self.goals is not None else None
             desk = (self.workspace.digest(
-                limit=getattr(self.cfg, "workspace_digest_files", 20))
+                limit=getattr(self.cfg, "workspace_digest_files", 20),
+                labels=labels)
                 if self.workspace is not None else "")
         except Exception:       # noqa: BLE001 — same rule as the shelf
             log.warning("workspace digest failed; assembling without it",
@@ -190,13 +225,46 @@ class BrainAdapter:
                 "it is.\n\n" + desk)
         return "\n\n".join(parts)
 
-    def _recall_knowledge(self, text: str) -> list:
+    def _mind_block(self) -> str:
+        """Her own recent thinking, bounded and labelled (SPEC §34.5).
+
+        Goals only while she is working them — `active` or `waiting` — and not
+        the messages she has queued (`told:`), whose words are already their
+        title in the goals block, nor the night's maintenance, which is
+        bookkeeping and not thought. Never raises: the shelf's rule.
+        """
+        if self.workspace is None:
+            return ""
+        working: list = []
+        if self.goals is not None:
+            try:
+                working = [g for g in self.goals.open_goals()
+                           if g.state in ("active", "waiting")
+                           and not str(g.provenance).startswith("told:")
+                           and not g.meta.get("auto")]
+            except Exception:   # noqa: BLE001 — a mangled goals.md
+                log.warning("goal list failed; on-your-mind without goals",
+                            exc_info=True)
+        try:
+            return self.workspace.on_your_mind(
+                working, user_name=self.cfg.user_name)
+        except Exception:       # noqa: BLE001 — same rule as the shelf
+            log.warning("on-your-mind block failed; assembling without it",
+                        exc_info=True)
+            return ""
+
+    async def _pictures_block(self) -> str:
+        """PICTURES YOU HAVEN'T SENT (§18.2a). A mindless desktop brain has no
+        shelf and no hand to send from it, so nothing."""
+        return ""
+
+    async def _recall_knowledge(self, text: str) -> list:
         """The shelf, searched for this turn. Never raises: a broken index is a
         turn without the block, not a turn that doesn't happen."""
         if self.knowledge is None or self.cfg.knowledge_k <= 0:
             return []
         try:
-            return self.knowledge.search(text, self.cfg.knowledge_k)
+            return await self.knowledge.asearch(text, self.cfg.knowledge_k)
         except Exception:       # noqa: BLE001 — no embedder, a half-written index
             log.warning("knowledge recall failed; assembling without the shelf",
                         exc_info=True)
@@ -221,17 +289,26 @@ class BrainAdapter:
             return session_id
         return self.state.sessions.create()
 
-    def _assemble(self, session_id: str, text: str, *, window: list[dict],
-                  lore) -> object:
-        """One assembled prompt (Build #1) + the Build #2 expression block (§6)."""
+    async def _assemble(self, session_id: str, text: str, *, window: list[dict],
+                        lore) -> object:
+        """One assembled prompt (Build #1) + the Build #2 expression block (§6).
+
+        Async for the two lookups alone: each embeds the message, and an
+        embedder can hold a call for seconds, so the vectors come from a worker
+        while every other character on the node keeps talking (SPEC §2.4)."""
+        memories = await self.state.store.arecall(text, self.cfg.retrieval_k)
+        knowledge = await self._recall_knowledge(text)
         soul = self.state.soul_loader.load()                  # read every turn (§5)
+        goals, goals_complete = self._open_goals()
         prompt = asm.assemble(
             soul,
             user_md=self.state.store.read_user_md(),
             summary=self.state.store.read_summary(),
-            memories=self.state.store.recall(text, self.cfg.retrieval_k),
-            knowledge=self._recall_knowledge(text),
-            goals=self._open_goals(),
+            memories=memories,
+            knowledge=knowledge,
+            goals=goals,
+            goals_complete=goals_complete,
+            goal_creation_available=self.goal_creation_available,
             lore=lore,
             window=window,
             user_msg=text,
@@ -250,9 +327,10 @@ class BrainAdapter:
         if origin is not None and origin.channel == "voice":
             prompt.messages[0]["content"] += f"\n\n## VOICE\n\n{SPOKEN_STYLE_DIRECTIVE}"
         prompt.messages[0]["content"] += f"\n\n## EXPRESSION\n\n{EXPRESSION_DIRECTIVE}"
-        desk = self._desk_block()
-        if desk:
-            prompt.messages[0]["content"] += f"\n\n{desk}"
+        for block in (self._mind_block(), self._desk_block(),
+                      await self._pictures_block()):
+            if block:
+                prompt.messages[0]["content"] += f"\n\n{block}"
         return soul, prompt
 
     # -- the ReplyBrain seam ----------------------------------------------------
@@ -266,7 +344,7 @@ class BrainAdapter:
         corpus, is the note (§35), because a photo re-sent with every later turn
         would eat the window it was small enough to fit in the first place."""
         turn_index = self.state.sessions.get(session_id)["turn_count"]
-        soul, prompt = self._assemble(
+        soul, prompt = await self._assemble(
             session_id, text,
             window=self.state.sessions.window(session_id, self.cfg.raw_window_turns),
             lore=self.state.soul_loader.load().lorebook_hits(text))
@@ -298,12 +376,13 @@ class BrainAdapter:
             return
         self.state.sessions.drop_last(session_id, "user")
 
-    async def persist(self, session_id: str, user_text: str, reply: str) -> None:
+    async def persist(self, session_id: str, user_text: str,
+                      reply: str) -> list[dict]:
         """Build #1's post-turn pipeline, verbatim: corpus line, then journal +
         index + USER.md + summary + exactly one git commit (SPEC §2, §4.4)."""
         pend = self._pending.pop(session_id, None)
         if pend is None:
-            return
+            return []
         turn_id = self.state.corpus.log_turn(
             session_id=session_id, turn_index=pend.turn_index,
             messages=pend.prompt.messages, completion=reply,
@@ -331,6 +410,7 @@ class BrainAdapter:
         record = Record(session_id=session_id, turn_index=pend.turn_index,
                         user_msg=user_text, reply=reply)
         await post_turn(self.state, record, session_id, pend.turn_index + 1)
+        return []
 
     # -- the greeting: she speaks first (SPEC §7) -------------------------------
     def _has_history(self) -> bool:
@@ -388,7 +468,7 @@ class BrainAdapter:
         if chatlog is None:
             return []
         try:
-            rows = chatlog.tail(GREETING_LOOKBACK)
+            rows = chatlog.said(GREETING_LOOKBACK)
         except Exception:  # noqa: BLE001 — no transcript is not a failed greeting
             log.debug("greeting: no transcript to open on", exc_info=True)
             return []
@@ -399,6 +479,14 @@ class BrainAdapter:
                 out.append({"role": r.get("role", "assistant"),
                             "content": content})
         return out
+
+    def _stream_unprompted(self, messages: list[dict]) -> AsyncIterator[str]:
+        """The model call behind a line she says without being asked — a
+        greeting here; self-talk, an announcement and a reach-out in the world
+        brain. Plain streaming; `ToolBrain` gives it her hands (SPEC §7.4)."""
+        return self.state.chat.stream(
+            messages, temperature=self.cfg.temperature,
+            max_tokens=self.cfg.max_reply_tokens)
 
     async def stream_greeting(self, session_id: str) -> AsyncIterator[str]:
         """Stream the continuity opener. The cue itself is NOT appended to the
@@ -426,7 +514,7 @@ class BrainAdapter:
             await self._retire_bootstrap()
 
         cue = GREET_CUE.format(user=self.cfg.user_name)
-        _soul, prompt = self._assemble(session_id, cue,
+        _soul, prompt = await self._assemble(session_id, cue,
                                        window=self._last_words(), lore=[])
         # A greeting is never persisted — no corpus line, no transcript entry — so
         # without this the first thing she says every session leaves no record of
@@ -434,9 +522,7 @@ class BrainAdapter:
         with correlate.scope(kind=correlate.GREETING, session_id=session_id):
             said: list[str] = []
             try:
-                async for token in self.state.chat.stream(
-                        prompt.messages, temperature=self.cfg.temperature,
-                        max_tokens=self.cfg.max_reply_tokens):
+                async for token in self._stream_unprompted(prompt.messages):
                     said.append(token)
                     yield token
             finally:

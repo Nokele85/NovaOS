@@ -58,6 +58,11 @@ async def test_only_http_and_https_can_be_read(url):
     "192.168.1.1",      # the router's admin page
     "169.254.169.254",  # cloud metadata, the classic
     "0.0.0.0",
+    "100.64.0.2",       # carrier-grade NAT: a Tailscale peer…
+    "100.100.100.100",  # …and MagicDNS — neither private nor global to Python
+    "::ffff:127.0.0.1", # IPv4 wrapped in IPv6 is judged by what it wraps
+    "64:ff9b::7f00:1",  # NAT64's spelling of 127.0.0.1, which Python calls global
+    "224.0.0.251",      # multicast, also "global" to Python
 ])
 async def test_private_and_local_addresses_are_refused(addr):
     with pytest.raises(UnsafeURL, match="this machine or this network"):
@@ -67,6 +72,12 @@ async def test_private_and_local_addresses_are_refused(addr):
 async def test_a_public_address_passes():
     assert await check_url("https://example.com/x",
                            pointing_at("93.184.216.34")) == "https://example.com/x"
+
+
+@pytest.mark.parametrize("addr", ["2001:4860:4860::8888", "64:ff9b::5db8:d822"])
+async def test_a_public_ipv6_address_passes(addr):
+    assert await check_url("https://example.com/x",
+                           pointing_at(addr)) == "https://example.com/x"
 
 
 async def test_a_name_that_will_not_resolve_is_refused_not_attempted():
@@ -258,6 +269,27 @@ def test_paragraph_breaks_survive_because_the_shelf_chunks_on_them():
 def test_extraction_never_raises_on_broken_markup():
     title, text = extract("<p>half a <b>page")
     assert "half a" in text and isinstance(title, str)
+
+
+def test_article_keeps_its_text_without_related_posts_or_comment_widgets():
+    html = ("<title>Tea</title><main><article><h1>Brewing</h1>"
+            "<p>Gyokuro needs cooler water to preserve its sweet flavor.</p>"
+            "<div class='related'><div><p>Buy a kettle today.</p></div></div>"
+            "<section id='comments'><div><p>Nice post!</p></div></section>"
+            "<p>A second steep can be a little warmer.</p></article></main>"
+            "<div role='complementary'>Subscribe now</div>")
+    title, body = extract(html)
+    assert title == "Tea"
+    assert "Gyokuro needs cooler water" in body
+    assert "second steep" in body
+    assert not any(s in body for s in ("Buy a kettle", "Nice post", "Subscribe"))
+
+
+async def test_large_app_shell_with_no_article_is_not_shelved():
+    html = "<title>Tea</title><script>" + "x" * 6_000 + "</script><p>Open app</p>"
+    fetcher = HttpFetcher(transport=html_response(html), resolve=public())
+    with pytest.raises(ValueError, match="no substantive readable text"):
+        await fetcher.fetch("https://example.com/empty")
 
 
 def test_gist_cuts_on_a_word_not_mid_name():

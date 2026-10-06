@@ -4,12 +4,20 @@ Two commands answer most questions:
 
 ```bash
 yurios doctor                      # what .env selects vs what's actually installed
+yurios doctor --probe-model        # also check the house model endpoints and keys
 curl localhost:8768/api/health     # what's actually running right now
 ```
 
 The doctor reads the same `.env` the server reads, checks each selected backend against what's
 importable, and prints the exact install command for anything missing — plus the `.env` change
-that avoids the download altogether where one exists. `/api/health` reports the live truth:
+that avoids the download altogether where one exists.
+`--probe-model` checks the selected house chat model and enabled utility model with a
+three-second timeout per request. It reports connection, authentication and missing-model
+failures, and exits nonzero for a failed probe. An untagged Ollama name counts as `:latest`, the
+way Ollama itself reads it. GGUF and unset models have no HTTP endpoint to check. `yurios
+configure` and the first-run panel run the same check before saving a model, and refuse one that
+fails it. Character-specific connections are configured separately from the house `.env`.
+`/api/health` reports the live truth:
 voice, tools, mind, selfies, channels, viewers and context. Its `ok` is up **and** working —
 `false` with a `degraded` list naming what's wrong (no model chosen, a channel or tool server that
 failed) rather than a flat `true` for anything that answers at all.
@@ -124,8 +132,12 @@ without pinning, chat and embeddings evict each other every turn. Set `LMSTUDIO_
 **She thinks out loud before answering** — `CHAT_THINKING=true` with a reasoning model. Set it to
 `false`; the utility model keeps thinking on, off the hot path.
 
-**An empty reply** — `MAX_REPLY_TOKENS` too small for a reasoning model: the `<think>` block eats
-the budget and the reply comes back empty.
+**She doesn't answer** — your line is marked *no reply* and the composer says why; the log has a
+`text turn came back empty` line with the numbers. *She ran out of room thinking* means
+`MAX_REPLY_TOKENS` is too small for a reasoning model: the `<think>` block ate the budget. Raise it
+(the default is 8192), or lower `CHAT_REASONING_EFFORT`. *The model refused to answer* is the
+provider's content filter; a different `CHAT_MODEL` is the fix. Your line is kept on the page but
+out of her window, so sending it again doesn't make her read it twice.
 
 **A hosted model refuses to stay in character** — that's the model, not the runtime. See the note
 about refusal-trained models in [Models → LM Studio](models.md#lm-studio).
@@ -238,7 +250,7 @@ curl localhost:8768/api/mind/journal
 tail -f data/characters/yuri/traces/ticks.jsonl
 ```
 
-If you genuinely want more initiative, lower `MIND_INTERRUPT_THRESHOLD` (0.75) or raise
+If you genuinely want more initiative, lower `MIND_INTERRUPT_THRESHOLD` (0.6) or raise
 `MIND_MAX_INTERRUPTS_PER_DAY` (3). Remember quiet hours (~22:00–09:00) are a **hard gate**, not a
 weight — no score gets through them.
 

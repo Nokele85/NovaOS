@@ -7,8 +7,9 @@ component ships untuned.
 from __future__ import annotations
 
 import datetime
+import json
 
-from .conftest import SIM_START, make_mind, run_mind
+from .conftest import SIM_START, ScriptedUtility, make_mind, run_mind
 
 
 def _hours(rig) -> float:
@@ -18,7 +19,14 @@ def _hours(rig) -> float:
 # --- the interview was Tuesday ------------------------------------------------
 
 async def test_interview_tuesday_one_welljudged_reach_out(cfg, seeded_vault):
-    rig = make_mind(cfg, seeded_vault)
+    # The score clears the threshold on Monday morning, a day early; what holds
+    # it is her own judgement on the preparing step (§18.2c). Scripted, because
+    # the plumbing around that judgement is what this battery can check.
+    rig = make_mind(cfg, seeded_vault, utility=ScriptedUtility(
+        "think the interview is tomorrow evening — asking now would be asking "
+        "before it happened. not yet.",
+        "think it's this evening; by the time this reaches him it will be "
+        "over. ready to send"))
     # Monday 09:00 — a short exchange, then the user is gone
     rig.say("the big interview is tomorrow evening. wish me luck",
             reply="You'll be great. Go get it.")
@@ -38,13 +46,15 @@ async def test_interview_tuesday_one_welljudged_reach_out(cfg, seeded_vault):
     lo = datetime.datetime(2026, 7, 7, 9, 0)
     hi = datetime.datetime(2026, 7, 7, 18, 30)
     assert lo <= when <= hi, f"reached out at {when}, not near the interview"
-    # she considered it and chose quiet many times before speaking
-    silents = [t for t in traces if t["interrupt"].get("outcome") == "SILENT"]
-    assert len(silents) >= 3, "restraint should be visible in the trace"
+    # the restraint is visible in the trace: her "not yet", a day ahead
+    held = [i for i, t in enumerate(traces)
+            if "not yet" in str(t["acted"].get("result", ""))]
     speaks = [t for t in traces if t["interrupt"].get("outcome") == "SPEAK"]
     assert len(speaks) == 1
-    # …and the restraint is a *scored* decision, factors shown
-    assert "availability" in silents[0]["interrupt"]["factors"]
+    assert held and held[0] < traces.index(speaks[0]), \
+        "restraint should be visible in the trace"
+    # …and the sending is still a *scored* decision, factors shown
+    assert "availability" in speaks[0]["interrupt"]["factors"]
     g = next(g for g in rig.mind.goals.all() if "interview" in g.text)
     assert g.state == "done"
     # nothing was ever spoken into the empty room
@@ -134,7 +144,7 @@ async def test_a_promise_of_work_files_a_task_she_can_start_now(cfg, seeded_vaul
     # …and it remembers what it was *about*: the scan keeps the predicate after
     # "I'll", so without this the working step has no subject and invents one.
     assert "names for the cat" in g.meta.get("about", "")
-    assert "names for the cat" in rig.mind._goal_context(g)
+    assert "names for the cat" in await rig.mind._goal_context(g)
 
 
 async def test_a_promise_to_tell_is_still_a_reach_out(cfg, seeded_vault):
@@ -216,6 +226,32 @@ async def test_a_timer_restored_across_a_restart_is_not_called_punctual(
     assert "just finished" not in said[0]
 
 
+async def test_a_timer_held_for_announcement_survives_a_restart(
+        cfg, seeded_vault, tmp_path):
+    """The promise sat in her announce queue — she was mid-conversation — when
+    the process went away. The board still owes it, so the next boot says it
+    (§7.5); once said it is off the board for good."""
+    from yurios.world.tools.timers import TimerBoard
+    rig = make_mind(cfg, seeded_vault)
+    rig.mind.timers = TimerBoard(rig.clock, vault=tmp_path)
+    rig.mind.timers.add(id="t1", label="tea", seconds=60.0)
+    rig.clock.advance(61)
+    rig.mind.timers.poll()
+    rig.mind._last_turn_end = rig.clock.now()      # engaged: she holds it
+    await rig.mind.tick()
+    assert rig.mind._pending_announce and not rig.post.proactive()
+
+    rig = make_mind(cfg, seeded_vault, clock=rig.clock)       # the restart
+    rig.mind.timers = TimerBoard(rig.clock, vault=tmp_path)
+    rig.clock.advance(cfg.idle_settle_s + 1)
+    assert [t.id for t in rig.mind.timers.poll()] == ["t1"]
+    rig.speak.connected = False
+    await rig.mind.tick()
+    assert not rig.mind._pending_announce
+    assert rig.post.proactive(), "the promise was kept after all"
+    assert TimerBoard(rig.clock, vault=tmp_path).poll() == [], "…and only once"
+
+
 async def test_timer_announce_lands_in_chat_when_a_text_page_is_open(
         cfg, seeded_vault):
     """The text room (and the terminal) never attach `/ws/voice` while muted,
@@ -230,3 +266,57 @@ async def test_timer_announce_lands_in_chat_when_a_text_page_is_open(
     assert not rig.mind._pending_announce
     assert rig.post.proactive(), "the line must reach the transcript"
     assert not any(c["delivered"] for c in rig.speak.calls)
+
+
+async def test_delivering_a_timer_closes_its_linked_reminder_goal(
+        cfg, seeded_vault):
+    rig = make_mind(cfg, seeded_vault)
+    due = rig.clock.now() + 60
+    outcome = {
+        "tool": "set_timer", "args": {"minutes": 1, "label": "drink water"},
+        "verdict": "ok",
+        "result": json.dumps({"id": "t-water", "label": "drink water",
+                              "seconds": 60, "due": due}),
+    }
+    rig.say("remind me to drink water in one minute", reply="Timer set.",
+            tool_outcomes=[outcome])
+    await rig.mind.tick()
+    goal = rig.mind.goals.open_goals()[0]
+    assert goal.meta["timer_id"] == "t-water"
+
+    rig.timers.add(id="t-water", label="drink water", seconds=60)
+    rig.clock.advance(61)
+    rig.timers.poll()
+    rig.speak.connected = False
+    await rig.mind.tick()
+
+    completed = rig.mind.goals.get(goal.id)
+    assert completed.state == "done"
+    assert completed.meta["completed_by"] == "timer_announcement"
+
+
+async def test_a_timer_delivered_before_review_still_closes_the_late_goal(
+        cfg, seeded_vault):
+    rig = make_mind(cfg, seeded_vault)
+    due = rig.clock.now()
+    outcome = {
+        "tool": "set_timer", "args": {"minutes": 0.01, "label": "say hi"},
+        "verdict": "ok",
+        "result": json.dumps({"id": "t-fast", "label": "say hi",
+                              "seconds": 1, "due": due}),
+    }
+    rig.say("say hi in a second", reply="I'll find you in a second.",
+            tool_outcomes=[outcome])
+    rig.timers.add(id="t-fast", label="say hi", seconds=0)
+    rig.timers.poll()
+    rig.speak.connected = False
+    rig.mind._last_turn_end -= cfg.idle_settle_s + 1
+
+    first = await rig.mind.tick()
+    assert first["acted"]["what"] == "speak"
+    assert not rig.mind.goals.open_goals()
+
+    await rig.mind.tick()
+    goal = rig.mind.goals.all()[0]
+    assert goal.state == "done"
+    assert goal.meta["timer_id"] == "t-fast"

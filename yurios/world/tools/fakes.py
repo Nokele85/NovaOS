@@ -14,13 +14,27 @@ from .client import ToolSpec
 SPECS = [
     ToolSpec("set_timer", "Set a countdown timer.",
              {"properties": {"minutes": {"type": "number"},
-                             "label": {"type": "string"}},
+                              "label": {"type": "string"},
+                              "goal_id": {"type": "string"},
+                              "completes_goal": {"type": "boolean"}},
               "required": ["minutes"]}),
     ToolSpec("play_music", "Start or stop the room's ambient music.",
              {"properties": {"action": {"type": "string"},
                              "track": {"type": "string"},
                              "volume": {"type": "number"}},
               "required": ["action"]}),
+    ToolSpec("create_goal", "Create a real standing goal in the authoritative "
+             "goal list when the user explicitly asks to set or add one.",
+             {"properties": {"text": {"type": "string"},
+                              "kind": {"type": "string",
+                                       "enum": ["task", "reach_out"]}},
+              "required": ["text"]}),
+    ToolSpec("show_held_picture", "Show the user a picture you already made "
+             "that they haven't seen — by the goal holding it, or by its "
+             "picture_id from PICTURES YOU HAVEN'T SENT.",
+             {"properties": {"goal_id": {"type": "string"},
+                             "picture_id": {"type": "string"}},
+              "required": []}),
     # Her desk and her skills (§34.2). Advertised here because they are the hands
     # the loop reaches for most, and a fake tool set that omitted them let the
     # loop's tests pass over the exact shape — a whole document as a JSON string
@@ -73,8 +87,10 @@ SPECS = [
                              "mood": {"type": "string"},
                              "wardrobe": {"type": "string"},
                              "framing": {"type": "string"},
-                             "lighting": {"type": "string"},
-                             "avoid": {"type": "string"}},
+                              "lighting": {"type": "string"},
+                              "avoid": {"type": "string"},
+                              "goal_id": {"type": "string"},
+                              "completes_goal": {"type": "boolean"}},
               "required": []}),
     ToolSpec("show_picture", "Share a picture of something that isn't you — "
              "what you're looking at, a place, a thing you're describing.",
@@ -139,11 +155,20 @@ class FakeToolRunner:
             return json.dumps({"id": f"fake{len(self.calls)}",
                                "label": args.get("label") or "your timer",
                                "seconds": round(float(args.get("minutes", 1)) * 60),
-                               "due": 0})
+                               "due": 0, "goal_id": args.get("goal_id") or None,
+                               "completes_goal": bool(args.get("completes_goal"))})
         if tool == "play_music":
             return json.dumps({"playing": args.get("action") == "play",
                                "track": args.get("track", "warm_pad"),
-                               "volume": args.get("volume", 0.4)})
+                                "volume": args.get("volume", 0.4)})
+        if tool == "create_goal":
+            return json.dumps({"status": "ready",
+                               "text": " ".join(str(args.get("text") or "").split()),
+                               "kind": args.get("kind") or "task"})
+        if tool == "show_held_picture":
+            return json.dumps({"status": "ready",
+                               "goal_id": str(args.get("goal_id") or "").strip(),
+                               "picture_id": str(args.get("picture_id") or "").strip()})
         if tool == "list_notes":
             return json.dumps({"folder": args.get("folder") or "",
                                "notes": [{"path": "research/learning_you.md",
@@ -190,8 +215,10 @@ class FakeToolRunner:
                                "mood": args.get("mood") or None,
                                "wardrobe": args.get("wardrobe") or None,
                                "framing": args.get("framing") or None,
-                               "lighting": args.get("lighting") or None,
-                               "avoid": args.get("avoid") or None,
+                                "lighting": args.get("lighting") or None,
+                                "avoid": args.get("avoid") or None,
+                                "goal_id": args.get("goal_id") or None,
+                                "completes_goal": bool(args.get("completes_goal")),
                                "kind": "selfie", "status": "started",
                                "note": "the photo will appear in the chat shortly"})
         if tool == "show_picture":

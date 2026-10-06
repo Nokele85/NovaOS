@@ -44,6 +44,24 @@ UtilityCall = Callable[[list[dict]], Awaitable[str]]
 
 _WORD_RE = re.compile(r"[a-z0-9']+")
 SUFFIXES = (".md", ".txt")
+# SPEC §20.2: even curated documents should not spend every retrieval slot on
+# neighbouring chunks from the same page.
+MAX_CHUNKS_PER_DOC = 2
+
+#: The doc-name prefix of a fetched web page (`world/research._doc_name`). A
+#: source is kept on the shelf as evidence, with its URL, and never embedded or
+#: retrieved (SPEC §7.7, §20.2) — so keeping one costs no model calls at all.
+SOURCE_PREFIX = "web-"
+
+
+def is_source(doc: str) -> bool:
+    """Is this a raw web page, kept for verification rather than read?"""
+    return doc.startswith(SOURCE_PREFIX)
+
+
+#: The doc-name prefix of a research run's compiled topic page
+#: (`world/research.py`), rewritten whole each time the job runs.
+TOPIC_PREFIX = "research-"
 
 #: Past this many characters a document is *read for notes* rather than
 #: transcribed (`_passages`). Roughly a long feature article: short enough that
@@ -301,20 +319,26 @@ class KnowledgeStore:
         log.info("knowledge: holding %s after %d/%d passages (%s)",
                  doc, done, passages, reason)
 
-    def park(self, name: str, text: str) -> str:
+    def park(self, name: str, text: str, *,
+             reason: str = "you stopped it before she read it") -> str:
         """Shelve a document without reading it: it waits for you.
 
         The other half of stopping a research run. Pages she already fetched
         shouldn't be thrown away because you stopped the reading — they cost a
         request to somebody's web server, and re-fetching them on resume would
         cost another. The file lands on the shelf held, so nothing indexes it
-        until you say so, and `holds()` can price it for the panel.
+        until you say so, and `holds()` can price it for the panel. A run that
+        reaches its call ceiling uses the same hold with its own reason.
         """
         doc = self._place(name, text)
-        est = self.estimate(text)
+        try:
+            est = self.estimate(text, name=doc)
+        except Exception:  # noqa: BLE001 — a price failure must not lose the page
+            log.warning("knowledge: couldn't price held %s", doc, exc_info=True)
+            est = {"passages": 0, "digested": False}
         self.hold(doc, done=0, passages=est["passages"],
                   digested=est["digested"],
-                  reason="you stopped it before she read it")
+                  reason=reason)
         return doc
 
     def resume(self, doc: str) -> bool:
@@ -359,9 +383,15 @@ class KnowledgeStore:
         that summarises or situates it when there's a utility tier at all."""
         return 2 if self.utility is not None else 1
 
-    def estimate(self, text: str) -> dict:
+    def estimate(self, text: str, *, name: str = "") -> dict:
         """What reading this would cost, without reading it. The number the
-        panel shows before you decide whether to let it happen."""
+        panel shows before you decide whether to let it happen.
+
+        `name` is the doc it would be filed as: a source (`is_source`) is kept,
+        not read, and keeping it is free."""
+        if is_source(name):
+            return {"passages": 0, "digested": False, "calls": 0,
+                    "chars": len(text)}
         plan, digested = self._plan(text)
         return {"passages": len(plan), "digested": digested,
                 "calls": len(plan) * self._calls_each(),
@@ -377,6 +407,27 @@ class KnowledgeStore:
         write_json(self.seen_path, seen)
 
     # ----------------------------------------------------------------- ingest
+
+    async def archive_source(self, name: str, text: str | None = None) -> str:
+        """Keep a fetched page for verification without embedding it.
+
+        SPEC §20.1: DREAM research has already read the page while gathering.
+        Its compiled topic page is what the ordinary prompt needs. Claim this
+        file under the same lock as ingest so a tick cannot read it in between
+        the write and the seen marker; clear older chunks if this URL had been
+        indexed under the previous policy. `text=None` is a source already on
+        the shelf — one a tick found pending, or a held page resumed.
+        """
+        if not is_source(name):
+            raise ValueError(f"source archive names must start with {SOURCE_PREFIX}")
+        async with self._busy:
+            doc = await asyncio.to_thread(self._place, name, text)
+            rows = list(jsonl_read(self.index_path))
+            if any(r["doc"] == doc for r in rows):
+                self._rewrite_index([r for r in rows if r["doc"] != doc])
+            self._mark_seen(doc)
+            self._clear_hold(doc)       # nothing left to read, so nothing held
+            return doc
 
     async def ingest(self, name: str, text: str | None = None) -> IngestResult:
         """Ingest one doc: a file already on the shelf (text=None), or given
@@ -395,7 +446,13 @@ class KnowledgeStore:
         after it, so it stops looking pending the moment somebody starts; and a
         caller that arrives while it's claimed finds it already read and takes
         the shelved answer instead of doing the work again.
+
+        A source (`is_source`) is archived instead: §20.2 never retrieves one,
+        so every call spent reading it — a `read_page` in a turn, a `research`
+        run, a held page resumed — would buy chunks nothing can find.
         """
+        if is_source(name):
+            return IngestResult(doc=await self.archive_source(name, text), chunks=0)
         if not getattr(self.embedder, "ready", True):
             ensure = getattr(self.embedder, "ensure_ready", None)
             if ensure is not None:
@@ -440,8 +497,13 @@ class KnowledgeStore:
                     rows = [r for r in rows if r["doc"] != doc]
                 step, notes = done, False
                 async for group in self._passages(doc, plan, digested, skip=done):
-                    for p in group:
-                        vec = self.embedder.embed([f"{p.context}\n{p.text}"])[0]
+                    # One call per group, off the loop: a long document is
+                    # dozens of these, and each is a model forward pass or an
+                    # HTTP round trip (SPEC §2.4).
+                    vecs = await asyncio.to_thread(
+                        self.embedder.embed,
+                        [f"{p.context}\n{p.text}" for p in group]) if group else []
+                    for p, vec in zip(group, vecs, strict=True):
                         rows.append({
                             "id": new_id("k"), "doc": doc,
                             "span": f"chars {p.start}-{p.end}",
@@ -493,6 +555,28 @@ class KnowledgeStore:
             safe += ".md"
         self.vault.write(f"knowledge/reference/{safe}", text)
         return safe
+
+    def shelve(self, doc: str, text: str) -> dict:
+        """Put a document a person handed over on the shelf (SPEC §20.1).
+
+        Not read here: it lands exactly as a dropped file does, and SENSE picks
+        it up on a tick, so it waits its turn behind whatever she is reading and
+        shows on the reading panel like any other. `doc` comes from
+        `documents.shelf_document`. A new version of a held doc lets go of the hold —
+        you handed over something to read — and the same bytes again resume
+        it, because that is the only thing handing them over again can mean.
+        """
+        path = self.reference / doc
+        existed = path.exists()
+        same = existed and path.read_text(encoding="utf-8", errors="replace") == text
+        self.vault.write(f"knowledge/reference/{doc}", text)
+        if same:
+            self.resume(doc)
+        else:
+            self._clear_hold(doc)
+        return {"name": doc, "bytes": path.stat().st_size,
+                "replaced": existed and not same, "unchanged": same,
+                **self.estimate(text, name=doc)}
 
     def _release(self, doc: str, previous: list | None) -> None:
         """Undo a claim, leaving `ingested.json` as the failed run found it. The
@@ -677,12 +761,31 @@ class KnowledgeStore:
     # ----------------------------------------------------------------- search
 
     def search(self, query: str, k: int = 3) -> list[Chunk]:
-        if not getattr(self.embedder, "ready", True):
+        """Blocking: embeds the query on this thread. Anything on the event
+        loop awaits `asearch` instead."""
+        if not getattr(self.embedder, "ready", True) or not self._rows():
             return []
-        rows = self._rows()
+        return self._score(query, self.embedder.embed([query])[0], k)
+
+    async def asearch(self, query: str, k: int = 3) -> list[Chunk]:
+        """`search` for the event loop (SPEC §2.4): the query's vector comes
+        from a worker, the scoring stays here. Only the embed moves because
+        `_rewrite_index` rebuilds the file in place, and a scan from another
+        thread could read it half-written."""
+        if not getattr(self.embedder, "ready", True) or not self._rows():
+            return []
+        qv = (await asyncio.to_thread(self.embedder.embed, [query]))[0]
+        return self._score(query, qv, k)
+
+    def _score(self, query: str, qv, k: int) -> list[Chunk]:
+        if k <= 0:
+            return []
+        # SPEC §20.2: fetched pages are evidence for research, not prompt
+        # material. Older web-* rows may still be in a rebuilt index; only
+        # curated research pages and user documents can fill this slot.
+        rows = [r for r in self._rows() if not is_source(r["doc"])]
         if not rows:
             return []
-        qv = self.embedder.embed([query])[0]
         q_words = set(_WORD_RE.findall(query.lower()))
 
         df: Counter = Counter()                    # keyword idf over the shelf
@@ -703,7 +806,16 @@ class KnowledgeStore:
                              text=r["text"], context=r.get("context", ""),
                              score=score, summary=r.get("summary", False)))
         out.sort(key=lambda c: c.score, reverse=True)
-        return out[:k]
+        selected: list[Chunk] = []
+        per_doc: Counter = Counter()
+        for chunk in out:
+            if per_doc[chunk.doc] >= MAX_CHUNKS_PER_DOC:
+                continue
+            selected.append(chunk)
+            per_doc[chunk.doc] += 1
+            if len(selected) >= k:
+                break
+        return selected
 
     # ------------------------------------------------------- forget / inspect
 

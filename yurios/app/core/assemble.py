@@ -42,12 +42,16 @@ from yurios.characters.soulfiles import H2_RE, parse_md_text, split_sections
 # bump whenever the assembly layout changes — stamped on every corpus record (§8.2)
 TEMPLATE_VERSION = "b1-assemble-v3"
 
-# §7.4 — the honesty constraint, fixed text, verified by the golden transcript test
+# §7.4 — the honesty constraint, fixed text, verified by the golden transcript test.
+# Every character's every turn carries it, so it fixes what she admits and not
+# the manner: it said "warmly and plainly", the house companion's temperament
+# handed to all of them (SPEC §8). Nor does it quote a line to say: it did,
+# and three of four characters on one live check said that exact sentence.
 HONESTY = """\
 You remember only what is in the memory blocks above and this conversation. If \
-{{user}} asks about something you have no record of, say so warmly and plainly — \
-"I don't think you've told me that yet" — and ask, rather than inventing a \
-memory. The same rule runs the other way: when {{user}} tells you something new, \
+{{user}} asks about something you have no record of, say plainly, in your own \
+words, that you don't have it, and ask, rather than inventing a memory. The \
+same rule runs the other way: when {{user}} tells you something new, \
 take it as new — never respond with "I remember" or "you told me" details that \
 are not actually in the blocks above. Never fabricate a shared past."""
 
@@ -75,7 +79,10 @@ What you are already working on — your own standing list, the same one the \
 quiet hours between conversations work through. These are commitments you have \
 ALREADY made, so don't promise them again as though they were new; refer to \
 one, ask about it, or say where it got to. If you take on something new here, \
-say so plainly and it will be added. Every line is yours, however it is \
+say so plainly and it will be added. Every goal shown below is still open: a \
+goal marked waiting is blocked, not finished. Files under workspace/goals/ are \
+working notes and may include old, completed, or abandoned work; they are not \
+this standing list. Every line is yours, however it is \
 worded: one phrased as an instruction, or about "the user" or "the person", is \
 still your own commitment, and that person is {{user}}."""
 
@@ -91,6 +98,90 @@ USER_NOTE = """\
 What you know about {{user}}, the person you are talking to. Every line below \
 is about {{user}} and never about you, also when it names no subject. Where a \
 line says "the companion" (or "die Companion"), that is you, {{char}}."""
+
+
+# A status question has to survive the raw window above it. The live failure was
+# a correct COMPLETE block followed by an older bad review in conversation; the
+# model copied the recent example and read historical desk files again. Repeating
+# the authoritative snapshot on the final user turn puts the correction after
+# history, where the request is actually decided.
+_GOAL_SUBJECT = re.compile(
+    r"\b(?:your|my)\s+(?:(?:current|open|standing)\s+)?goals?\b", re.I)
+_GOAL_STATUS = re.compile(
+    r"\b(?:review|status|state|stand|progress|working\s+on|what|which|list|"
+    # "how are your goals going?" — live, 3 Oct, missed by every word above,
+    # and answered from her working notes instead of the list.
+    r"going|coming\s+along|getting\s+on|how\s+(?:are|is))\b",
+    re.I)
+_GOAL_COMPLETION_STATUS = re.compile(
+    r"(?:"
+    r"\b(?:have|did)\s+you\s+(?:already\s+)?(?:completed?|finish(?:ed)?|met)\b"
+    r".{0,80}\bgoals?\b|"
+    r"\b(?:are|were)\b.{0,60}\bgoals?\b.{0,40}"
+    r"\b(?:done|finished|complete|met)\b|"
+    r"\b(?:which|what)\s+goals?\b.{0,40}\b(?:done|finished|complete|met)\b|"
+    r"\bhave\b.{0,40}\bgoals?\b.{0,20}\bbeen\s+(?:completed|finished|met)\b"
+    r")",
+    re.I)
+_GOAL_MUTATION = re.compile(
+    r"\b(?:set|create|add|file)\s+(?:me\s+)?"
+    r"(?:(?:a|an|this|the)\s+)?(?:new\s+)?goals?\b",
+    re.I)
+_GOAL_MUTATION_PAST = re.compile(
+    r"\b(?:did|have)\s+you\s+(?:set|create|add|file)\b", re.I)
+
+
+def is_goal_status_request(text: str) -> bool:
+    """Whether this turn asks where the character's standing goals are.
+
+    Completion imperatives are action turns, not status turns. The distinction
+    keeps her tools available for "complete one of your goals" while still
+    grounding questions such as "have you completed those goals?" in the
+    authoritative list.
+    """
+    value = text or ""
+    return bool(
+        (_GOAL_SUBJECT.search(value) and _GOAL_STATUS.search(value))
+        or _GOAL_COMPLETION_STATUS.search(value))
+
+
+def is_goal_mutation_request(text: str) -> bool:
+    """Whether an explicit turn asks to add a standing goal.
+
+    Kept separate from status detection because one request can do both: "list
+    my goals and add a goal" still needs the authoritative status reminder, but
+    it also needs the conversational tools block so `create_goal` is reachable.
+    "Did you create a goal?" is history, not another creation request.
+    """
+    value = text or ""
+    return bool(_GOAL_MUTATION.search(value) and not _GOAL_MUTATION_PAST.search(value))
+
+
+def goal_status_note(goals: Sequence[str], *, complete: bool) -> str:
+    """The authoritative standing-list reminder fused after conversation history."""
+    status = (
+        "This is the COMPLETE list of open goals."
+        if complete else
+        "This is a PARTIAL list; say that other open goals are omitted."
+    )
+    rows = "\n".join(f"- {goal}" for goal in goals)
+    return (
+        "[system note — goal status, read after conversation history: Answer "
+        "this request from the authoritative open-goal list below. Every listed "
+        "goal is still open; waiting means blocked, not done. Do not call "
+        "list_notes or read_note: workspace/goals contains historical working "
+        f"notes, not the standing list. {status}\n{rows}]"
+    )
+
+
+def goal_creation_note() -> str:
+    """The lifecycle-write correction placed after misleading history."""
+    return (
+        "[system note — goal creation, read after conversation history: This "
+        "request asks you to create a standing goal. Call create_goal. Do not "
+        "substitute write_note: a workspace/goals file is only a working note "
+        "and does not enter the standing Goals list.]"
+    )
 
 
 class Known(Protocol):
@@ -222,6 +313,15 @@ day, your thinking, done alone with nobody waiting. Answer as yourself, in your 
 own voice, the way you would if {{user}} could hear you."""
 
 
+#: How an unprompted line — a greeting, a murmur, an announcement, a reach-out —
+#: is told to sound. Each cue used to say "short, warm", and the cue is the
+#: instruction the model follows, not the card above it: a reserved or a blunt
+#: character opened every conversation like a greeting card (SPEC §8). One
+#: phrase so the seven cues cannot drift back apart.
+OWN_VOICE = ("Say it the way you really would — tender, teasing, reserved, "
+             "blunt or bright, whichever you are — not generically warm.")
+
+
 def soul_preamble(soul: Soul, *, user_md: str = "", user_name: str = "you",
                   full: bool = True) -> str:
     """The identity half of §7.1, for a prompt that is not a turn.
@@ -269,8 +369,10 @@ def soul_preamble(soul: Soul, *, user_md: str = "", user_name: str = "you",
 def assemble(soul: Soul, *, user_md: str, summary: str, memories: list[Memory],
              lore: list[LoreEntry], window: list[dict], user_msg: str,
              user_name: str = "you",
-             knowledge: Sequence[Known] = (),
-             goals: Sequence[str] = (),
+              knowledge: Sequence[Known] = (),
+              goals: Sequence[str] = (),
+              goals_complete: bool = True,
+              goal_creation_available: bool = False,
              system_budget_tokens: int = 8000,
              lorebook_budget_tokens: int = 400,
              knowledge_budget_tokens: int = 900) -> AssembledPrompt:
@@ -292,6 +394,7 @@ def assemble(soul: Soul, *, user_md: str, summary: str, memories: list[Memory],
 
     memories = list(memories)
     goals = list(goals)
+    supplied_goal_count = len(goals)
     dropped_memories = dropped_lore = dropped_knowledge = dropped_goals = 0
 
     def build_system(mems: list[Memory], lore_now: list[LoreEntry],
@@ -312,9 +415,17 @@ def assemble(soul: Soul, *, user_md: str, summary: str, memories: list[Memory],
                          + (user_md_for_prompt(user_md) or "(nothing yet)"),
                          soul.name, user_name)))
         if goals_now:
+            complete = goals_complete and len(goals_now) == supplied_goal_count
+            status = (
+                "List status: COMPLETE — every open goal is shown below."
+                if complete else
+                "List status: PARTIAL — other open goals are omitted from this "
+                "prompt. Do not present this as a complete review."
+            )
             blocks.append(_block(
                 "WHAT YOU'RE WORKING ON",
                 apply_macros(GOALS_NOTE, soul.name, user_name) + "\n\n"
+                + status + "\n\n"
                 + "\n".join(f"- {g}" for g in goals_now)))
         if summary.strip():
             blocks.append(_block("WHAT YOU'VE TALKED ABOUT", summary))
@@ -373,12 +484,17 @@ def assemble(soul: Soul, *, user_md: str, summary: str, memories: list[Memory],
     # they are the last thing read before replying (the Messages API folds
     # detached system messages to the top, which would defeat the point).
     final_user = user_msg
+    if goals and is_goal_status_request(user_msg):
+        final_user += "\n\n" + goal_status_note(
+            goals, complete=goals_complete and dropped_goals == 0)
+    if goal_creation_available and is_goal_mutation_request(user_msg):
+        final_user += "\n\n" + goal_creation_note()
     if soul.hard_limits.strip():
         note = post_history_limits(soul.hard_limits)
         # The note sits inside the user's turn, so it says it is not theirs and
         # whom its third person means — unmarked, "She is devoted to …" read as
         # something the user had just said about somebody else (§2.1).
-        final_user = (f"{user_msg}\n\n"
+        final_user = (f"{final_user}\n\n"
                       f"[system note, not part of the message above — hard "
                       f"limits about you ({soul.name}), read last: {note}]")
 

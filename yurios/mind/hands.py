@@ -45,12 +45,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 from yurios.kernel import correlate
 from yurios.kernel.clock import Clock
-from yurios.world.tools.guard import Guard, _fingerprint, failure
+from yurios.models import model_is_local
+from yurios.world.tools.guard import (READ_ONLY, RESULT_LIMITS, Guard, _fingerprint,
+                                      failure)
+from yurios.world.tooltags import native_call, strip_native_calls
 
+from .goals import GOAL_TEXT_MAX
 from .policy import DORMANT, DREAM, ENGAGED
 from .util import day_of
 
@@ -87,10 +93,11 @@ class Hand:
 #: means. The classes and the backend requirements are read off it below.
 #:
 #: Cheap is a step *in* goal work, not a whole tick's intention: local, and with
-#: no outside party on the other end. Allowed wherever she isn't mid-conversation.
-#: Expensive is one whole tick's intention — money, somebody else's server, or
-#: her GPU — and therefore a pressure ceiling, a stricter state rule, and a
-#: cooldown in days.
+#: no outside party on the other end. Allowed in any state, including while she
+#: is talking, unless `MIND_TOOLS_DURING_CHAT` says her utility model has to
+#: stand down for the reply (SPEC §26.3). Expensive is one whole tick's
+#: intention — money, somebody else's server, or her GPU — and therefore a
+#: pressure ceiling, a stricter state rule, and a cooldown in days.
 HANDS: dict[str, Hand] = {
     "write_note": Hand(
         "cheap", "start a new note in her Vault",
@@ -104,9 +111,12 @@ HANDS: dict[str, Hand] = {
     "delete_note": Hand(
         "cheap", "throw one of her own notes away",
         '{"path": "notes/x.md"}'),
+    # `start_line` is in the example because nothing else here can say it: a
+    # step sees this line, never the tool's description. Shown only `path`,
+    # she read a long inbox document by deleting each page she had read.
     "read_note": Hand(
         "cheap", "read one of her notes back",
-        '{"path": "notes/x.md"}'),
+        '{"path": "notes/x.md", "start_line": 1}'),
     "list_notes": Hand(
         "cheap", "see what is on her desk",
         '{"folder": ""}'),
@@ -119,9 +129,24 @@ HANDS: dict[str, Hand] = {
     "write_skill": Hand(
         "cheap", "write down how to do something, for next time",
         '{"name": "a-skill", "description": "...", "instructions": "..."}'),
+    "delete_skill": Hand(
+        "cheap", "forget a skill she wrote down that turned out wrong",
+        '{"name": "a-skill"}'),
     "set_timer": Hand(
         "cheap", "leave herself a reminder to come back to this",
         '{"minutes": 10, "label": "..."}'),
+    "play_music": Hand(
+        "cheap", "start or stop the room's music",
+        '{"action": "play", "track": "warm_pad", "volume": 0.4}'),
+    "create_goal": Hand(
+        "cheap", "put a separate goal on her list, worked on its own turn",
+        # The limit is in the example because this row is the one place every
+        # surface that offers the hand shows her (§22.1d).
+        f'{{"text": "what you\'ll do, one line of at most {GOAL_TEXT_MAX} '
+        f'characters", "kind": "task"}}'),
+    "propose_edit": Hand(
+        "cheap", "propose a change to one of her own soul files, for review",
+        '{"surface": "NOTES.md", "content": "...", "reason": "..."}'),
     "research": Hand(
         "expensive", "read several pages on a topic and write up what she found",
         '{"topic": "...", "depth": 3}', needs="SEARCH_BACKEND"),
@@ -185,6 +210,25 @@ HANDS: dict[str, Hand] = {
         '{"name": "clock", "seconds": 6}'),
 }
 
+#: How much of one result goes back to her in a step of her own work. The tool
+#: already bounds its payload (SPEC §34.2); this bounds a step that chains
+#: several of them.
+RESULT_CHARS = 4000
+
+
+def bounded(tool: str, result: str, *, most: int = RESULT_CHARS) -> str:
+    """`result` as it goes back to her: cut at `most`, but never below the
+    guard's own bound for the tool (`RESULT_LIMITS`).
+
+    Those tools size their answers to fit that bound and put the text last.
+    A cut below it lands inside the text and takes what follows with it — a
+    4,000-character page of a note is about 4,200 on the wire, so a step's
+    4,000 cut every full page above `end_line`, and she never learned where
+    the page ended (SPEC §26.2)."""
+    limit = max(most, RESULT_LIMITS.get(tool, 0))
+    return result if len(result) <= limit else result[:limit] + " …(cut)"
+
+
 CHEAP = tuple(n for n, h in HANDS.items() if h.klass == "cheap")
 EXPENSIVE = tuple(n for n, h in HANDS.items() if h.klass == "expensive")
 
@@ -198,6 +242,22 @@ NEEDS_CAMERA = tuple(n for n, h in HANDS.items() if h.needs == "SELFIE_BACKEND")
 #: that dispatches one goes to `waiting` and is woken by `task_completion`.
 START_DONT_AWAIT = ("research", "take_selfie", "show_picture")
 
+#: How a goal step says something to the user (SPEC §18.2b). Not a row in
+#: `HANDS`: nothing runs and no tool server is asked, so neither the switches
+#: nor the allowlist nor the daily call cap are its business — it files a
+#: decided message for Gate 2, whose quiet hours and daily cap still hold. It
+#: is offered on every goal step, hands or none, because a step told it could
+#: not speak was a step that acted the conversation out on her desk instead.
+TELL = "tell_them"
+TELL_ARGS = '{"text": "exactly what you want them to hear"}'
+
+#: The one hand whose tool server only *validates*: `goals.md` belongs to the
+#: host process, so the goal is filed on this side of the wire (§7.5). In a
+#: reply `ToolBrain._execute` files it; from a goal step `handwork.dispatch`
+#: does, under SPEC §22.1c. A night job is not
+#: offered it — the stock-take is how a night files a goal.
+FILE_GOAL = "create_goal"
+
 #: `needs` -> the config attribute that says whether that backend is on.
 _BACKEND_ATTR = {"SEARCH_BACKEND": "search_backend",
                  "SELFIE_BACKEND": "selfie_backend"}
@@ -208,6 +268,34 @@ def klass(tool: str) -> str:
     permission model's read/write/internet axis in this first cut."""
     hand = HANDS.get(tool)
     return hand.klass if hand else ""
+
+
+#: `MIND_TOOLS_DURING_CHAT`. `on` keeps her hands through a conversation; `off`
+#: is the old rule and always stands down; anything else, including a typo, is
+#: `auto` so a misspelt knob cannot turn the yield off on a local model.
+_DURING_CHAT_ON = frozenset({"on", "true", "yes", "1", "always"})
+_DURING_CHAT_OFF = frozenset({"off", "false", "no", "0", "never"})
+_during_chat_warned: set[str] = set()
+
+
+def stands_down_while_talking(cfg: object) -> bool:
+    """Whether ENGAGED refuses her hands (SPEC §26.3).
+
+    `auto` stands down only when the utility model is local. That model is the
+    machine her reply is using, and one local model cannot talk and do this
+    work at the same time. A hosted utility model is somebody else's machine,
+    so the hands keep working through the conversation.
+    """
+    mode = str(getattr(cfg, "mind_tools_during_chat", "auto") or "auto").strip().lower()
+    if mode in _DURING_CHAT_ON:
+        return False
+    if mode in _DURING_CHAT_OFF:
+        return True
+    if mode != "auto" and mode not in _during_chat_warned:
+        _during_chat_warned.add(mode)
+        log.warning("MIND_TOOLS_DURING_CHAT: %r is not auto, on, or off — "
+                    "treating it as auto", mode)
+    return model_is_local(str(getattr(cfg, "utility_model", "") or ""))
 
 
 def available(tool: str, cfg: object) -> bool:
@@ -226,6 +314,32 @@ def available(tool: str, cfg: object) -> bool:
         return True
     attr = _BACKEND_ATTR[hand.needs]
     return str(getattr(cfg, attr, "off") or "off") != "off"
+
+
+#: `MIND_TOOL_ALLOWLIST=*` — every hand this installation can offer, including
+#: ones a later build adds. The default. Empty still means none, because an
+#: empty list is what unticking every box in the settings panel saves.
+EVERY_HAND = "*"
+
+
+def configured_names(cfg: object) -> tuple[str, ...] | None:
+    """The names `MIND_TOOL_ALLOWLIST` lists, or None for `*` (every hand)."""
+    raw = str(getattr(cfg, "mind_tool_allowlist", EVERY_HAND) or "")
+    names = tuple(dict.fromkeys(n.strip() for n in raw.split(",") if n.strip()))
+    return None if EVERY_HAND in names else names
+
+
+def permits(cfg: object, tool: str) -> bool:
+    """Whether the allowlist admits `tool` — the one rule every call obeys.
+
+    Her own hands must also have their backend on. A tool from another MCP
+    server (§7.2) has no row in `HANDS`, so `*` admits it and an explicit list
+    has to name it.
+    """
+    if tool in HANDS and not available(tool, cfg):
+        return False
+    names = configured_names(cfg)
+    return names is None or tool in names
 
 
 def describe_hands(cfg: object | None = None) -> list[dict]:
@@ -254,9 +368,25 @@ class Offer:
     """
     tools: tuple[str, ...] = ()
     reason: str = ""
+    #: Hands she has but may not reach for on this tick — the expensive ones,
+    #: while the room is occupied or the budget is tight — and why. Named to
+    #: her rather than left out: a hand missing from the list reads as a hand
+    #: she does not have, and she wrote exactly that on her desk ("I don't have
+    #: a web tool") about a search that was only waiting for the room to empty
+    #: (SPEC §26.3).
+    held: tuple[str, ...] = ()
+    held_why: str = ""
 
     def __bool__(self) -> bool:
         return bool(self.tools)
+
+    def waiting(self) -> str:
+        """The line her prompt carries about the held hands, or ""."""
+        if not self.held:
+            return ""
+        return (f"Also yours, but not this step: {', '.join(self.held)} — "
+                f"{self.held_why}. You still have them; plan as though you "
+                "do, and leave the part that needs them for a later step.")
 
 
 @dataclass
@@ -312,11 +442,11 @@ class Hands:
         researches" has an answer (`SEARCH_BACKEND=off`) that is nowhere near
         this variable.
         """
+        listed = configured_names(self.cfg)
+        if listed is None:
+            return tuple(n for n in HANDS if available(n, self.cfg))
         names: list[str] = []
-        for raw in str(getattr(self.cfg, "mind_tool_allowlist", "") or "").split(","):
-            name = raw.strip()
-            if not name:
-                continue
+        for name in listed:
             hand = HANDS.get(name)
             if hand is None:
                 self._warn(name, "%r is not a hand she has — known names are %s",
@@ -423,6 +553,11 @@ class Hands:
         Exact, like `Guard._fingerprint`: `cozy` and `bare` are two photos she
         may well have meant, so only a byte-identical repeat is a repeat.
         """
+        if tool in READ_ONLY:
+            # Looking at her own desk again is not the loop the ledger stops:
+            # the step that reads is the cost, and it runs either way. Reading
+            # back what she just wrote is how she checks it landed.
+            return 0.0
         at = self.ledger.get(_fingerprint(tool, args))
         if at is None:
             return 0.0
@@ -449,23 +584,38 @@ class Hands:
             if self.guard is not None and self._starting():
                 return Offer(reason="her hands are still starting")
             return Offer(reason="no tool server is running")
-        if state == ENGAGED:
+        if state == ENGAGED and stands_down_while_talking(self.cfg):
             return Offer(reason="she is mid-conversation — those are the "
                                 "conversational hands' turn")
         cap = int(getattr(self.cfg, "mind_tool_calls_per_day", 8))
         if self._count() >= cap:
             return Offer(reason=f"today's {cap} autonomous calls are spent")
         ceiling = float(getattr(self.cfg, "mind_tool_pressure_ceiling", 0.5))
-        expensive_ok = (pressure < ceiling
-                        and (state in (DORMANT, DREAM) or not user_present))
+        over = pressure >= ceiling
+        room = state in (DORMANT, DREAM) or not user_present
+        # The token ceiling gates the hands that spend tokens: a web result is
+        # read back into her prompts. A camera's cost is the render, which the
+        # token budget never counts — and it has its own rate bucket, the daily
+        # call cap and the fingerprint cooldown — so a day of thinking must not
+        # lock it (§26.3). Live, a selfie she had been asked for sat held all
+        # afternoon behind a ceiling her goal work had spent.
         tools = tuple(t for t in self.allowlist
-                      if klass(t) == "cheap" or expensive_ok)
+                      if klass(t) == "cheap"
+                      or (room and (t in NEEDS_CAMERA or not over)))
+        held = tuple(t for t in self.allowlist if t not in tools)
+        why = []
+        if held and not room:
+            why.append("they wait until the room is empty")
+        if over and any(t not in NEEDS_CAMERA for t in held):
+            why.append(f"today's budget is past the {ceiling:g} line the web "
+                       "ones wait behind")
+        held_why = "; ".join(why)
         if not tools:
-            if pressure >= ceiling:
-                return Offer(reason=f"budget pressure {pressure:.2f} is over "
-                                    f"the {ceiling:g} ceiling for expensive hands")
-            return Offer(reason="expensive hands wait for the room to be empty")
-        return Offer(tools=tools)
+            if not room:
+                return Offer(reason="expensive hands wait for the room to be empty")
+            return Offer(reason=f"budget pressure {pressure:.2f} is over the "
+                                f"{ceiling:g} ceiling for the web hands")
+        return Offer(tools=tools, held=held, held_why=held_why)
 
     def check(self, tool: str, args: dict | None, *, state: str,
               pressure: float, user_present: bool) -> tuple[bool, str]:
@@ -481,8 +631,8 @@ class Hands:
         if not available:
             return False, available.reason or "her hands are off"
         if tool not in available.tools:
-            if tool in self.allowlist:
-                return False, f"{tool} is not available in {state}"
+            if tool in available.held:
+                return False, f"{tool} is held back — {available.held_why}"
             return False, "not a hand she may use on her own"
         left = self.cooling(tool, args)
         if left > 0:
@@ -502,7 +652,8 @@ class Hands:
         it on the next tick because it failed is precisely the loop the ledger
         exists to stop.
         """
-        self.ledger[_fingerprint(tool, args)] = self.clock.now()
+        if tool not in READ_ONLY:
+            self.ledger[_fingerprint(tool, args)] = self.clock.now()
         today = day_of(self.clock.now())
         if self.spent.get("date") != today:
             self.spent = {"date": today, "count": 0}
@@ -510,8 +661,9 @@ class Hands:
 
     # ------------------------------------------------------------ the dispatch
 
-    async def execute(self, tool: str, args: dict, *,
-                      timeout_s: float) -> tuple[str, str]:
+    async def execute(self, tool: str, args: dict, *, timeout_s: float,
+                      realise: Callable[[str], str] | None = None
+                      ) -> tuple[str, str]:
         """Guard → MCP → audit. Never raises: a failed hand is a sentence in the
         journal, not a dead heartbeat.
 
@@ -526,6 +678,12 @@ class Hands:
         the mind's own instance, with its own buckets, so this can never spend
         conversation's. The one that doesn't: there is no `Turn`, because there
         is no turn — the persistent ledger above is the mind's dedupe scope.
+
+        `realise` turns the tool's answer into what actually happened, before
+        the audit line is written — `create_goal`'s server returns a contract
+        saying the goal is *ready*, and an audit that recorded that as the
+        outcome said "ok" about a goal nobody filed. A raise is an error, as it
+        is from the tool itself.
 
         The audit line lands in the SAME `calls.jsonl` as her conversational
         hands, because there must be exactly one honest record of what her hands
@@ -543,6 +701,8 @@ class Hands:
         try:
             text = await asyncio.wait_for(runner.call(tool, args),
                                           timeout=timeout_s)
+            if realise is not None:
+                text = realise(text)
         except Exception as e:                 # timeout, tool error, transport
             dt = (self.guard.clock.now() - t0) * 1000
             why = failure(e, timeout_s)
@@ -565,22 +725,23 @@ class Hands:
 
     # --------------------------------------------------------------- the prompt
 
-    def catalog(self, tools: tuple[str, ...]) -> str:
+    def catalog(self, tools: tuple[str, ...], *, cap: int | None = None) -> str:
         """How the offered hands are described to her, or "" for none.
 
         Only the offered ones — off means invisible (principle 9). She is asked
-        for one line of intent, not for a tool-marker grammar: the conversational
+        for a line of intent, not for a tool-marker grammar: the conversational
         parser exists because a reply is a stream she is talking through, and a
-        tick is not. One structured line is easier for a 12B model to get right
-        and easier for this file to refuse.
+        step is not. One structured line is easier for a 12B model to get right
+        and easier for this file to refuse. A step may chain several of them
+        (mind/handwork.py): each result comes back before she writes the next.
         """
         if not tools:
             return ""
-        rows = "\n".join(
-            f"  use {t} {HANDS[t].args if t in HANDS else '{...}'}" for t in tools)
+        rows = self.rows(tools)
+        limit = int(cap if cap is not None
+                    else getattr(self.cfg, "tool_max_calls_per_turn", 1))
         return (
-            "You may take ONE action this tick, and only one. Answer with one "
-            "line, in one of these two forms:\n\n"
+            "Answer with one line, in one of these forms:\n\n"
             "  think <a short note to yourself about this goal>\n"
             f"{rows}\n\n"
             # She writes the reason beside the call anyway; asking for it is
@@ -588,12 +749,23 @@ class Hands:
             # reads off the desk.
             "If you reach for a hand, put a `think` line above it saying why — "
             "the result alone won't tell you next time.\n\n"
-            "…where the part after the tool name is one line of JSON. Prefer "
-            "`think` — most steps are thinking. Reach for a hand only when the "
-            "step genuinely needs it, and never for something you already did. "
-            "Whatever a hand produces is kept for you, not sent to anyone: "
-            "nothing you do here reaches them until you decide, separately, to "
-            "say so.")
+            "…where the part after the tool name is one line of JSON. Each "
+            "result comes back to you before you go on, so you can chain hands "
+            f"— read, then change; search, then open — up to {limit} in this "
+            "step. End the step with a `think` line. Never reach for something "
+            "you already did. Whatever a hand produces is kept for you, not "
+            "sent to anyone"
+            + (f" — `{TELL}` is the one line here that reaches them."
+               if TELL in tools else "."))
+
+    @staticmethod
+    def rows(tools: tuple[str, ...]) -> str:
+        """One `use` example per hand, with the argument shape it takes."""
+        def args(t: str) -> str:
+            if t == TELL:
+                return TELL_ARGS
+            return HANDS[t].args if t in HANDS else '{...}'
+        return "\n".join(f"  use {t} {args(t)}" for t in tools)
 
 
 @dataclass(frozen=True)
@@ -607,6 +779,45 @@ class Intent:
     text: str = ""
     tool: str = ""
     args: dict = field(default_factory=dict)
+    #: Hands she wrote out as calls that this answer does not run: named on a
+    #: thought, or dropped past the step's cap. A done-mark beside one is a
+    #: finish she narrated rather than did (SPEC §22.3).
+    unrun: tuple[str, ...] = ()
+    #: She wrote arguments and they did not parse — why, in a sentence she can
+    #: act on. A fumbled reach is not run: run with `{}` it failed at the
+    #: server, booked `{}` in the cooldown ledger, and every later fumble of
+    #: the same hand came back "she already did this" for six hours.
+    fumbled: str = ""
+    #: On a `use`: her answer up to the end of the call that runs — what the
+    #: step's transcript keeps as her turn (SPEC §26.2). Empty means the whole
+    #: answer. Kept whole, a second call below the first went back to her with
+    #: one result under both, and she wrote the missing one herself: live,
+    #: 4 Oct, 2,066 tokens of a `read_note` result for a note she never read,
+    #: carried through every later call of the step and planned from.
+    said: str = ""
+
+
+#: A `use <hand> {` anywhere in a line — at its start, or run onto the end of
+#: the sentence before it. Live on GLM, 29 Sep: a whole chain written as one
+#: paragraph, "…what I actually gathered.use read_note {…}use read_note {…}",
+#: parsed as a thought because no line *began* with `use`. None of the six
+#: calls ran, and the "goal complete" at its end closed the goal on a skill
+#: that was never written. Mid-line it needs the brace — "I'll use read_note to
+#: check" is prose — and a letter before it is a longer word ("reuse").
+CALL_SHAPE = re.compile(r"(?<!\w)use\s+`?([A-Za-z_][\w-]*)`?\s*(?=\{)",
+                        re.IGNORECASE)
+
+
+def _calls(line: str) -> list[tuple[int, str]]:
+    """Where a line reaches for a hand: (offset, name), in order."""
+    head = line.lower().startswith("use ")
+    found = [(m.start(), m.group(1)) for m in CALL_SHAPE.finditer(line)]
+    if head and not any(at == 0 for at, _ in found):
+        # The one shape that never needed the brace: a bare `use tool` line.
+        # The server refuses its empty arguments with a sentence she can read.
+        name = line[4:].strip().partition(" ")[0].strip("`\"'")
+        found.insert(0, (0, name))
+    return found
 
 
 def parse_intent(reply: str, *, allowed: tuple[str, ...]) -> Intent:
@@ -618,32 +829,64 @@ def parse_intent(reply: str, *, allowed: tuple[str, ...]) -> Intent:
     because somebody is waiting; here nobody is, and the next tick will come.
     """
     text = (reply or "").strip()
+    call = native_call(text)
+    if call is not None and call[0] in allowed:
+        return Intent("use", tool=call[0], args=call[1],
+                      text=_thought(strip_native_calls(text).splitlines()))
+    text = strip_native_calls(text)
     lines = text.splitlines()
+    named: list[str] = []
     for index, raw in enumerate(lines):
         line = raw.strip().lstrip("-• ").strip()
-        if not line.lower().startswith("use "):
-            continue
-        rest = line[4:].strip()
-        tool, _, raw = rest.partition(" ")
-        tool = tool.strip().strip("`\"'")
-        if tool not in allowed:
-            continue
-        raw = raw.strip()
-        start, end = raw.find("{"), raw.rfind("}")
-        args: dict = {}
-        if start >= 0 and end > start:
-            try:
-                parsed = json.loads(raw[start:end + 1])
-                args = parsed if isinstance(parsed, dict) else {}
-            except ValueError:
-                # She named the hand and fumbled the JSON. An empty argument
-                # object is a call the *server* will refuse with a sentence she
-                # can read next tick, which beats guessing what she meant.
-                args = {}
-        return Intent("use", tool=tool, args=args,
-                      text=_thought(lines[:index] + lines[index + 1:]))
-    # everything else — including a plain paragraph — is her thinking
-    return Intent("think", text=_thought(lines))
+        for at, tool in _calls(line):
+            if tool not in allowed:
+                if tool in HANDS or tool == TELL:
+                    named.append(tool)
+                continue
+            head = line[at:].strip()
+            raw = head[4:].strip()
+            reach = head[:len(head) - len(raw)]     # "use <hand> ", as written
+            start = raw.find("{")
+            # The object may run past this line: a note's text written with
+            # real line breaks, JSON pretty-printed, or the `{` on the line
+            # under a bare `use tool`. Read only this line and every one of
+            # those was `{}` — live, 28 Sep to 2 Oct, a night's write_note.
+            below = "\n".join(lines[index + 1:])
+            rest = f"{raw}\n{below}"
+            if start < 0 and below.lstrip().startswith("{"):
+                start = len(raw) + 1 + len(below) - len(below.lstrip())
+            args: dict = {}
+            fumbled = ""
+            said = "\n".join([*lines[:index], line]).strip()
+            if start >= 0:
+                try:
+                    # The first object, not first `{` to last `}`: a second
+                    # call run onto the same line (`use a {…}use b {…}`, live
+                    # on GLM) spanned both and lost the first call's
+                    # arguments. The second is dropped — she is asked again
+                    # once the first comes back. Not strict: a raw newline
+                    # inside a string is what a model writes for a paragraph.
+                    parsed, end = json.JSONDecoder(strict=False).raw_decode(rest, start)
+                    args = parsed if isinstance(parsed, dict) else {}
+                    said = "\n".join([*lines[:index],
+                                      line[:at] + reach + rest[:end]]).strip()
+                except json.JSONDecodeError as e:
+                    # She named the hand and fumbled the JSON. Guessing what
+                    # she meant is worse than saying where it broke.
+                    fumbled = f"the arguments are not valid JSON ({e.msg})"
+            # Her reason is what she wrote above the call — and, when she ran
+            # it onto a sentence, that sentence. What comes after it was
+            # written before any result existed: live, GLM followed a `use`
+            # line with "Result: …" it had made up, and with "the note is
+            # there" about a read that had not run — kept, that was her reason
+            # for the call and a place a done-mark could be (SPEC §26.2).
+            return Intent("use", tool=tool, args=args,
+                          text=_thought([*lines[:index], line[:at]]),
+                          fumbled=fumbled, said="" if fumbled else said)
+    # everything else — including a plain paragraph — is her thinking. A call
+    # to a hand she was not offered is still named, so a done-mark written
+    # beside it is not read as a finish (goalwork).
+    return Intent("think", text=_thought(lines), unrun=tuple(named))
 
 
 def _thought(lines: list[str]) -> str:
@@ -661,14 +904,19 @@ def _thought(lines: list[str]) -> str:
 
 
 def stamp_contract(contract: dict, *, goal_id: str) -> dict:
-    """The two fields the mind puts on every contract it builds.
+    """The three fields the mind puts on every contract it builds.
 
     `_deliver` is the landing rule (SPEC §18, principle 8) and `_goal_id` is
     principle 7 — every autonomous call names the goal that wanted it, so
     `goals.md` stays the complete, readable list of what her hands might do and
     `task_completion` knows which goal to wake.
+
+    `_by` says the mind started it. A night job or her free time names no goal,
+    and without this its picture came back looking exactly like one the owner
+    rendered from the gallery — so nothing could tell that it was hers to send,
+    and nothing sent it (§18.2a).
     """
-    return {**contract, "_deliver": "vault", "_goal_id": goal_id}
+    return {**contract, "_deliver": "vault", "_goal_id": goal_id, "_by": "mind"}
 
 
 def build_guard(cfg, clock: Clock) -> Guard | None:
@@ -687,7 +935,7 @@ def build_guard(cfg, clock: Clock) -> Guard | None:
     rates = {}
     for name in names:
         if name in NEEDS_WEB:
-            rates[name] = int(getattr(cfg, "tool_rate_mind_web", 1))
+            rates[name] = int(getattr(cfg, "tool_rate_mind_web", 4))
         elif name in NEEDS_CAMERA:
             rates[name] = int(getattr(cfg, "tool_rate_mind_camera", 1))
         elif klass(name) == "cheap":
