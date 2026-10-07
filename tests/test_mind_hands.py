@@ -1006,12 +1006,16 @@ def test_her_board_is_described_as_a_computer_she_writes_on():
                  "device_log", "device_screenshot", "device_write_app",
                  "device_run_app"):
         assert name in HANDS, f"{name} cannot be allowlisted at all"
-    assert HANDS["device_write_app"].klass == "expensive"
-    assert HANDS["device_run_app"].klass == "expensive"
+    # cheap since 2026-10-07: writing an app is write, run, read, write again,
+    # and an expensive hand waits twelve hours between identical calls
+    assert HANDS["device_write_app"].klass == "cheap"
+    assert HANDS["device_run_app"].klass == "cheap"
     assert HANDS["device_info"].klass == "cheap"
-    # the boundary SPEC §26 draws stays where it is
-    for out in ("device_exec", "device_delete_app", "device_set_autostart",
-                "elecrow_flash"):
+    # the owner's two additions of the same day (SPEC §26.1) …
+    for added in ("device_exec", "device_set_autostart"):
+        assert HANDS[added].klass == "cheap", added
+    # … and the boundary that stays where it is
+    for out in ("device_delete_app", "elecrow_flash"):
         assert out not in HANDS, f"{out} must not be reachable unasked"
 
 

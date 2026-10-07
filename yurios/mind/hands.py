@@ -201,13 +201,32 @@ HANDS: dict[str, Hand] = {
     "device_screenshot": Hand(
         "cheap", "see what her board's display is showing right now",
         '{"port": "auto"}'),
+    # Cheap, by the owner's decision of 2026-10-07 (SPEC §26.1). As expensive
+    # hands they waited for an empty room and twelve hours between identical
+    # calls, and writing an app is write, run, read the traceback, write again:
+    # three board goals stood at ten and eleven steps, most of them thought.
+    # They cost no model call and no card, and touch nothing but her board.
     "device_write_app": Hand(
-        "expensive", "write or change one of her own small Python apps on the "
+        "cheap", "write or change one of her own small Python apps on the "
         "board — hers to make, not a job for anyone",
         '{"name": "clock", "files": {"main.py": "..."}}'),
     "device_run_app": Hand(
-        "expensive", "run one of her board apps and watch what it does",
+        "cheap", "run one of her board apps and watch what it does",
         '{"name": "clock", "seconds": 6}'),
+    # The two the owner added on the same day, each asked for and each a yes.
+    # `device_exec` runs a MicroPython snippet on the board — a microcontroller
+    # on a USB cable, not this machine — and `device_set_autostart` decides
+    # what it starts at power-up, which her own goal ("schalte es scharf")
+    # could not reach without it. A reset undoes either. `device_delete_app`
+    # and `elecrow_flash` stay out.
+    "device_exec": Hand(
+        "cheap", "try a few lines of MicroPython on her board and see what "
+        "they print",
+        '{"code": "print(1 + 1)", "seconds": 5}'),
+    "device_set_autostart": Hand(
+        "cheap", "choose which of her apps the board starts by itself at "
+        "power-up",
+        '{"name": "clock", "confirm": true}'),
 }
 
 #: How much of one result goes back to her in a step of her own work. The tool

@@ -2950,7 +2950,11 @@ What was actually deferred was **policy**: which hands, where the product lands,
 repeat, who pays, and how the answer comes back. `yurios/mind/hands.py` answers those five, under
 the one rule every call she makes obeys (§26.1). The omission that remains is the *workshop* — code execution and
 a shell — which is a different capability with a different threat model, and the one that genuinely
-needs a sandbox.
+needs a sandbox. That means execution *on the host*. An installation **MAY** list hands of a foreign
+MCP server that run code somewhere else — this fork's `device_exec` and `device_set_autostart` run
+MicroPython on a microcontroller of her own, on the owner's explicit yes — because the threat model
+there is the device's, not the machine's; such hands are still named in `HANDS`, still on the
+allowlist by name, and still audited like any other.
 
 - §26.1 **One rule for every call she makes, and off means invisible** (normative). A hand is
   usable — in a reply, a greeting, a murmur, a reach-out, a goal step or a night's job alike —

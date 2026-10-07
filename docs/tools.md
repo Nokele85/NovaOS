@@ -515,8 +515,15 @@ runtime went on it: a small computer she writes Python for.
 | autonomous | hands |
 |---|---|
 | look | `elecrow_status`, `elecrow_debug`, `elecrow_serial_log`, `device_info`, `device_list_apps`, `device_read_app`, `device_log`, `device_screenshot` |
-| act | `elecrow_serial_command`, `elecrow_build`, `device_write_app`, `device_run_app` |
-| never unasked | `elecrow_flash`, `device_exec`, `device_delete_app`, `device_set_autostart` |
+| act | `elecrow_serial_command`, `elecrow_build`, `device_write_app`, `device_run_app`, `device_exec`, `device_set_autostart` |
+| never unasked | `elecrow_flash`, `device_delete_app` |
+
+`device_exec` and `device_set_autostart` moved up on 2026-10-07, by the owner's explicit yes: her
+goal to arm her own app at power-up could not be reached without the second, and trying a line of
+MicroPython is how an app gets fixed. Both act on the board only — a microcontroller on a USB
+cable — and a reset undoes either. The four playground hands that act are *cheap*: they cost no
+model call and no card, and an expensive hand's twelve hours between identical calls made
+write-run-fix impossible.
 
 `mind/hands.py`'s `HANDS` is only the vocabulary `MIND_TOOL_ALLOWLIST` may be
 written in; a name there is not yet a hand she has. Calls are recorded in the
