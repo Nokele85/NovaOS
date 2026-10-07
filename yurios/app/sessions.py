@@ -143,3 +143,8 @@ class SessionStore:
         """Last n admitted messages, chronological (§7.1). Small on purpose —
         the rolling summary carries older context (§7.2)."""
         return self.log.window(session_id, n)
+
+    def unprompted_since(self, session_id: str, n: int = 3, *,
+                         not_before: str = "") -> list[dict]:
+        """Her own unprompted lines since this session last spoke (§2.1)."""
+        return self.log.unprompted_since(session_id, n, not_before=not_before)

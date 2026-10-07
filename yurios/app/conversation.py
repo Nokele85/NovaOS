@@ -206,6 +206,42 @@ class ConversationLog:
                  "ts": r.get("ts", "")}
                 for r in mine[-n:]]
 
+    def unprompted_since(self, session_id: str, n: int = 3, *,
+                         not_before: str = "") -> list[dict]:
+        """What she wrote on her own since this session's last admitted line (§2.1).
+
+        A reach-out, a morning line, a picture she sent unasked: drawn, and in
+        no session's window, because none of them was a turn. That is right for
+        the window and it left a hole beside it — found live, 7 Oct: she wrote
+        "Guten Morgen" at 09:51, he answered "you finally wrote to me first" at
+        09:52, and the prompt for her reply held nothing she had sent, so she
+        asked him what he meant. The newest `n`, oldest first; `not_before` (an
+        ISO timestamp) keeps a session that has been quiet for a month from
+        being handed last month's.
+        """
+        if n <= 0:
+            return []
+        with self._lock:
+            rows = self._fold()
+        last = -1
+        for i, row in enumerate(rows):
+            if (row.get("session_id") == session_id and row.get("w")
+                    and not row.get("unwound")):
+                last = i
+        out: list[dict] = []
+        for row in rows[last + 1:]:
+            if row.get("role") != "assistant" or not row.get("proactive"):
+                continue
+            if row.get("w") or row.get("unwound"):
+                continue            # a greeting is already in the window
+            if not (row.get("text") or row.get("image_url")):
+                continue
+            if not_before and str(row.get("ts", "")) < not_before:
+                continue
+            out.append({"text": row.get("text") or "", "ts": row.get("ts", ""),
+                        "picture": bool(row.get("image_url"))})
+        return out[-n:]
+
     def pending(self, session_id: str, role: str) -> dict | None:
         """The line a late half belongs to, or None if there isn't one.
 

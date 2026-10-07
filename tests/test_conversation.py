@@ -544,3 +544,38 @@ def test_lines_already_posted_with_tags_are_drawn_once(tmp_path):
     ConversationLog(tmp_path)                       # the next boot: nothing to do
     assert path.stat().st_mtime_ns == before
 
+
+def test_a_reply_is_told_what_she_wrote_unprompted_since(tmp_path):
+    """SPEC §2.1, found live (2026-10-07): she wrote first, he answered that
+    she finally had, and the prompt for her reply held nothing she had sent."""
+    from yurios.app.core.assemble import unprompted_block
+
+    log = ConversationLog(tmp_path)
+    sessions = SessionStore(tmp_path, log=log)
+    sid = sessions.create()
+    sessions.append_message(sid, "user", "gute Nacht")
+    sessions.append_message(sid, "assistant", "schlaf gut")
+    # an old one, a picture in the night, her morning line — none of them a turn
+    log.add({"id": "p0", "role": "assistant", "text": "vor Wochen",
+             "ts": "2026-09-01T08:00:00", "proactive": True})
+    log.add({"id": "p1", "role": "assistant", "text": "", "proactive": True,
+             "ts": "2026-10-07T02:07:31", "image_url": "/selfies/x.png"})
+    log.add({"id": "p2", "role": "assistant", "proactive": True,
+             "ts": "2026-10-07T09:51:37", "text": "Guten Morgen, Benni."})
+    # a notice that she used a hand is not something she said
+    log.add({"id": "t1", "role": "tool", "text": "read_note", "ts": "2026-10-07T09:51:44"})
+
+    lines = sessions.unprompted_since(sid, 3, not_before="2026-10-05T09:52:00")
+    assert [l["ts"] for l in lines] == ["2026-10-07T02:07:31", "2026-10-07T09:51:37"]
+    block = unprompted_block(lines, char_name="Nova", user_name="Benni")
+    assert block.startswith("## WHAT YOU WROTE TO THEM ON YOUR OWN")
+    assert "you wrote to Benni on your own" in block
+    assert "Guten Morgen, Benni." in block and "(with a picture you sent)" in block
+    assert "vor Wochen" not in block
+    # the window itself is unchanged: an unprompted line is still not a turn
+    assert [m["content"] for m in sessions.window(sid, 6)] == ["gute Nacht", "schlaf gut"]
+
+    # once the conversation has moved past them, they are not repeated
+    sessions.append_message(sid, "user", "du hast mir geschrieben!")
+    assert sessions.unprompted_since(sid, 3) == []
+    assert unprompted_block([], char_name="Nova", user_name="Benni") == ""

@@ -224,6 +224,39 @@ class AssembledPrompt:
     citations: list[str] = field(default_factory=list)   # what block 8 carried
 
 
+#: The lead line on what she wrote unasked since the conversation last moved
+#: (§2.1). Those lines are in no window — they were not turns — so without this
+#: block the one thing {{user}} is most likely answering is the one thing the
+#: prompt does not hold.
+UNPROMPTED_NOTE = """\
+Since the last line of this conversation you wrote to {{user}} on your own, \
+unasked. These lines are yours and {{user}} has them in front of them — what \
+they say next may well be an answer to one. You remember writing them."""
+UNPROMPTED_TITLE = "WHAT YOU WROTE TO THEM ON YOUR OWN"
+#: How much of one such line the block carries, and how old one may be.
+UNPROMPTED_CHARS = 600
+UNPROMPTED_MAX_AGE_H = 48
+
+
+def unprompted_block(lines: Sequence[dict], *, char_name: str,
+                     user_name: str) -> str:
+    """The block for `ConversationLog.unprompted_since`'s rows, or ""."""
+    rows = []
+    for line in lines:
+        text = " ".join(str(line.get("text") or "").split())
+        if len(text) > UNPROMPTED_CHARS:
+            text = text[:UNPROMPTED_CHARS].rsplit(" ", 1)[0] + " …"
+        if line.get("picture"):
+            text = (text + " " if text else "") + "(with a picture you sent)"
+        if text:
+            rows.append(f"- ({str(line.get('ts', ''))[:16].replace('T', ' ')}) {text}")
+    if not rows:
+        return ""
+    return _block(UNPROMPTED_TITLE,
+                  apply_macros(UNPROMPTED_NOTE, char_name, user_name)
+                  + "\n\n" + "\n".join(rows))
+
+
 #: Block 5's heading (§2.1). No macro in it: `user_name` defaults to "you".
 USER_TITLE = "WHAT YOU KNOW ABOUT THEM"
 

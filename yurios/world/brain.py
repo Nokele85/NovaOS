@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import datetime
 import logging
 import re
 from typing import AsyncIterator, Callable, Optional
@@ -396,9 +397,29 @@ class ToolBrain(BrainAdapter):
                 timers=self.timers, user_name=self.cfg.user_name,
                 place=read_place(self.cfg.vault_dir),
                 body=self.body_visible() if self.body_visible else True)
+        own = self._wrote_unprompted(session_id, soul)
+        if own:
+            prompt.messages[0]["content"] += "\n\n" + own
         prompt.messages[0]["content"] += (
             "\n\n## THE SITUATION RIGHT NOW\n\n" + situation)
         return soul, prompt
+
+    def _wrote_unprompted(self, session_id: str, soul) -> str:
+        """What she sent on her own since this conversation last moved (§2.1).
+
+        Never raises: a block that cannot be built costs the block, not the
+        reply (§20.2's rule for the shelf)."""
+        try:
+            cutoff = datetime.datetime.fromtimestamp(
+                self.guard.clock.now() - asm.UNPROMPTED_MAX_AGE_H * 3600
+            ).isoformat(timespec="seconds")
+            lines = self.state.sessions.unprompted_since(
+                session_id, 3, not_before=cutoff)
+            return asm.unprompted_block(lines, char_name=soul.name,
+                                        user_name=self.cfg.user_name)
+        except Exception:  # noqa: BLE001
+            log.exception("could not tell her what she wrote unprompted")
+            return ""
 
     # -- the ReplyBrain seam, re-streamed through the tool loop ----------------
     async def stream_reply(self, session_id: str, text: str,

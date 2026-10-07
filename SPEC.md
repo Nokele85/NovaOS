@@ -183,6 +183,13 @@ and that "the companion" in such a fact is the reader, and the fused hard-limits
 say that it is not part of the user's message and that its third person is the reader. Both
 are there because unmarked they were read either way from one line to the next, and she
 answered with her own plan as the user's promise.
+A line she sent on her own initiative — a reach-out, a morning line, a picture — is drawn and is
+in no session's window, because it was not a turn. A reply **MUST** nevertheless be told what
+she wrote unprompted since that session's last admitted line (the newest three, none older than
+48 hours), in a block of its own before the situation: live, she wrote first at 09:51, the user
+answered "you finally wrote to me yourself" at 09:52, and the prompt for her reply held nothing
+she had sent, so she asked what was meant. A greeting is already in the window and **MUST NOT**
+be repeated there; a block that cannot be built **MUST** cost the block and never the reply.
 When the new user message asks for the status of her goals, the final user turn **MUST** also
 repeat the authoritative open-goal snapshot after the raw window and forbid consulting
 `workspace/goals/`. A correct system block above a recent bad review is not enough: the model
