@@ -514,7 +514,7 @@ runtime went on it: a small computer she writes Python for.
 
 | autonomous | hands |
 |---|---|
-| look | `elecrow_status`, `elecrow_debug`, `elecrow_serial_log`, `device_info`, `device_list_apps`, `device_read_app`, `device_log`, `device_screenshot` |
+| look | `elecrow_status`, `elecrow_debug`, `elecrow_serial_log`, `device_info`, `device_list_apps`, `device_read_app`, `device_log`, `device_screenshot`, `device_api` |
 | act | `elecrow_serial_command`, `elecrow_build`, `device_write_app`, `device_run_app`, `device_exec`, `device_set_autostart` |
 | never unasked | `elecrow_flash`, `device_delete_app` |
 
@@ -552,7 +552,8 @@ runs her own Python apps on it — no compile, no flash:
 |---|---|---|
 | `device_info` | runtime, safe mode, SD card, Wi-Fi online (never which network), memory, apps | none |
 | `device_list_apps`, `device_read_app` | what she has written | none |
-| `device_write_app` | create/replace files of one app, or of `_lib` (shared modules) | names and sizes checked on both sides |
+| `device_write_app` | create/replace files of one app, or of `_lib` (shared modules) | names and sizes checked on both sides; the code is checked against the board's library first and a call that cannot work is refused with the correct form (`force=true` overrides) |
+| `device_api` | everything the board's `nova` library has, with exact call shapes and a short correct example | none — built from the library's source by `tools/elecrow_api.py`, never hand-kept |
 | `device_run_app` | run an app ≤ 8 s, return output and traceback; a looping app is stopped with Ctrl-C | none |
 | `device_exec` | one MicroPython snippet ≤ 8 s | none |
 | `device_screenshot` | the display's framebuffer: texts drawn, colours, coverage — and, on Benniclaw, a description by `ELECROW_VISION_MODEL` | none |

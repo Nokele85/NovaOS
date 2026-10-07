@@ -39,6 +39,11 @@ RESULT_LIMITS = {
     # past its description.
     "read_skill": 16_000,
     "device_read_app": 16_000,
+    # The board's reference is read to be written from, and a refused app comes
+    # back with the correct form of every call: cut to 600 characters, either
+    # is the first two lines of what she needed.
+    "device_api": 16_000,
+    "device_write_app": 6_000,
 }
 
 #: Hands that only look at her own desk. Reading a note twice changes nothing

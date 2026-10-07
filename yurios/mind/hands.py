@@ -219,6 +219,13 @@ HANDS: dict[str, Hand] = {
     # what it starts at power-up, which her own goal ("schalte es scharf")
     # could not reach without it. A reset undoes either. `device_delete_app`
     # and `elecrow_flash` stay out.
+    # What the board has, from the library's own source (tools/elecrow_api.py).
+    # She wrote `nova.speaker.tone(220, 1200)` and `nova.display.clear()` for a
+    # board where neither exists; this is where the right names are.
+    "device_api": Hand(
+        "cheap", "look up what her board's library really has — every function "
+        "and how it is called — before she writes for it",
+        '{"module": ""}'),
     "device_exec": Hand(
         "cheap", "try a few lines of MicroPython on her board and see what "
         "they print",

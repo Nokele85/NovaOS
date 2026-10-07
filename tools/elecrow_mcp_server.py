@@ -23,6 +23,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from mcp.server.fastmcp import FastMCP
 
+import elecrow_api  # noqa: E402
+
+
+def _api() -> dict:
+    """The board's library as data, or {} when its source is not here."""
+    lib = Path(os.environ.get("ELECROW_WORKSPACE", "")) / "nova-runtime" / "lib" / "nova"
+    if not lib.is_dir():
+        lib = (Path(__file__).resolve().parent.parent / "elecrow-firmware"
+               / "nova-runtime" / "lib" / "nova")
+    try:
+        return elecrow_api.load_api(lib) if lib.is_dir() else {}
+    except Exception:  # noqa: BLE001 — a reference that cannot be built checks nothing
+        return {}
+
+
+def _check(files: dict) -> list[str]:
+    """What would fail when this app runs; [] when nothing was found or nothing can be checked."""
+    api = _api()
+    try:
+        return elecrow_api.check_app(
+            {str(k): str(v) for k, v in files.items()}, api) if api else []
+    except Exception:  # noqa: BLE001 — the check must never be what stops her writing
+        return []
+
 
 DEFAULT_PROJECT = "nova-device"
 DEFAULT_ROOT = Path(os.environ.get(
@@ -488,12 +512,26 @@ def _device_tools(mcp: FastMCP) -> None:
         return _json_out(_device_call(port, [code]))
 
     @mcp.tool()
-    def device_write_app(name: str, files: dict[str, str], port: str = "auto") -> dict:
+    def device_write_app(name: str, files: dict[str, str], port: str = "auto",
+                         force: bool = False) -> dict:
         """Create or replace files of one app: {"main.py": "...", ...}. Use the
-        name "_lib" for modules shared by all apps. Flat folder, text files only."""
+        name "_lib" for modules shared by all apps. Flat folder, text files only.
+        The code is checked against what the board really has before anything
+        is written: a call that cannot work is refused with the correct form.
+        `device_api` shows everything the board offers. force=true writes
+        regardless — only when the check itself is wrong."""
         name = check_app_name(name)
         if not files or len(files) > MAX_FILES:
             raise ValueError(f"give 1 to {MAX_FILES} files")
+        problems = _check(files)
+        if problems and not force:
+            # Refused, not warned about: a written app that dies at the full hour
+            # reads as a finished one for an hour, and then for a day.
+            return {"ok": False, "status": "would_fail", "problems": problems,
+                    "message": "Nothing was written. This would fail on the board for the "
+                               "reasons listed — each says what to write instead. Fix them "
+                               "and call device_write_app again; device_api shows every "
+                               "function the board has."}
         encoded = {check_file_name(f): body.encode("utf-8") for f, body in files.items()}
         too_big = [f for f, b in encoded.items() if len(b) > MAX_FILE_BYTES]
         if too_big:
@@ -509,6 +547,18 @@ def _device_tools(mcp: FastMCP) -> None:
         result = _json_out(_device_call(port, snippets, timeout=8))
         result["written"] = {f: len(b) for f, b in encoded.items()}
         return result
+
+    @mcp.tool()
+    def device_api(module: str = "") -> dict:
+        """Everything her board's `nova` library has, with the exact call shapes
+        and a short correct example: read this BEFORE writing an app. Built from
+        the library's own source, so it is never out of date. `module` narrows
+        it ("speaker", "screen", "net", "cam", "touchpad")."""
+        api = _api()
+        if not api:
+            return {"ok": False, "status": "no_runtime_source",
+                    "message": "The runtime's source is not on this machine."}
+        return {"ok": True, "reference": elecrow_api.api_card(api, module.strip())}
 
     @mcp.tool()
     def device_read_app(name: str, file: str = "main.py", port: str = "auto") -> dict:

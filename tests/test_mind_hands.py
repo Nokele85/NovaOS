@@ -1012,7 +1012,7 @@ def test_her_board_is_described_as_a_computer_she_writes_on():
     assert HANDS["device_run_app"].klass == "cheap"
     assert HANDS["device_info"].klass == "cheap"
     # the owner's two additions of the same day (SPEC §26.1) …
-    for added in ("device_exec", "device_set_autostart"):
+    for added in ("device_exec", "device_set_autostart", "device_api"):
         assert HANDS[added].klass == "cheap", added
     # … and the boundary that stays where it is
     for out in ("device_delete_app", "elecrow_flash"):
