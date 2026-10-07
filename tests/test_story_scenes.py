@@ -281,3 +281,56 @@ async def test_a_time_mend_must_be_a_small_edit(tmp_path):
         return scene
     lab._complete = unchanged
     assert await lab._mend_time(scene, "früher Morgen", "morgen", ["Gute Nacht"]) == scene
+
+
+def test_the_hour_is_read_from_a_note_folded_onto_one_line():
+    """`_clean` makes the state note one line; a reader that wanted a line
+    beginning with ZEIT handed no writer the hour at all (found 2026-10-07)."""
+    from yurios.world.stories import _time_of
+
+    folded = ("ERZÄHLPERSON: ich, Nova ORT: Fenstersitz ZEIT: früher Morgen, Regen "
+              "FIGUREN: Nova, Benni (du) GESCHEHEN: sie hat geschrieben "
+              "ERZÄHLT: getippt; gelöscht; abgeschickt OFFEN: seine Antwort")
+    assert _time_of(folded) == ("morgen", "früher Morgen, Regen")
+    assert _time_of("ORT: Dach ZEIT: tief in der Nacht") == ("nacht", "tief in der Nacht")
+    assert _time_of("ORT: Dach") == ("", "")
+
+
+def test_a_scene_far_outside_its_share_is_off_budget():
+    from yurios.world.stories import _budget, _off_budget
+
+    assert _budget("160 bis 200") == (160, 200)
+    assert _budget("irgendwie") == (0, 0)
+    assert _off_budget(200, 160, 200) == 0
+    assert _off_budget(250, 160, 200) == 0          # a quarter over is still fine
+    assert _off_budget(293, 160, 200) == 43
+    assert _off_budget(96, 160, 200) == 0 and _off_budget(93, 160, 200) == 3
+    assert _off_budget(900, 0, 0) == 0              # no ceiling, no band
+
+
+def test_a_closing_mark_nothing_opened_is_found_and_opened():
+    from yurios.world.stories import (_close_quotes_plainly, _orphan_closings,
+                                      _segments, _unclosed_quotes)
+
+    bad = ("Du kommst näher. „Weil ich's wollte.“ Nicht weil du gerufen hast. "
+           "Klingt das bescheuert?“ Du lachst kurz.")
+    assert len(_orphan_closings(bad)) == 1 and _unclosed_quotes(bad) == []
+    mended = _close_quotes_plainly(bad)
+    assert _orphan_closings(mended) == [] and _unclosed_quotes(mended) == []
+    assert [t for t, sp in _segments(mended) if sp] == ["Weil ich's wollte.", "Klingt das bescheuert?"]
+    assert _orphan_closings("„Gut.“ Ich nicke. „Dann bleib.“") == []
+
+
+async def test_the_state_note_asks_for_what_was_told(tmp_path):
+    from yurios.world.stories import StoryLab
+
+    lab = StoryLab(utility=lambda: None, post=lambda *a, **k: {}, root=tmp_path, voice=None)
+    seen = {}
+
+    async def note(prompt, **kw):
+        seen["prompt"] = prompt
+        return "ORT: Fenster\nZEIT: Morgen\nFIGUREN: beide\nGESCHEHEN: x\nERZÄHLT: getippt; gesendet\nOFFEN: y"
+    lab._complete = note
+    out = await lab._state_update("Noch keine Szene erzählt.", "Sie tippt und sendet.")
+    assert "ERZÄHLT:" in seen["prompt"] and "wortgleich" in seen["prompt"]
+    assert "ERZÄHLT: getippt; gesendet" in out

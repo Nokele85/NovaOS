@@ -319,17 +319,66 @@ _CLAIM_BUCKET = {"mitternacht": "nacht", "nacht": "nacht", "abend": "abend",
                  "morgen": "morgen", "mittag": "tag"}
 
 
+_STATE_FIELD = r"(?:ERZÄHLPERSON|ORT|ZEIT|FIGUREN|GESCHEHEN|ERZÄHLT|OFFEN)\s*:"
+_ZEIT = re.compile(r"\bZEIT\s*:\s*(.*?)(?=\s*" + _STATE_FIELD + r"|$)", re.S)
+
+
 def _time_of(state: str) -> tuple[str, str]:
-    """(bucket, the ZEIT line's own words) from the state note, or ("", "")."""
-    for line in (state or "").splitlines():
-        if line.strip().upper().startswith("ZEIT"):
-            said = line.split(":", 1)[-1].strip()
-            low = said.lower()
-            for bucket, words in TIME_WORDS:
-                if any(w in low for w in words):
-                    return bucket, said
-            return "", said
-    return "", ""
+    """(bucket, the ZEIT field's own words) from the state note, or ("", "").
+
+    Read by field name and not by line: `_clean` folds the note onto one line
+    before anything sees it, and a reader that looked for a line beginning
+    with ZEIT found none — the hour was never handed to a writer at all."""
+    m = _ZEIT.search(state or "")
+    if not m:
+        return "", ""
+    said = " ".join(m.group(1).split())
+    low = said.lower()
+    for bucket, words in TIME_WORDS:
+        if any(w in low for w in words):
+            return bucket, said
+    return "", said
+
+
+def _budget(umfang: str) -> tuple[int, int]:
+    """("180 bis 250") -> (180, 250); (0, 0) when it is not a range."""
+    found = re.findall(r"\d+", umfang or "")
+    return (int(found[0]), int(found[-1])) if len(found) >= 2 else (0, 0)
+
+
+def _off_budget(words: int, lo: int, hi: int) -> int:
+    """How far outside the accepted band a scene is, in words; 0 inside it.
+
+    The band is wider than the range the writer is given (SPEC §7.8): a scene
+    is sent back only past a quarter over its ceiling or under three fifths
+    of its floor. Tighter, and every scene costs two calls."""
+    if not hi:
+        return 0
+    if words > hi * 1.25:
+        return int(words - hi * 1.25)
+    if words < lo * 0.6:
+        return int(lo * 0.6 - words)
+    return 0
+
+
+def _orphan_closings(text: str) -> list[int]:
+    """Where a closing mark ends speech that no mark opened (SPEC §7.8).
+
+    Live, 2026-10-07: `„Weil ich's wollte.“ Nicht weil du gerufen hast. … Klingt
+    das bescheuert?“` — the second closing mark has no opening, so three
+    spoken sentences were narration to everything downstream."""
+    orphans: list[int] = []
+    open_ = False
+    for i, ch in enumerate(text):
+        if ch == "„":
+            open_ = True
+        elif ch in "“”":
+            if not open_:
+                orphans.append(i)
+            open_ = False
+        elif ch == '"':
+            open_ = not open_
+    return orphans
 
 
 def _time_breaks(scene: str, bucket: str) -> list[str]:
@@ -406,6 +455,16 @@ def _close_quotes_plainly(text: str) -> str:
         halt = re.search(r"[.!?…]+", text[start + 1:])
         end = start + 1 + halt.end() if halt else len(text)
         text = text[:end] + "“" + text[end:]
+    # A closing mark nothing opened: the speech began at the latest with the
+    # sentence it ends, so that is where it is opened.
+    for end in reversed(_orphan_closings(text)):
+        before = text[:end]
+        cut = max(before.rfind(". ", 0, max(0, len(before) - 1)),
+                  before.rfind("! ", 0, max(0, len(before) - 1)),
+                  before.rfind("? ", 0, max(0, len(before) - 1)),
+                  before.rfind("“ "), before.rfind("” "))
+        start = cut + 2 if cut >= 0 else 0
+        text = text[:start] + "„" + text[start:]
     return text
 
 
@@ -810,15 +869,16 @@ class StoryLab:
         accepted only if the text is otherwise identical, and anything else
         falls back to the plain rule. Never raises: a scene with a missing
         mark is still a scene."""
-        if not _unclosed_quotes(scene):
+        if not _unclosed_quotes(scene) and not _orphan_closings(scene):
             return scene
         plain = _close_quotes_plainly(scene)
         try:
             antwort = self._clean(await self._complete(
-                "In diesem Text beginnt wörtliche Rede mit „ und wird nicht "
-                "geschlossen. Gib den Text Zeichen für Zeichen unverändert "
-                "zurück und setze nur die fehlenden schließenden "
-                "Anführungszeichen “ genau dort, wo die jeweilige Rede endet. "
+                "In diesem Text ist wörtliche Rede nicht sauber gekennzeichnet: "
+                "sie wird mit „ geöffnet und nicht geschlossen, oder mit “ "
+                "geschlossen und nie geöffnet. Gib den Text Zeichen für Zeichen "
+                "unverändert zurück und setze nur die fehlenden "
+                "Anführungszeichen — „ wo die Rede beginnt, “ wo sie endet. "
                 "Ändere, streiche und ergänze sonst nichts.\n\n" + scene,
                 max_tokens=SCENE_MAX_TOKENS, persona=False, temperature=0.0))
         except Exception:
@@ -829,7 +889,8 @@ class StoryLab:
         def bare(text: str) -> str:
             return " ".join(_QUOTE_MARKS.sub("", text).split())
 
-        if bare(antwort) == bare(scene) and not _unclosed_quotes(antwort):
+        if (bare(antwort) == bare(scene) and not _unclosed_quotes(antwort)
+                and not _orphan_closings(antwort)):
             return antwort
         return plain
 
@@ -1270,13 +1331,20 @@ class StoryLab:
         try:
             note = await self._complete(
                 "Führe die Zustandsakte einer Geschichte fort. Antworte in "
-                "höchstens 120 Wörtern, in vier Zeilen mit genau diesen "
+                "höchstens 180 Wörtern, in Zeilen mit genau diesen "
                 "Anfängen:\n"
                 "ERZÄHLPERSON: in welcher Person erzählt wird und wer damit gemeint ist — wortgleich zur bisherigen Akte\n"
                 "ORT: wo die Figuren jetzt sind\n"
                 "ZEIT: Tageszeit und Wetter, wie sie JETZT sind\n"
                 "FIGUREN: wer dabei ist — mit Anrede und Pronomen, wortgleich zur bisherigen Akte — und was sich an ihnen geändert hat\n"
                 "GESCHEHEN: die Tatsachen, die jetzt feststehen\n"
+                # What has been TOLD, kept as a list that only grows (§7.8) —
+                # the structured half of a narrative state. A summary of facts
+                # says the message exists; only this says it was already typed,
+                # deleted and sent on the page, and must not be shown again.
+                "ERZÄHLT: die Ereignisse, die schon auserzählt sind, als "
+                "Stichworte mit Semikolon — alle aus der bisherigen Akte "
+                "wortgleich, dazu die dieser Szene\n"
                 "OFFEN: was noch ungelöst ist\n\n"
                 f"Bisherige Akte:\n{state}\n\nNeue Szene:\n{scene[-2500:]}",
                 max_tokens=400, persona=False)
@@ -1405,9 +1473,16 @@ class StoryLab:
                     + (f"Davon hat die vorige Szene bereits erzählt: {vorweg} "
                        "Erzähle das nicht noch einmal und beschreibe es nicht "
                        "mit anderen Worten neu: setze unmittelbar danach ein "
-                       "und führe nur den Rest dieser Planabsicht aus. "
+                       "und führe nur den Rest dieser Planabsicht aus. Die "
+                       "Szene bleibt trotzdem vollwertig und behält ihren "
+                       "Umfang: was übrig ist, wird ausgespielt — was die "
+                       "beiden dabei sagen, tun und zögern —, nicht abgekürzt. "
                        if vorweg else "")
                     + f"Bisheriger Zustand, vor allem was noch offen ist: {state} "
+                    + ("Was dort unter ERZÄHLT steht, ist auf der Seite schon "
+                       "geschehen: zeige es nicht noch einmal, auch nicht mit "
+                       "anderen Worten, und setze danach an. "
+                       if "ERZÄHLT" in state.upper() else "")
                     # The whole story so far, not a summary of it. Each scene
                     # used to see a 120-word state note and the last two
                     # sentences, and what a summary drops the next scene
@@ -1480,6 +1555,32 @@ class StoryLab:
                     szenen_prompt, max_tokens=SCENE_MAX_TOKENS,
                     temperature=WRITING_TEMPERATURE)
                 scene = _trim_to_sentence(self._clean(scene))
+                if self.max_words:
+                    lo, hi = _budget(umfang)
+                    daneben = _off_budget(_words(scene), lo, hi)
+                    if daneben:
+                        # One more try, said with the numbers (§7.8). Kept only
+                        # if it lands nearer the band — a second miss is not a
+                        # reason to throw away a scene that was merely long.
+                        zu = "lang" if _words(scene) > hi else "kurz"
+                        zweite = _trim_to_sentence(self._clean(await self._complete(
+                            szenen_prompt + f"\n\nEin erster Versuch hatte "
+                            f"{_words(scene)} Wörter und war damit zu {zu}. "
+                            f"Verbindlich sind {lo} bis {hi} Wörter. Erzähle "
+                            "dieselben Ereignisse in diesem Umfang"
+                            + (" — straffe, statt Ereignisse zu streichen."
+                               if zu == "lang" else
+                               " — spiele sie aus, statt neue zu erfinden."),
+                            max_tokens=SCENE_MAX_TOKENS,
+                            temperature=WRITING_TEMPERATURE)))
+                        besser = (_words(zweite) > 0 and
+                                  _off_budget(_words(zweite), lo, hi) < daneben)
+                        log.info("story %s scene %d was %d words for %d-%d: the "
+                                 "second try has %d — %s", story_id, i + 1,
+                                 _words(scene), lo, hi, _words(zweite),
+                                 "taken" if besser else "kept the first")
+                        if besser:
+                            scene = zweite
                 # Checked before it counts. A scene that went somewhere
                 # else is the ground the next one builds on, and by the
                 # end of the story that is no longer repairable — the
