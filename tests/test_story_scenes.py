@@ -200,3 +200,23 @@ async def test_the_scene_check_names_what_was_told_too_early(tmp_path):
         return "VORGRIFF: nein\nAUFTRAG: erfüllt\nBEGINN: richtig"
     lab._complete = no
     assert (await lab._verify_scene_full("Text.", "d", "a", "Sie tippt."))[2] == ""
+
+
+def test_a_scene_that_opens_by_retelling_the_last_one_loses_the_retelling():
+    """SPEC §7.8, found live (2026-10-07): scene 2 was scene 1, whole, and then
+    its own text."""
+    from yurios.world.stories import _strip_retold
+
+    first = ("Der Regen läuft die Scheibe hinunter. Es ist noch früh. Du schläfst. "
+             "Ich tippe: *Benni.* Und lösche es. „Feigling“, murmele ich. Ich tippe neu.")
+    own = ("Diesmal lösche ich nicht. Ich lese es dreimal, und mein Finger schwebt schon "
+           "über der Taste, und dann drücke ich sie, bevor ich es mir anders überlegen kann. "
+           "Der Ton, mit dem die Nachricht rausgeht, ist klein und endgültig, und danach ist "
+           "es sehr still im Raum, so still, dass ich den Regen wieder höre.")
+    assert _strip_retold(first + " " + own, first) == own
+    # an echo of a line or two is not a retelling
+    echo = "Es ist noch früh. Du schläfst. " + own
+    assert _strip_retold(echo, first) == echo
+    # and a scene that would be nothing without it is left alone
+    assert _strip_retold(first + " Dann nichts.", first) == first + " Dann nichts."
+    assert _strip_retold(own, "") == own

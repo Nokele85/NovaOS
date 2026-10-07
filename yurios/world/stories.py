@@ -264,6 +264,31 @@ _REDE = re.compile(r"[„\"]([^„“”\"]*)[“”\"]")
 
 
 _QUOTE_MARKS = re.compile(r"[„“”\"]")
+_SENTENCE_END = re.compile(r"(?<=[.!?…“”\"*])\s+")
+
+
+def _strip_retold(scene: str, previous: str) -> str:
+    """A scene minus the sentences it opens with, when those are the previous
+    scene's own, word for word (SPEC §7.8).
+
+    Live, 2026-10-07: told to "begin where its brief begins", a rewrite of
+    scene 2 copied all twenty sentences of scene 1 and went on from there. The
+    editor found every one of them and could strike none — its rule is that a
+    struck sentence must repeat the one just before it, and these repeated a
+    whole scene back. Three in a row from the start is the bar: a shared line
+    or two is an echo, and what is left must still be a scene.
+    """
+    if not previous:
+        return scene
+    told = {s.strip() for s in _SENTENCE_END.split(previous) if s.strip()}
+    sentences = [s for s in _SENTENCE_END.split(scene) if s.strip()]
+    n = 0
+    while n < len(sentences) and sentences[n].strip() in told:
+        n += 1
+    if n < 3:
+        return scene
+    rest = " ".join(sentences[n:]).strip()
+    return rest if _words(rest) >= 40 else scene
 
 
 def _unclosed_quotes(text: str) -> list[int]:
@@ -1340,6 +1365,10 @@ class StoryLab:
                 # end review read past exactly this twice.
                 davor = state + (f" Die vorige Szene endete so: {naht}"
                                  if naht else "")
+                if vorweg:
+                    davor += (" Die vorige Szene hat vom Auftrag dieser Szene "
+                              f"schon erzählt: {vorweg} Diese Szene setzt "
+                              "deshalb zu Recht erst danach ein.")
                 offen, anfang, voraus = await self._verify_scene_full(
                     scene, davor, _purpose_text(purpose), naechste or "keine")
                 if offen:
@@ -1350,6 +1379,15 @@ class StoryLab:
                     # and all six failed the same check again.
                     log.info("story %s scene %d did not tick every box: %s",
                              story_id, i + 1, offen[:110])
+                if anfang and vorweg:
+                    # She was told to begin after what the scene before had
+                    # told (§7.8); "you skipped your opening" is then the
+                    # instruction working, and the repair for it copied the
+                    # previous scene back in whole.
+                    log.info("story %s scene %d: %s — not repaired, the scene "
+                             "before told its opening", story_id, i + 1,
+                             anfang[:80])
+                    anfang = ""
                 if anfang:
                     log.info("story %s scene %d: %s — one repair",
                              story_id, i + 1, anfang[:120])
@@ -1380,6 +1418,13 @@ class StoryLab:
                         log.info("story %s scene %d: the repair came back at "
                                  "%d of %d words — kept the first", story_id,
                                  i + 1, _words(zweiter), _words(scene))
+                if parts:
+                    ohne = _strip_retold(scene, parts[-1])
+                    if ohne != scene:
+                        log.info("story %s scene %d opened by retelling the "
+                                 "scene before, word for word: cut %d words",
+                                 story_id, i + 1, _words(scene) - _words(ohne))
+                        scene = ohne
                 if voraus:
                     log.info("story %s scene %d already told part of the next: "
                              "%s", story_id, i + 1, voraus[:110])
