@@ -25,6 +25,13 @@ from mcp.server.fastmcp import FastMCP
 
 import elecrow_api  # noqa: E402
 
+#: Beside every answer that names the autostart app (see `device_info`).
+AUTOSTART_NOTE = (
+    "`autostart: {app}` is a setting, not a result. The app starts at the board's "
+    "NEXT power-up or reset; it is not running now, and this says nothing about "
+    "whether it works. To know that, run it — device_run_app(name=\"{app}\") — "
+    "and read device_log. Do not tell anyone it works because this is set.")
+
 
 def _api() -> dict:
     """The board's library as data, or {} when its source is not here."""
@@ -493,7 +500,14 @@ def _device_tools(mcp: FastMCP) -> None:
             "gc.collect(); i['mem_free'] = gc.mem_free()\n"
             "i['micropython'] = sys.version; i['reset_cause'] = machine.reset_cause()\n"
             "print(json.dumps(i))\n")
-        return _json_out(_device_call(port, [code]))
+        result = _json_out(_device_call(port, [code]))
+        data = result.get("data") if isinstance(result, dict) else None
+        if isinstance(data, dict) and data.get("autostart"):
+            # On 2026-10-07 she read "autostart: warm_pad" as "it worked" and
+            # told him so, of an app that was not running and would have died
+            # on its first sound. The field is a setting; say what it is not.
+            result["note"] = AUTOSTART_NOTE.format(app=data["autostart"])
+        return result
 
     @mcp.tool()
     def device_exec(code: str, seconds: int = 5, port: str = "auto") -> dict:
@@ -674,7 +688,10 @@ def _device_tools(mcp: FastMCP) -> None:
                 f"s['autostart'] = {value!r}; s['boot_fails'] = 0\n"
                 "nova.save_state(s)\n"
                 "print(json.dumps(s))\n")
-        return _json_out(_device_call(port, [code]))
+        result = _json_out(_device_call(port, [code]))
+        if value and isinstance(result, dict) and result.get("ok"):
+            result["note"] = AUTOSTART_NOTE.format(app=value)
+        return result
 
 
 if __name__ == "__main__":

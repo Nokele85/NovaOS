@@ -774,3 +774,27 @@ def test_telegram_end_to_end_over_the_running_app(cfg):
             ("user", "telegram"), ("assistant", "telegram")]
         (delivered,) = tr.sent("sendMessage")
         assert delivered == {"chat_id": "42", "text": STRIPPED}
+
+
+async def test_the_telegram_chat_keeps_its_session_across_a_restart(tmp_path):
+    """SPEC §10.5, found live (2026-10-07): the chat→session map lived in the
+    process, so every restart opened a new session with an empty window."""
+    def handler(request):
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    first = tg(httpx.MockTransport(handler))
+    first.rt.cfg.vault_dir = tmp_path
+    await first._handle_update(update(text="hello"))
+    assert first.rt.turns.calls[-1][2] is None            # a first message: no session yet
+    assert json.loads((tmp_path / "state" / "telegram_sessions.json").read_text()) == {"42": "s" * 32}
+
+    again = tg(httpx.MockTransport(handler))               # the process after the restart
+    again.rt.cfg.vault_dir = tmp_path
+    await again._handle_update(update(text="still there?"))
+    assert again.rt.turns.calls[-1][2] == "s" * 32, "the restart cost her the conversation"
+
+    # no vault to keep it in: still works, in memory, as before
+    plain = tg(httpx.MockTransport(handler))
+    await plain._handle_update(update(text="hi"))
+    await plain._handle_update(update(text="hi again"))
+    assert [c[2] for c in plain.rt.turns.calls] == [None, "s" * 32]

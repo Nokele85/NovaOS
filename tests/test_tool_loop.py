@@ -624,3 +624,12 @@ def test_an_argument_the_tool_does_not_have_is_named_not_swallowed():
     # a tool that declares nothing, or takes extras, has nothing to hold a name against
     assert unknown_args({"x": 1}, {}) == []
     assert unknown_args({"x": 1}, {"properties": {"a": {}}, "additionalProperties": True}) == []
+
+
+def test_the_directive_says_what_a_result_is_not():
+    """SPEC §7.4, found live (2026-10-07): told "that didn't work", she looked
+    up a setting, found it set, and answered "wait — it DID work"."""
+    said = build_directive([ToolSpec("set_timer", "Set a timer.", {})],
+                           user_name="Sam", max_calls=4)
+    assert "not what happened where Sam is" in said
+    assert "that is the fact" in said and "find out WHY it failed" in said

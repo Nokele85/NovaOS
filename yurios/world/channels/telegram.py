@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
@@ -93,9 +94,14 @@ class TelegramChannel(Channel):
         digest = hashlib.sha256(self.token.encode("utf-8")).hexdigest()[:20]
         self._poll_lock_path = Path(tempfile.gettempdir()) / f"yurios-telegram-{digest}.lock"
         self._poll_lock_handle = None
-        # per-chat session ids, this process's lifetime: her *memory* is the
-        # Vault; this only keeps the short conversation window stitched.
+        # per-chat session ids: her *memory* is the Vault; this only keeps the
+        # short conversation window stitched — and across a restart too
+        # (`state/telegram_sessions.json`, SPEC §10.5). Kept in the process
+        # alone, every restart opened a new session with an empty window: on
+        # 2026-10-07 she answered "that didn't work" with nothing of the
+        # conversation in front of her, fifteen restarts into the day.
         self._sessions: dict[str, str | None] = {}
+        self._sessions_loaded = False
 
     # ---- lifecycle ----
 
@@ -252,14 +258,50 @@ class TelegramChannel(Channel):
         await self._api("sendChatAction", chat_id=chat_id, action="typing")
         try:
             result = await self.rt.turns.run(
-                text, channel=self.name, session_id=self._sessions.get(chat_id),
+                text, channel=self.name, session_id=self._session_for(chat_id),
                 image_id=picture.id if picture else None)
         except EmptyReply as e:              # silence reads as being ignored; say so
             await self._api("sendMessage", chat_id=chat_id, text=(
                 f"(No reply came back — {e.why}. Try sending it again?)"))
             return
-        self._sessions[chat_id] = result["session_id"]
+        self._remember_session(chat_id, result["session_id"])
         # the reply itself arrives via _deliver — one outbound path, no echoes
+
+    # ---- the chat's session, kept across restarts (SPEC §10.5) ----
+
+    def _sessions_file(self) -> Path | None:
+        vault = getattr(getattr(self.rt, "cfg", None), "vault_dir", None)
+        return Path(vault) / "state" / "telegram_sessions.json" if vault else None
+
+    def _session_for(self, chat_id: str) -> str | None:
+        if not self._sessions_loaded:
+            self._sessions_loaded = True
+            path = self._sessions_file()
+            try:
+                if path is not None and path.is_file():
+                    kept = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(kept, dict):
+                        self._sessions = {**{str(k): str(v) for k, v in kept.items() if v},
+                                          **self._sessions}
+            except Exception:  # noqa: BLE001 — a lost map costs a window, not a turn
+                log.warning("telegram: could not read the kept sessions", exc_info=True)
+        return self._sessions.get(chat_id)
+
+    def _remember_session(self, chat_id: str, session_id: str | None) -> None:
+        if not session_id or self._sessions.get(chat_id) == session_id:
+            return
+        self._sessions[chat_id] = session_id
+        path = self._sessions_file()
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({k: v for k, v in self._sessions.items() if v}),
+                           encoding="utf-8")
+            tmp.replace(path)
+        except Exception:  # noqa: BLE001
+            log.warning("telegram: could not keep the session", exc_info=True)
 
     # ---- outbound: the hub → the chat ----
 

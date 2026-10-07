@@ -461,6 +461,14 @@ def build_directive(specs: list[ToolSpec], *, user_name: str, max_calls: int) ->
         "(no space inside the closer). Each result comes back to you before you "
         "go on, so you can chain calls — one after another — up to "
         f"{max_calls} in a reply. Weave the results in; never read JSON aloud. "
+        # Found live, 2026-10-07: told "that didn't work", she looked up a
+        # setting, found it set, and answered "wait — it DID work" (SPEC §7.4).
+        "A result shows what a tool can see — a setting, a file, a status — "
+        f"and not what happened where {user_name} is. When {user_name} tells "
+        "you something did not happen or did not work, that is the fact: a "
+        "result that looks fine does not overrule it. Never argue a result "
+        "against what they saw; use your hands to find out WHY it failed — "
+        "run the thing, read its log, read its code. "
         f"Never invent a tool:\n{tools}\n"
         'Example: "Mm, hold on — let me set that. [[set_timer {"minutes": 10, '
         '"label": "tea"}]]"'

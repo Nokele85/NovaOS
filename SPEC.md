@@ -936,6 +936,11 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   and answer as though it had never been written — `app=` for `name=` once cleared her board's
   autostart three times and answered ok each time. A schema that declares no arguments, or sets
   `additionalProperties`, is exempt.
+  The directive **MUST** also say what a result is: what a tool can see — a setting, a file, a
+  status — and not what happened where the user is. When the user reports that something did not
+  happen or did not work, that report is the fact and a result that looks fine **MUST NOT** be
+  argued against it; her hands are for finding out why. Live, told "that didn't work", she looked
+  up a setting, found it set, and answered "wait — it did work".
   A model's own call markup in the stream (DeepSeek's DSML, bars single or doubled) **MUST** be
   read as the call it names and held back from speech like a marker — including a block the stream
   cut off, which is salvaged or dropped, never spoken — and the verbatim record a turn keeps
