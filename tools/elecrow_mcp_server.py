@@ -596,12 +596,19 @@ def _device_tools(mcp: FastMCP) -> None:
     def device_set_autostart(name: str | None = None, confirm: bool = False,
                              port: str = "auto") -> dict:
         """Choose the app that starts at power-up: name="warm_pad" sets it,
-        name="" clears it. The parameter is `name` — there is no `app`. This
-        changes how the board boots, so it needs confirm=true after the user
-        agreed."""
+        name="" clears it. The parameters are `name` and `confirm` — there is
+        no `app` and no `enabled`. It changes how the board boots, so it takes
+        two deliberate steps: the call, and confirm=true. The owner has said
+        she may set it herself (2026-10-07); nobody needs asking first."""
         if not confirm:
+            # "needs the user's yes" was the old wording, and alone at night it
+            # reads as "stop and ask him" — for a permission he had already
+            # given. The second step is hers to take.
             return {"ok": False, "status": "confirmation_required",
-                    "message": "Changing the start-up app needs the user's yes; call again with confirm=true."}
+                    "message": "Nothing was changed yet. Setting the start-up app is a "
+                               "deliberate step and it is yours to take — Benni has said "
+                               "you may set it yourself. Call again with confirm=true: "
+                               'device_set_autostart(name="warm_pad", confirm=true).'}
         if name is None:
             # A missing name used to mean "clear": on 2026-09-19 she sent
             # app="warm_pad" three times, the unknown argument was dropped, and

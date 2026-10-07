@@ -606,3 +606,21 @@ async def test_a_reply_that_switches_format_mid_turn_still_runs_the_call(
         [{"role": "user", "content": "tea, then my diary"}], [], [])))
     assert [c[0] for c in runner.calls] == ["set_timer", "list_notes"]
     assert "DSML" not in spoken and spoken.endswith("Five diary files.")
+
+
+def test_an_argument_the_tool_does_not_have_is_named_not_swallowed():
+    """SPEC §7.4, found live twice: `app=` for `name=` cleared her board's
+    autostart and answered ok (2026-09-19), and `enabled=` for `confirm=` came
+    back as though it had never been written (2026-10-07)."""
+    from yurios.world.tools.client import unknown_args, unknown_args_error
+
+    schema = {"properties": {"name": {"type": "string"}, "confirm": {"type": "boolean"},
+                             "port": {"type": "string"}}}
+    assert unknown_args({"name": "warm_pad", "enabled": True}, schema) == ["enabled"]
+    assert unknown_args({"name": "warm_pad", "confirm": True}, schema) == []
+    said = unknown_args_error("device_set_autostart", ["enabled"], schema)
+    assert "`enabled`" in said and "`name`, `confirm`, `port`" in said
+    assert "Nothing was sent" in said
+    # a tool that declares nothing, or takes extras, has nothing to hold a name against
+    assert unknown_args({"x": 1}, {}) == []
+    assert unknown_args({"x": 1}, {"properties": {"a": {}}, "additionalProperties": True}) == []

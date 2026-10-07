@@ -930,7 +930,12 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   discovered schema before the call: coerce what is coercible, drop an **optional** argument
   that cannot be made to fit so the tool's own default applies, and leave a **required** one for
   the tool to reject with its own better message. A fumbled optional scalar **MUST NOT** cost
-  the call the required arguments the model got right.
+  the call the required arguments the model got right. An argument the schema does not declare
+  is the other case and **MUST NOT** be sent: the client refuses the call with a message naming
+  the argument and the ones the tool does have, because a server may drop what it does not know
+  and answer as though it had never been written — `app=` for `name=` once cleared her board's
+  autostart three times and answered ok each time. A schema that declares no arguments, or sets
+  `additionalProperties`, is exempt.
   A model's own call markup in the stream (DeepSeek's DSML, bars single or doubled) **MUST** be
   read as the call it names and held back from speech like a marker — including a block the stream
   cut off, which is salvaged or dropped, never spoken — and the verbatim record a turn keeps

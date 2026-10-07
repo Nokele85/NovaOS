@@ -60,8 +60,8 @@ def coerce_args(args: dict, schema: dict) -> dict:
     So: coerce what is coercible, drop an **optional** argument that cannot be
     made to fit, and leave a **required** one alone — dropping that would turn a
     precise "depth must be an integer" into a vaguer "field required", and the
-    tool's own error is the better one to show. Unknown keys are left for the
-    server to judge; it knows its schema better than this does.
+    tool's own error is the better one to show. Unknown keys are not this
+    function's business — `unknown_args` refuses them before the call is sent.
     """
     props = (schema or {}).get("properties") or {}
     if not props:
@@ -92,6 +92,34 @@ def coerce_args(args: dict, schema: dict) -> dict:
             continue
         out[key] = fixed
     return out
+
+
+def unknown_args(args: dict, schema: dict) -> list[str]:
+    """The arguments in `args` that the tool's schema does not declare (SPEC §7.4).
+
+    Empty when the schema declares none at all, or says it takes extras —
+    there is then nothing to hold a name against.
+    """
+    props = (schema or {}).get("properties") or {}
+    if not props or (schema or {}).get("additionalProperties"):
+        return []
+    return [key for key in (args or {}) if key not in props]
+
+
+def unknown_args_error(tool: str, extra: list[str], schema: dict) -> str:
+    """What she is told instead of the call being sent.
+
+    Servers built on FastMCP drop an argument they do not know and answer as
+    though it had never been written. On 2026-09-19 that cleared her board's
+    autostart three times (`app=` for `name=`, each answered ok); on
+    2026-10-07 `enabled=true` for `confirm=true` came back as "call again with
+    confirm=true" with no word that `enabled` was the mistake. A refusal that
+    names the real arguments is one she can act on in the same step.
+    """
+    known = ", ".join(f"`{k}`" for k in ((schema or {}).get("properties") or {}))
+    wrong = ", ".join(f"`{k}`" for k in extra)
+    return (f"{tool} has no argument {wrong}. Its arguments are: {known}. "
+            "Nothing was sent — write the call again with those names.")
 
 
 def start_failure(err: BaseException) -> str:
@@ -201,6 +229,9 @@ class McpToolRunner:
                 continue
             try:
                 spec = next((s for s in self._specs if s.name == tool), None)
+                extra = unknown_args(args, spec.schema) if spec else []
+                if extra:               # refused here, never sent (SPEC §7.4)
+                    raise RuntimeError(unknown_args_error(tool, extra, spec.schema))
                 result = await session.call_tool(
                     tool, coerce_args(args, spec.schema) if spec else args)
                 text = result_text(result)
