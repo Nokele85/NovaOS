@@ -273,6 +273,7 @@ Backend-specific keys (`QWEN_*`, `SOVITS_*`) are in [Voice](voice.md).
 | `STORY_VOICE_USER` / `STORY_VOICE_MAN` / `STORY_VOICE_WOMAN` | `dylan` / `ryan` / `serena` | the speakers for the user's lines and for any other male or female character; `ryan` and `aiden` get an accent note appended by code |
 | `STORY_TTS_LANGUAGE` / `STORY_TTS_TOKEN` | `German` / — | synthesis language; the supervisor's token, if it sets one |
 | `STORY_MIN_WORDS` / `STORY_SCENES` | `1500` / `8` | minimum text target and sequential scene count |
+| `STORY_MAX_WORDS` | `0` | ceiling for the whole story, in words (about 150 a minute read aloud); each scene is asked for its share of it. `0` = no ceiling. With one set, the minimum is at most three quarters of it |
 | `TIMER_MAX_MINUTES` | `1440` | `set_timer`'s ceiling, in minutes — a day. The board is `<vault>/state/timers.json`; a restart does not drop pending timers. |
 | `WORKSPACE_ENABLED` | `true` | enables `list_notes`, `read_note`, `count_note_lines`, `write_note`, `append_note`, `edit_note`, and `delete_note` |
 | `WORKSPACE_DIGEST_FILES` | `20` | newest workspace files named in Yuri's prompt |

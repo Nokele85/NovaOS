@@ -111,3 +111,26 @@ async def test_no_scene_of_a_finished_story_ends_mid_sentence(tmp_path):
     # every scene and the finale were asked for with room to finish
     assert utility.calls and all(t == SCENE_MAX_TOKENS for t in utility.calls)
     assert posts and posts[-1][1].get("audio_path", "").endswith(".mp3")
+
+
+def test_a_ceiling_shares_the_words_out_by_her_weights():
+    """SPEC §7.8: with STORY_MAX_WORDS the scenes are a share of the whole, so
+    "about five minutes" is a number the writer is actually given."""
+    from yurios.world.stories import scene_budgets
+
+    even = scene_budgets([], 4, 800)
+    assert even == ["160 bis 200"] * 4
+    tops = [int(r.split(" bis ")[1]) for r in scene_budgets(["kurz", "lang", "normal", "kurz"], 4, 800)]
+    assert sum(tops) <= 800 and tops[1] > tops[2] > tops[0] == tops[3]
+    # never a range too small to be a scene
+    assert all(int(r.split(" bis ")[0]) >= 60 for r in scene_budgets([], 12, 300))
+
+
+def test_the_floor_cannot_sit_above_the_ceiling(tmp_path):
+    from yurios.world.stories import StoryLab
+
+    lab = StoryLab(utility=lambda: None, post=lambda *a, **k: {}, root=tmp_path,
+                   voice=None, min_words=1500, max_words=800)
+    assert lab.min_words == 600
+    assert StoryLab(utility=lambda: None, post=lambda *a, **k: {}, root=tmp_path,
+                    voice=None, min_words=1500).min_words == 1500

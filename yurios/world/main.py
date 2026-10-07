@@ -261,7 +261,8 @@ class Runtime:
             director=cfg.story_director,
             voices={"user": cfg.story_voice_user, "man": cfg.story_voice_man,
                     "woman": cfg.story_voice_woman},
-            min_words=cfg.story_min_words, scenes=cfg.story_scenes)
+            min_words=cfg.story_min_words, scenes=cfg.story_scenes,
+            max_words=cfg.story_max_words)
         if hasattr(self.brain, "stories"):
             self.brain.stories = self.stories
         #: Whether this brain can carry a mind, asked once instead of one

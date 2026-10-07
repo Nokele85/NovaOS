@@ -42,6 +42,30 @@ SCENE_WORDS = "350 bis 450"
 SCENE_LENGTHS = {"kurz": "180 bis 250", "normal": SCENE_WORDS,
                  "lang": "600 bis 800"}
 
+# The same three weights as a share of a whole (SPEC §7.8). The ranges above
+# are absolute, so a story's length was whatever its scenes added up to: eight
+# scenes at 350-450 words and a floor of 1,500 made every story twenty to
+# thirty minutes, and "about five minutes" changed nothing, because nothing
+# read it. With `STORY_MAX_WORDS` set, each scene gets its share of that
+# number instead — her weighting still decides where the words go.
+SCENE_WEIGHTS = {"kurz": 0.55, "normal": 1.0, "lang": 1.75}
+
+
+def scene_budgets(lengths: list[str], n: int, max_words: int) -> list[str]:
+    """Each scene's word range when the whole story has a ceiling (§7.8).
+
+    The upper ends add up to `max_words` (rounded down to tens), so a writer
+    who fills every scene to its limit still lands on the ceiling, not past it.
+    """
+    weights = [SCENE_WEIGHTS.get(lengths[i] if i < len(lengths) else "", 1.0)
+               for i in range(max(1, n))]
+    total = sum(weights)
+    out: list[str] = []
+    for weight in weights:
+        top = max(80, int(max_words * weight / total) // 10 * 10)
+        out.append(f"{max(60, int(top * 0.8) // 10 * 10)} bis {top}")
+    return out
+
 # The editor is the one call that thinks, and on this route `max_tokens` bounds
 # the thinking as well as the answer: fill it and the content comes back empty.
 # A 4300-word story needed 24 913 reasoning tokens, so this is roughly double —
@@ -506,7 +530,8 @@ class StoryLab:
                  remember=None, character_context=None, user_name: str = "Benni",
                  min_words: int = 1500, director: bool = True,
                  voices: dict[str, str] | None = None,
-                 scenes: int = 8, gpu_lock: asyncio.Lock | None = None):
+                 scenes: int = 8, gpu_lock: asyncio.Lock | None = None,
+                 max_words: int = 0):
         self.utility = utility
         self.director = director
         #: speaker id -> one of the voice model's speakers; narration and
@@ -521,7 +546,13 @@ class StoryLab:
         self.remember = remember
         self.root = root
         self.voice = voice
-        self.min_words = min_words
+        #: 0 = no ceiling, the scenes' own ranges decide (the old contract).
+        self.max_words = max(0, int(max_words))
+        # A floor above the ceiling would send every story into the extension
+        # loop it exists to avoid; with a ceiling the floor is three quarters
+        # of it at most.
+        self.min_words = (min(min_words, self.max_words * 3 // 4)
+                          if self.max_words else min_words)
         self.scenes = scenes
         self._tasks: set[asyncio.Task] = set()
         # The docstring's "one at a time", enforced: two jobs share one TTS
@@ -1114,6 +1145,9 @@ class StoryLab:
                 bisher = "\n\n".join(parts)
                 umfang = SCENE_LENGTHS.get(
                     her_lengths[i] if i < len(her_lengths) else "", SCENE_WORDS)
+                if self.max_words:      # a share of the whole (SPEC §7.8)
+                    umfang = scene_budgets(her_lengths, len(purposes),
+                                           self.max_words)[i]
                 szenen_prompt = (
                     "Schreibe die nächste Szene eines Hörspiels auf Deutsch. "
                     "Ein Hörspiel lebt von gesprochener Rede: Was die beiden "

@@ -1248,8 +1248,7 @@ the body still has cheap client-side aliveness (§3.5) but no host-driven ambien
 
 The real-time loop that gives her a spoken body. All backend-facing voice surfaces sit behind
 Protocols (`yurios/desktop/voice/protocols.py`); nothing else in the voice layer imports an
-STT/TTS/VAD SDK, and fakes implement each seam so the whole loop runs offline (§27).
-
+STT/TTS/VAD SDK, and fakes implement each seam so the whole loop runs offline (§27). A deployment **MAY** give the whole story a ceiling (`STORY_MAX_WORDS`): each scene is then asked for its share of that number, weighted by her own `scene_lengths`, with the upper ends adding up to the ceiling, and the minimum **MUST NOT** exceed three quarters of it. Without one a story is as long as its scenes add up to, which with eight scenes and a 1,500-word floor was twenty to thirty minutes whatever length had been asked for.
 - §9.1 **The seams.** Audio is float32 mono in [-1, 1] with its sample rate alongside.
   **STT** (`reset`/`feed`/`final`; default `faster_whisper`, tuned for latency) **MUST** drop
   segments flagged non-speech and the loop **MUST** reject a transcript with no alphanumeric

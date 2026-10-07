@@ -66,6 +66,9 @@ class Config(VoiceConfig):
     story_tts_token: str = ""                   # supervisor token, if it sets one
     story_min_words: int = 1500
     story_scenes: int = 8
+    # 0 = no ceiling. Set, every scene is asked for its share of this many
+    # words (about 150 a minute read aloud) instead of a fixed range (§7.8).
+    story_max_words: int = 0
     # Off unless a deployment names a story TTS it actually runs: like the web
     # and camera hands, a disabled `tell_story` is absent, not a dead hand.
     story_enabled: bool = False
