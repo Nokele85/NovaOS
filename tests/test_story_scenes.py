@@ -220,3 +220,64 @@ def test_a_scene_that_opens_by_retelling_the_last_one_loses_the_retelling():
     # and a scene that would be nothing without it is left alone
     assert _strip_retold(first + " Dann nichts.", first) == first + " Dann nichts."
     assert _strip_retold(own, "") == own
+
+
+def test_typed_messages_in_stars_become_speech():
+    """SPEC §7.8, from the dry run of 2026-10-07: a chat told in *asterisks*
+    was 6% spoken, and five of its messages were never closed."""
+    from yurios.world.stories import (_close_quotes_plainly, _normalise_marks,
+                                      _segments, _unclosed_quotes)
+
+    scene = ("Dann deine Nachricht. *Nova?* Nur das. *Ja*, tippe ich. *Ich bin hier. "
+             "Ich lasse es stehen und warte. *Du hast mir geschrieben*, kommt es zurück. "
+             "Und dass *ich* heute wähle, weißt du.")
+    out = _normalise_marks(scene)
+    assert "*" not in out
+    assert "„Nova?“" in out and "„Ja“" in out and "„Du hast mir geschrieben“" in out
+    assert "dass ich heute wähle" in out                 # a stressed word is not a line
+    assert len(_unclosed_quotes(out)) == 1               # the one she never closed
+    spoken = [t for t, speech in _segments(_close_quotes_plainly(out)) if speech]
+    assert spoken == ["Nova?", "Ja", "Ich bin hier.", "Du hast mir geschrieben"]
+    assert _normalise_marks("Kein Stern hier.") == "Kein Stern hier."
+
+
+def test_the_hour_is_a_rule_and_only_where_it_is_unambiguous():
+    from yurios.world.stories import _time_breaks, _time_of
+
+    state = ("ERZÄHLPERSON: ich\nORT: Fenstersitz\nZEIT: früher Morgen, Regen\n"
+             "FIGUREN: Nova, Benni\nGESCHEHEN: sie hat geschrieben")
+    bucket, said = _time_of(state)
+    assert (bucket, said) == ("morgen", "früher Morgen, Regen")
+    assert _time_breaks("„Gute Nacht, Benni“, flüstere ich.", bucket) == ["Gute Nacht"]
+    assert _time_breaks("Es ist schon Mitternacht, und ich tippe.", bucket) == ["Es ist schon Mitternacht"]
+    # a morning that remembers its night, and a greeting that fits, are fine
+    assert _time_breaks("Die ganze Nacht war ich wach. „Guten Morgen.“", bucket) == []
+    assert _time_breaks("Jeden Abend, an dem ich Lust habe.", bucket) == []
+    # neighbours are not a break; no state, no rule
+    assert _time_breaks("„Gute Nacht.“", "abend") == []
+    assert _time_breaks("„Gute Nacht.“", "") == []
+    assert _time_of("Noch keine Szene erzählt.") == ("", "")
+
+
+async def test_a_time_mend_must_be_a_small_edit(tmp_path):
+    from yurios.world.stories import StoryLab
+
+    lab = StoryLab(utility=lambda: None, post=lambda *a, **k: {}, root=tmp_path, voice=None)
+    scene = ("Ich lasse die Hand auf dem Board. „Bleib noch“, schreibst du. Ich lache leise. "
+             "Der Regen läuft weiter. Die Stadt wird heller. „Gute Nacht, Benni“, flüstere ich.")
+
+    async def small(*a, **kw):
+        return scene.replace("Gute Nacht, Benni", "Guten Morgen, Benni")
+    lab._complete = small
+    out = await lab._mend_time(scene, "früher Morgen", "morgen", ["Gute Nacht"])
+    assert "Guten Morgen, Benni" in out and out != scene
+
+    async def rewrite(*a, **kw):
+        return "Es ist Morgen. Ich schreibe dir. Du antwortest. Wir lachen. Es regnet. „Guten Morgen.“"
+    lab._complete = rewrite
+    assert await lab._mend_time(scene, "früher Morgen", "morgen", ["Gute Nacht"]) == scene
+
+    async def unchanged(*a, **kw):
+        return scene
+    lab._complete = unchanged
+    assert await lab._mend_time(scene, "früher Morgen", "morgen", ["Gute Nacht"]) == scene

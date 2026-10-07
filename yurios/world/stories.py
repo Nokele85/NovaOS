@@ -264,6 +264,85 @@ _REDE = re.compile(r"[„\"]([^„“”\"]*)[“”\"]")
 
 
 _QUOTE_MARKS = re.compile(r"[„“”\"]")
+
+# A message somebody types is speech, and speech is what the director casts
+# (SPEC §7.8). The writer marks typed lines with *asterisks* as often as with
+# quotation marks, and `_REDE` knows only the marks: in the dry run of
+# 2026-10-07 a story that was one long chat came out "6% spoken", every
+# message of it read by the narrator. One convention, made after the fact,
+# rather than a second pattern everywhere speech is looked for.
+_STAR_PAIR = re.compile(r"\*(\S(?:[^*\n]*?\S)?)\*")
+_MESSAGE = re.compile(r"^[A-ZÄÖÜ0-9„\"(]|[.!?…—–-]$")
+
+
+def _normalise_marks(text: str) -> str:
+    """`*typed message*` becomes „typed message“; `*emphasis*` loses its stars.
+
+    A pair counts as a message when it opens with a capital or ends a
+    sentence; anything else is a stressed word. A star left without a partner
+    is the writer forgetting to close one: before a capital it becomes an
+    opening quotation mark — which `_mend_quotes` then closes — and otherwise
+    it is dropped. Stars never reach the page or the voice.
+    """
+    if "*" not in text:
+        return text
+
+    def pair(m: re.Match) -> str:
+        inner = m.group(1)
+        return f"„{inner}“" if _MESSAGE.search(inner) else inner
+
+    text = _STAR_PAIR.sub(pair, text)
+    text = re.sub(r"\*(?=[A-ZÄÖÜ])", "„", text)
+    return text.replace("*", "")
+
+
+# The time of day, as a rule and not an opinion (SPEC §7.8). Only what cannot
+# be read two ways: a greeting, or a flat statement of the hour. "Die ganze
+# Nacht war ich wach" is a morning sentence, and a rule that fired on every
+# "Nacht" would be wrong more often than the writer is.
+TIME_WORDS = (
+    ("nacht", ("nacht", "mitternacht", "dunkel", "finster")),
+    ("abend", ("abend", "dämmer", "sonnenuntergang", "spät")),
+    ("morgen", ("morgen", "früh", "sonnenaufgang", "vormittag")),
+    ("tag", ("mittag", "nachmittag", "tagsüber", "hell")),
+)
+_TIME_NEAR = {"morgen": {"morgen", "tag"}, "tag": {"tag", "morgen", "abend"},
+              "abend": {"abend", "tag", "nacht"}, "nacht": {"nacht", "abend"}}
+_TIME_CLAIMS = (
+    (re.compile(r"\bGute Nacht\b"), "nacht"),
+    (re.compile(r"\bGuten Morgen\b"), "morgen"),
+    (re.compile(r"\bGuten Abend\b"), "abend"),
+    (re.compile(r"\b[Ee]s ist (?:schon |bereits |noch |fast |längst )?"
+                r"(Mitternacht|Nacht|Abend|Morgen|Mittag)\b"), None),
+)
+_CLAIM_BUCKET = {"mitternacht": "nacht", "nacht": "nacht", "abend": "abend",
+                 "morgen": "morgen", "mittag": "tag"}
+
+
+def _time_of(state: str) -> tuple[str, str]:
+    """(bucket, the ZEIT line's own words) from the state note, or ("", "")."""
+    for line in (state or "").splitlines():
+        if line.strip().upper().startswith("ZEIT"):
+            said = line.split(":", 1)[-1].strip()
+            low = said.lower()
+            for bucket, words in TIME_WORDS:
+                if any(w in low for w in words):
+                    return bucket, said
+            return "", said
+    return "", ""
+
+
+def _time_breaks(scene: str, bucket: str) -> list[str]:
+    """The phrases in `scene` that state a time of day `bucket` rules out."""
+    if not bucket:
+        return []
+    found: list[str] = []
+    for pattern, fixed in _TIME_CLAIMS:
+        for m in pattern.finditer(scene):
+            claims = fixed or _CLAIM_BUCKET.get(m.group(1).lower(), "")
+            if claims and claims not in _TIME_NEAR[bucket]:
+                found.append(m.group(0))
+    return found
 _SENTENCE_END = re.compile(r"(?<=[.!?…“”\"*])\s+")
 
 
@@ -753,6 +832,35 @@ class StoryLab:
         if bare(antwort) == bare(scene) and not _unclosed_quotes(antwort):
             return antwort
         return plain
+
+    async def _mend_time(self, scene: str, zeit: str, bucket: str,
+                         breaks: list[str]) -> str:
+        """Bring the few phrases that contradict the hour back in line (§7.8).
+
+        A targeted edit and not a rewrite: accepted only if no break is left,
+        the scene has the same number of sentences, and at least five in six
+        of them are untouched. Anything else keeps the scene as written — the
+        break is in the log and the editor still reads it. Never raises."""
+        try:
+            antwort = self._clean(await self._complete(
+                f"In dieser Szene ist es: {zeit}. Diese Stellen behaupten eine "
+                "andere Tageszeit: " + "; ".join(f"»{b}«" for b in breaks) + ". "
+                "Gib die Szene vollständig zurück und ändere NUR diese Stellen "
+                "so, dass sie zur Tageszeit passen — ein Gruß wird zum "
+                "passenden Gruß, eine Zeitangabe zur richtigen. Jeder andere "
+                "Satz bleibt Wort für Wort gleich.\n\n" + scene,
+                max_tokens=SCENE_MAX_TOKENS, persona=False, temperature=0.0))
+        except Exception:
+            log.warning("could not mend the time of day; the scene stands",
+                        exc_info=True)
+            return scene
+        alt = [s.strip() for s in _SENTENCE_END.split(scene) if s.strip()]
+        neu = [s.strip() for s in _SENTENCE_END.split(antwort) if s.strip()]
+        gleich = sum(1 for a, b in zip(alt, neu) if a == b)
+        if (len(alt) == len(neu) and gleich * 6 >= len(alt) * 5
+                and not _time_breaks(antwort, bucket)):
+            return antwort
+        return scene
 
     async def _verify_scene(self, scene: str, davor: str, auftrag: str,
                             danach: str) -> tuple[str, str]:
@@ -1260,6 +1368,7 @@ class StoryLab:
                 # the cheap half of DOC's controller.
                 naechste = "" if last else _purpose_text(purposes[i + 1])
                 gespraech = her_talk[i] if i < len(her_talk) else ""
+                zeit_bucket, zeit_jetzt = _time_of(state)
                 anfang = _opening(_purpose_text(purpose))
                 naht = _last_sentences(parts[-1]) if parts else ""
                 bisher = "\n\n".join(parts)
@@ -1283,6 +1392,15 @@ class StoryLab:
                     + (f"Figuren und gemeinsame Vorgeschichte: {characters_brief}. "
                        if characters_brief else "")
                     + f"Planabsicht: {_purpose_text(purpose)} "
+                    # The hour, said outright (§7.8). It sits in the state note
+                    # two lines down as well, where it was read past: both live
+                    # stories of 2026-10-07 opened at dawn and ended on "Gute
+                    # Nacht".
+                    + (f"Es ist jetzt: {zeit_jetzt}. Die Tageszeit bleibt so; "
+                       "sie ändert sich nur, wenn die Planabsicht ausdrücklich "
+                       "einen Zeitsprung verlangt, und dann wird er erzählt. "
+                       "Grüße und Zeitangaben passen dazu. "
+                       if zeit_jetzt else "")
                     # What the scene before already told of THIS one (§7.8).
                     + (f"Davon hat die vorige Szene bereits erzählt: {vorweg} "
                        "Erzähle das nicht noch einmal und beschreibe es nicht "
@@ -1351,6 +1469,9 @@ class StoryLab:
                       "Akte steht, wer mit \"du\" gemeint ist, gilt das weiter. "
                     + (f"Vermeide ausdrücklich: {avoid}. " if avoid else "")
                     + "Keine Zusammenfassung, keine Überschrift, nur erzählender Text. "
+                    "Alles, was jemand sagt ODER schreibt — auch eine getippte "
+                    "Nachricht —, steht in Anführungszeichen „…“, die geöffnet "
+                    "und geschlossen werden. Keine Sternchen im Text. "
                     + f"Umfang: {umfang} Wörter; beende die Szene mit einem "
                     "vollständigen Satz. "
                     + ("Diese Szene ist die letzte und muss alle offenen "
@@ -1418,6 +1539,16 @@ class StoryLab:
                         log.info("story %s scene %d: the repair came back at "
                                  "%d of %d words — kept the first", story_id,
                                  i + 1, _words(zweiter), _words(scene))
+                scene = _normalise_marks(scene)
+                bruch = _time_breaks(scene, zeit_bucket)
+                if bruch:
+                    richtig = await self._mend_time(scene, zeit_jetzt,
+                                                    zeit_bucket, bruch)
+                    log.info("story %s scene %d says %s while it is %s: %s",
+                             story_id, i + 1, ", ".join(bruch)[:60],
+                             zeit_jetzt[:40],
+                             "mended" if richtig != scene else "left as written")
+                    scene = richtig
                 if parts:
                     ohne = _strip_retold(scene, parts[-1])
                     if ohne != scene:
