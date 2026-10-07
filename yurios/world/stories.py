@@ -263,6 +263,48 @@ ACCENT_NOTES = {"ryan": " Clear standard German pronunciation, no English accent
 _REDE = re.compile(r"[„\"]([^„“”\"]*)[“”\"]")
 
 
+_QUOTE_MARKS = re.compile(r"[„“”\"]")
+
+
+def _unclosed_quotes(text: str) -> list[int]:
+    """Where a „ opens speech that is never closed (SPEC §7.8).
+
+    Live, 2026-10-07: a scene opened „Hey Benni. Ich sitze hier … and never
+    closed it. `_REDE` then cannot tell her message from the narration after
+    it, so the recording read both in one voice and the page showed one long
+    quotation. Only the German opening mark is judged: a straight " opens and
+    closes alike, and guessing which is which mends nothing.
+    """
+    offen: list[int] = []
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "„":
+            if start >= 0:
+                offen.append(start)
+            start = i
+        elif ch in "“”\"" and start >= 0:
+            start = -1
+        elif ch == "\n" and start >= 0 and text[i:i + 2] == "\n\n":
+            offen.append(start)         # speech does not run across paragraphs
+            start = -1
+    if start >= 0:
+        offen.append(start)
+    return offen
+
+
+def _close_quotes_plainly(text: str) -> str:
+    """The fallback mend: close each open quotation after its first sentence.
+
+    Not always where the speech ended — but a line of speech that is one
+    sentence too short is spoken in the right voice and reads as a line, and an
+    unclosed one is neither."""
+    for start in reversed(_unclosed_quotes(text)):
+        halt = re.search(r"[.!?…]+", text[start + 1:])
+        end = start + 1 + halt.end() if halt else len(text)
+        text = text[:end] + "“" + text[end:]
+    return text
+
+
 def _direction_lines(daten, anzahl: int) -> dict[int, dict]:
     """The director's lines by segment number, read leniently.
 
@@ -657,9 +699,53 @@ class StoryLab:
             return {"title": theme, "characters": [],
                     "scenes": [{"purpose": p} for p in _BARE_ARC]}
 
+    async def _mend_quotes(self, scene: str) -> str:
+        """Close speech the writer left open, without changing a letter (§7.8).
+
+        One small call puts the missing marks where the speech ends; it is
+        accepted only if the text is otherwise identical, and anything else
+        falls back to the plain rule. Never raises: a scene with a missing
+        mark is still a scene."""
+        if not _unclosed_quotes(scene):
+            return scene
+        plain = _close_quotes_plainly(scene)
+        try:
+            antwort = self._clean(await self._complete(
+                "In diesem Text beginnt wörtliche Rede mit „ und wird nicht "
+                "geschlossen. Gib den Text Zeichen für Zeichen unverändert "
+                "zurück und setze nur die fehlenden schließenden "
+                "Anführungszeichen “ genau dort, wo die jeweilige Rede endet. "
+                "Ändere, streiche und ergänze sonst nichts.\n\n" + scene,
+                max_tokens=SCENE_MAX_TOKENS, persona=False, temperature=0.0))
+        except Exception:
+            log.warning("could not mend open quotes; closing them plainly",
+                        exc_info=True)
+            return plain
+
+        def bare(text: str) -> str:
+            return " ".join(_QUOTE_MARKS.sub("", text).split())
+
+        if bare(antwort) == bare(scene) and not _unclosed_quotes(antwort):
+            return antwort
+        return plain
+
     async def _verify_scene(self, scene: str, davor: str, auftrag: str,
                             danach: str) -> tuple[str, str]:
-        """What this scene failed to do, or "" if it did it.
+        """What this scene failed to do, or "" if it did it."""
+        offen, anfang, _ = await self._verify_scene_full(
+            scene, davor, auftrag, danach)
+        return offen, anfang
+
+    async def _verify_scene_full(self, scene: str, davor: str, auftrag: str,
+                                 danach: str) -> tuple[str, str, str]:
+        """What this scene failed to do, where it began wrongly, and what of
+        the NEXT scene it already told — each "" when there is nothing.
+
+        The third is not repaired here either: a rewrite that stops short was
+        measured as unreliable as the others below. It is handed to the next
+        scene instead, which is told what has already been told (SPEC §7.8).
+        Live, 2026-10-07: scene 1 typed, deleted and retyped her message, and
+        scene 2 — whose brief was exactly that — told it all a second time.
 
         Checked here rather than at the end, because a scene that went
         somewhere else is the ground the next one builds on: passage 2
@@ -693,7 +779,10 @@ class StoryLab:
                 "darf zur Tür führen. Sie darf nicht hindurchgehen und "
                 "oben ankommen. Nur das Erledigen ist ein Verstoß, nicht "
                 "das Hinführen.\n\n"
-                "Antworte in genau zwei Zeilen:\n"
+                "Antworte in genau drei Zeilen:\n"
+                "VORGRIFF: nein / JA <welches Ereignis der NÄCHSTEN Szene "
+                "hier schon vollzogen und zu Ende erzählt ist> — JA nur "
+                "dann; Hinführen, Ankündigen und Vorbereiten zählen nicht.\n"
                 "AUFTRAG: erfüllt / verfehlt <was fehlt>\n"
                 "BEGINN: richtig / FALSCH <wo die Szene stattdessen "
                 "einsetzt> — FALSCH nur dann, wenn der Ort oder die "
@@ -705,15 +794,20 @@ class StoryLab:
                 max_tokens=300, persona=False, temperature=0.2)
         except Exception:
             log.warning("scene check failed; the scene stands", exc_info=True)
-            return "", ""
-        offen = anfang = ""
+            return "", "", ""
+        offen = anfang = vorweg = ""
         for zeile in (antwort or "").splitlines():
             gross = zeile.upper()
             if gross.startswith("AUFTRAG") and "VERFEHLT" in gross:
                 offen = zeile.strip()
             elif gross.startswith("BEGINN") and "FALSCH" in gross:
                 anfang = zeile.strip()
-        return offen, anfang
+            elif gross.startswith("VORGRIFF"):
+                treffer = re.match(r"\s*VORGRIFF\s*:\s*JA\b[\s:—–-]*(.*)", zeile,
+                                   re.I)
+                if treffer and danach and danach != "keine":
+                    vorweg = treffer.group(1).strip() or "ein Teil der nächsten Szene"
+        return offen, anfang, vorweg
 
     async def _lektorat(self, parts: list[str], rules: str, register: str,
                         offen: list[dict] | None = None) -> tuple[int, int]:
@@ -1130,6 +1224,7 @@ class StoryLab:
             # be spoken with ("" = her plain narrating register).
             moods: list[str] = []
             state = "Noch keine Szene erzählt."
+            vorweg = ""     # what the scene before told of this one
             for i, purpose in enumerate(purposes):
                 last = i == len(purposes) - 1
                 # Where a scene must STOP. Scene 1 of the live story of
@@ -1163,6 +1258,12 @@ class StoryLab:
                     + (f"Figuren und gemeinsame Vorgeschichte: {characters_brief}. "
                        if characters_brief else "")
                     + f"Planabsicht: {_purpose_text(purpose)} "
+                    # What the scene before already told of THIS one (§7.8).
+                    + (f"Davon hat die vorige Szene bereits erzählt: {vorweg} "
+                       "Erzähle das nicht noch einmal und beschreibe es nicht "
+                       "mit anderen Worten neu: setze unmittelbar danach ein "
+                       "und führe nur den Rest dieser Planabsicht aus. "
+                       if vorweg else "")
                     + f"Bisheriger Zustand, vor allem was noch offen ist: {state} "
                     # The whole story so far, not a summary of it. Each scene
                     # used to see a 120-word state note and the last two
@@ -1239,7 +1340,7 @@ class StoryLab:
                 # end review read past exactly this twice.
                 davor = state + (f" Die vorige Szene endete so: {naht}"
                                  if naht else "")
-                offen, anfang = await self._verify_scene(
+                offen, anfang, voraus = await self._verify_scene_full(
                     scene, davor, _purpose_text(purpose), naechste or "keine")
                 if offen:
                     # Logged, not repaired. Her outline lines pack four or five
@@ -1265,13 +1366,13 @@ class StoryLab:
                     # Only if it is actually better. A repair that fixes
                     # the brief and loses half the scene is not one.
                     if _words(zweiter) >= 0.7 * _words(scene):
-                        _, rest = await self._verify_scene(
+                        _, rest, voraus2 = await self._verify_scene_full(
                             zweiter, davor, _purpose_text(purpose),
                             naechste or "keine")
                         if not rest:
                             log.info("story %s scene %d: repaired",
                                      story_id, i + 1)
-                            scene = zweiter
+                            scene, voraus = zweiter, voraus2
                         else:
                             log.info("story %s scene %d: still %s — kept the "
                                      "first", story_id, i + 1, rest[:80])
@@ -1279,6 +1380,15 @@ class StoryLab:
                         log.info("story %s scene %d: the repair came back at "
                                  "%d of %d words — kept the first", story_id,
                                  i + 1, _words(zweiter), _words(scene))
+                if voraus:
+                    log.info("story %s scene %d already told part of the next: "
+                             "%s", story_id, i + 1, voraus[:110])
+                vorweg = voraus         # the next scene is told (SPEC §7.8)
+                gemendet = await self._mend_quotes(scene)
+                if gemendet != scene:
+                    log.info("story %s scene %d: closed speech left open",
+                             story_id, i + 1)
+                    scene = gemendet
                 parts.append(scene)
                 moods.append(her_moods[i] if i < len(her_moods) else "")
                 state = await self._state_update(state, scene)

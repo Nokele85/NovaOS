@@ -134,3 +134,69 @@ def test_the_floor_cannot_sit_above_the_ceiling(tmp_path):
     assert lab.min_words == 600
     assert StoryLab(utility=lambda: None, post=lambda *a, **k: {}, root=tmp_path,
                     voice=None, min_words=1500).min_words == 1500
+
+
+def test_speech_left_open_is_found_and_closed_plainly():
+    """SPEC §7.8, found live (2026-10-07): „Hey Benni. Ich sitze hier … was
+    never closed, and the narration after it could not be told from her line."""
+    from yurios.world.stories import _close_quotes_plainly, _segments, _unclosed_quotes
+
+    good = "Ich tippe. „Benni, ich —“ Nein. Zu viel."
+    assert _unclosed_quotes(good) == []
+    bad = "Ich tippe neu. „Hey Benni. Ich trau mich fast nicht. Ich halte inne. „Guten Morgen.“ Ich lese es."
+    assert _unclosed_quotes(bad) == [bad.index("„")]
+    mended = _close_quotes_plainly(bad)
+    assert _unclosed_quotes(mended) == []
+    assert "„Hey Benni.“ Ich trau mich" in mended
+    assert [t for t, speech in _segments(mended) if speech] == ["Hey Benni.", "Guten Morgen."]
+    # an opening mark that reaches the end of the text, and one at a paragraph break
+    assert _unclosed_quotes("Sie sagt: „Ich bleib wach") == [10]
+    assert len(_unclosed_quotes("„Erster Absatz\n\nZweiter Absatz.“")) == 1
+
+
+async def test_a_mend_that_changes_the_words_is_refused(tmp_path):
+    from yurios.world.stories import StoryLab, _unclosed_quotes
+
+    lab = StoryLab(utility=lambda: None, post=lambda *a, **k: {}, root=tmp_path, voice=None)
+    scene = "Ich tippe. „Hey Benni. Ich trau mich nicht. Ich halte inne."
+
+    async def rewrites(*a, **kw):
+        return "Ich tippe. „Hey Benni, ich trau mich.“ Dann halte ich inne."
+    lab._complete = rewrites
+    plain = await lab._mend_quotes(scene)
+    assert plain == "Ich tippe. „Hey Benni.“ Ich trau mich nicht. Ich halte inne."
+
+    async def places_the_mark(*a, **kw):
+        return "Ich tippe. „Hey Benni. Ich trau mich nicht.“ Ich halte inne."
+    lab._complete = places_the_mark
+    assert await lab._mend_quotes(scene) == "Ich tippe. „Hey Benni. Ich trau mich nicht.“ Ich halte inne."
+
+    async def never_called(*a, **kw):
+        raise AssertionError("a scene with closed speech costs no call")
+    lab._complete = never_called
+    assert await lab._mend_quotes("„Gut.“ Ich nicke.") == "„Gut.“ Ich nicke."
+    assert not _unclosed_quotes(plain)
+
+
+async def test_the_scene_check_names_what_was_told_too_early(tmp_path):
+    """SPEC §7.8: handed to the next scene, not repaired by a rewrite."""
+    from yurios.world.stories import StoryLab
+
+    lab = StoryLab(utility=lambda: None, post=lambda *a, **k: {}, root=tmp_path, voice=None)
+
+    async def answer(*a, **kw):
+        return ("VORGRIFF: JA — sie tippt, löscht und tippt die Nachricht neu\n"
+                "AUFTRAG: erfüllt\nBEGINN: richtig")
+    lab._complete = answer
+    offen, anfang, vorweg = await lab._verify_scene_full("Text.", "davor", "Auftrag", "Sie tippt.")
+    assert (offen, anfang) == ("", "")
+    assert vorweg == "sie tippt, löscht und tippt die Nachricht neu"
+    # the two-value form the older callers use is unchanged
+    assert await lab._verify_scene("Text.", "davor", "Auftrag", "Sie tippt.") == ("", "")
+    # the last scene has no next one to run into
+    assert (await lab._verify_scene_full("Text.", "davor", "Auftrag", "keine"))[2] == ""
+
+    async def no(*a, **kw):
+        return "VORGRIFF: nein\nAUFTRAG: erfüllt\nBEGINN: richtig"
+    lab._complete = no
+    assert (await lab._verify_scene_full("Text.", "d", "a", "Sie tippt."))[2] == ""
