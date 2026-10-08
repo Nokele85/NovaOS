@@ -92,3 +92,51 @@ def test_the_reference_is_built_from_the_source_and_shows_a_correct_example():
     assert elecrow_api.check_app({"main.py": example}, API) == []
     only = elecrow_api.api_card(API, "speaker")
     assert "nova.speaker.tone" in only and "nova.net.connect" not in only
+
+
+# --- her music on the board (docs/tools.md → device_play_music) ----------------
+
+def _score():
+    import importlib.util
+    path = LIB / "score.py"
+    spec = importlib.util.spec_from_file_location("nova_score_t", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_score_is_read_the_way_she_writes_it():
+    score = _score()
+    notes = score.parse("A4 C4:2 - | F#3:0.5 Bb4,H4")
+    assert [round(f, 1) for f, _ in notes] == [440.0, 261.6, 0.0, 185.0, 466.2, 493.9]
+    assert [b for _, b in notes] == [1.0, 2.0, 1.0, 0.5, 1.0, 1.0]
+    assert score.seconds(notes, 60) == 6.5
+    for bad, why in (("X4", "not a note"), ("C9", "octave"), ("C4:long", "length"),
+                     ("C4:0", "between 0 and 16"), ("", "empty")):
+        try:
+            score.parse(bad)
+        except ValueError as exc:
+            assert why in str(exc), (bad, str(exc))
+        else:
+            raise AssertionError(f"{bad!r} was accepted")
+
+
+def test_the_music_tool_refuses_what_the_board_would_and_stays_quiet():
+    import elecrow_mcp_server as server
+    refusal, code = server.music_call("E4 G4 X9", 90, 0.06, True, 10, "", "soft")
+    assert code == "" and refusal["status"] == "bad_score" and "X9" in refusal["error"]
+    assert "Nothing was played" in refusal["message"]
+    assert server.music_call("E4", 500, 0.06, True, 10, "", "soft")[0]["status"] == "bad_tempo"
+    assert server.music_call("E4", 90, 0.06, True, 10, "", "organ")[0]["status"] == "bad_wave"
+
+    facts, code = server.music_call("E4 G4 A4:2", 60, 0.9, True, 9999, "Regen", "soft")
+    assert facts == {"notes": 3, "volume": 0.25, "minutes": 120.0, "seconds_per_pass": 4.0}
+    assert "volume=0.25" in code and "minutes=120.0" in code and "title='Regen'" in code
+    compile(code, "<music>", "exec")
+    # played once, there is no clock to run out
+    assert server.music_call("E4", 60, 0.06, False, 10, "", "sine")[0]["minutes"] == 0.0
+
+
+def test_the_reference_shows_her_the_music_module():
+    card = elecrow_api.api_card(API, "music")
+    assert "play(score" in card and "stop(" in card

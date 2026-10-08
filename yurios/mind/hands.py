@@ -232,6 +232,16 @@ HANDS: dict[str, Hand] = {
         "cheap", "look up what her board's library really has — every function "
         "and how it is called — before she writes for it",
         '{"module": ""}'),
+    # Music she writes herself, heard in the room (2026-10-08, the owner's
+    # ask). The room's `play_music` plays two shipped tracks on a web page he
+    # does not have open; this is hers, and it comes out of the board.
+    "device_play_music": Hand(
+        "cheap", "play a melody she composed on her board's speaker, quietly, "
+        "in the background",
+        '{"score": "E4 G4 A4:2 - C5:0.5 B4:0.5 A4:4", "tempo": 80, "loop": true, '
+        '"minutes": 10, "title": "..."}'),
+    "device_stop_music": Hand(
+        "cheap", "stop the music on her board", '{}'),
     "device_exec": Hand(
         "cheap", "try a few lines of MicroPython on her board and see what "
         "they print",

@@ -45,6 +45,59 @@ def _api() -> dict:
         return {}
 
 
+def _score():
+    """The board's own score reader (`nova/score.py`), loaded on this machine.
+
+    One file reads a melody in both places, so a score refused here is exactly
+    a score that would fail on the board. None when the source is not here."""
+    import importlib.util
+    path = Path(os.environ.get("ELECROW_WORKSPACE", "")) / "nova-runtime" / "lib" / "nova" / "score.py"
+    if not path.is_file():
+        path = (Path(__file__).resolve().parent.parent / "elecrow-firmware"
+                / "nova-runtime" / "lib" / "nova" / "score.py")
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("nova_score", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+#: Background music is company: quiet when she names no level, never above
+#: MUSIC_LOUDEST, and a loop ends by itself (the board's own limits, said here
+#: so the tool can answer what it changed).
+MUSIC_QUIET, MUSIC_LOUDEST = 0.06, 0.25
+MUSIC_MINUTES, MUSIC_MINUTES_MAX = 10.0, 120.0
+
+
+def music_call(score: str, tempo: int, volume: float, loop: bool, minutes: float,
+               title: str, wave: str) -> tuple[dict | None, str]:
+    """(refusal, code): what is wrong with the piece, or the code that plays it."""
+    reader = _score()
+    if reader is None:
+        return {"ok": False, "status": "no_runtime_source",
+                "message": "The runtime's source is not on this machine."}, ""
+    try:
+        notes = reader.parse(score)
+    except ValueError as exc:
+        return {"ok": False, "status": "bad_score", "error": str(exc),
+                "message": "Nothing was played. Correct the score and call again."}, ""
+    if not 30 <= int(tempo) <= 240:
+        return {"ok": False, "status": "bad_tempo",
+                "error": "tempo is beats per minute, 30 to 240"}, ""
+    if wave not in ("soft", "sine", "square"):
+        return {"ok": False, "status": "bad_wave",
+                "error": "wave is one of: soft, sine, square"}, ""
+    volume = max(0.0, min(MUSIC_LOUDEST, float(volume)))
+    minutes = max(0.5, min(MUSIC_MINUTES_MAX, float(minutes))) if loop else 0.0
+    code = ("import json\nfrom nova import music\n"
+            f"print(json.dumps(music.play({score!r}, tempo={int(tempo)}, "
+            f"volume={volume!r}, loop={bool(loop)!r}, minutes={minutes!r}, "
+            f"title={str(title)[:60]!r}, wave={wave!r})))\n")
+    return {"notes": len(notes), "volume": volume, "minutes": minutes,
+            "seconds_per_pass": round(reader.seconds(notes, int(tempo)), 1)}, code
+
+
 def _check(files: dict) -> list[str]:
     """What would fail when this app runs; [] when nothing was found or nothing can be checked."""
     api = _api()
@@ -573,6 +626,43 @@ def _device_tools(mcp: FastMCP) -> None:
             return {"ok": False, "status": "no_runtime_source",
                     "message": "The runtime's source is not on this machine."}
         return {"ok": True, "reference": elecrow_api.api_card(api, module.strip())}
+
+    @mcp.tool()
+    def device_play_music(score: str, tempo: int = 90, volume: float = MUSIC_QUIET,
+                          loop: bool = True, minutes: float = MUSIC_MINUTES,
+                          title: str = "", wave: str = "soft",
+                          port: str = "auto") -> dict:
+        """Play music YOU composed on your board's speaker, in the background -
+        it is heard in the room where the board stands. `score` is your melody,
+        one token per note: NAME then optionally :BEATS (1 when left out), like
+        "E4 G4 A4:2 - C5:0.5 B4:0.5 | A4:4". Names are C D E F G A B with # or
+        b and an octave 2-7; "-" is a rest; "|" is only a bar line. One voice,
+        no chords. `tempo` is beats per minute (30-240). `volume` is 0 to 0.25
+        and quiet (0.06) when left out - background music is company, keep it
+        low unless asked. `loop` repeats the piece for `minutes` (10 when left
+        out, 120 at most) and then it ends by itself; `loop`=false plays it
+        once. `wave` is "soft", "sine" or "square". `title` is your name for
+        the piece. A new piece replaces the one playing. It answers at once and
+        the music plays on; a score that cannot be read is refused with what to
+        change, and nothing is played."""
+        facts, code = music_call(score, tempo, volume, loop, minutes, title, wave)
+        if not code:
+            return facts
+        result = _json_out(_device_call(port, [code], timeout=12))
+        if result.get("ok"):
+            result.update(facts)
+            result["note"] = (
+                "It is playing on the board now"
+                + (f" and repeats for {facts['minutes']:g} minutes" if loop else " once")
+                + f" (one pass is {facts['seconds_per_pass']} s). device_stop_music ends it.")
+        return result
+
+    @mcp.tool()
+    def device_stop_music(port: str = "auto") -> dict:
+        """Stop the music playing on your board's speaker."""
+        code = ("import json\nfrom nova import music\n"
+                "music.stop()\nprint(json.dumps(music.status()))\n")
+        return _json_out(_device_call(port, [code], timeout=8))
 
     @mcp.tool()
     def device_read_app(name: str, file: str = "main.py", port: str = "auto") -> dict:
