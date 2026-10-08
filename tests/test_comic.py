@@ -196,7 +196,7 @@ def test_a_panel_holds_only_the_figures_that_are_in_it():
 
     prompt, leave_out = panel_prompt("ink", alone, named, "")
     assert "Ferryman: about fifty" in prompt and "Stranger" not in prompt
-    assert "Exactly one person" in prompt and "second person" in leave_out
+    assert "Exactly one figure" in prompt and "second person" in leave_out
     prompt, leave_out = panel_prompt("ink", empty, named, "")
     assert "No people" in prompt and "gaunt" not in prompt and "person" in leave_out
     prompt, leave_out = panel_prompt("ink", unknown, named, "")
@@ -368,3 +368,35 @@ async def test_the_camera_is_given_english(cfg, clock):
     assert seen[0].prompt.startswith("EN(schwarzweiß Tusche)")
     assert "EN(er wartet)" in seen[0].prompt and "Fährmann: EN(hager)" in seen[0].prompt
     assert "EN(das leere Boot)" in seen[1].prompt
+
+
+async def test_a_started_page_ends_the_reply(cfg, guard, timers, controller, clock):
+    """SPEC §7.6b: the page does not exist yet, so there is no second pass to
+    describe it in — her lead-in is the whole reply."""
+    from yurios.world.tools.fakes import FakeToolRunner
+
+    from .conftest import ScriptedChat, collect, make_toolbrain
+
+    class SpyLab:
+        def __init__(self):
+            self.started = []
+
+        def start(self, contract):
+            self.started.append(contract)
+
+    guard._rates["draw_comic"] = 2
+    guard._buckets["draw_comic"] = {"tokens": 2.0, "at": clock.now()}
+    lab = SpyLab()
+    chat = ScriptedChat([
+        ["Ich zeichne sie dir. ",
+         '[[draw_comic {"panels": [{"picture": "a", "who": []}, {"picture": "b", "who": []}]}]]'],
+        ["Da steht sie — oben der Fährmann, unten das leere Boot."],
+    ])
+    brain = make_toolbrain(cfg, guard, timers, controller, chat,
+                           runner=FakeToolRunner(), selfies=lab)
+    spoken = "".join(await collect(
+        brain._stream_with_tools([{"role": "user", "content": "mal mir was"}], [])))
+    assert spoken.strip() == "Ich zeichne sie dir."
+    assert len(chat.calls) == 1, "she was asked to go on about a page she has not seen"
+    (contract,) = lab.started
+    assert contract["kind"] == "comic"

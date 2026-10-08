@@ -1120,7 +1120,10 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   keeps the panel. What is still refused after that **MUST** be named to her when the page lands,
   not passed off as finished. And because the page lands minutes after the call, the call's
   result **MUST** say that nothing is drawn yet and that she is not to describe it: answered
-  with a plain "started", she walked him through four finished panels that did not exist. A `who` naming someone outside `cast`, a panel without a `picture`, a caption over the limit, or a panel
+  with a plain "started", she walked him through four finished panels that did not exist — and
+  went on doing so whatever the result said. So a reply in which she has already spoken **MUST**
+  end at a started `draw_comic`: no continuation pass is run, and what she makes of the page she
+  says when it lands. A `who` naming someone outside `cast`, a panel without a `picture`, a caption over the limit, or a panel
   count outside 2–6 **MUST** be refused with what to change. Asked for a comic with only
   `show_picture`, she rendered panel 1 and panel 2 nine times in twelve minutes and one frame
   arrived.

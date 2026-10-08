@@ -45,13 +45,15 @@ PANEL_REDRAWS, PAGE_REDRAWS = 2, 4
 
 #: What the camera is told about how many people are in a panel — the one thing
 #: a text-to-image model gets wrong most, and the thing a reader forgives least.
-_COUNT = {0: "No people anywhere in this picture, the scene is empty of figures",
-          1: "Exactly one person in this picture, nobody else",
-          2: "Exactly two people in this picture",
-          3: "Exactly three people in this picture"}
-_NOT = {0: "people, person, human, figure, silhouette, character",
-        1: "two people, second person, extra person, crowd, duplicate",
-        2: "three people, third person, crowd",
+#: "Figures", not "people": the second of her cast was a dog, and "exactly two
+#: people" is how a dog gets drawn as a man.
+_COUNT = {0: "No people and no animals anywhere in this picture, the scene is empty",
+          1: "Exactly one figure in this picture, nobody else",
+          2: "Exactly two figures in this picture, nobody else",
+          3: "Exactly three figures in this picture, nobody else"}
+_NOT = {0: "people, person, human, figure, silhouette, character, animal",
+        1: "second figure, second person, extra person, crowd, duplicate",
+        2: "third figure, third person, crowd, duplicate",
         3: "crowd"}
 
 PAGE_W = 1600
@@ -232,7 +234,7 @@ def check_question(style: str, panel: dict, named: dict[str, str]) -> str:
     elif not figures:
         people = " Nobody should be visible in it."
     else:
-        people = (f" Visible in it should be exactly {len(figures)}: "
+        people = (f" The figures visible in it should be exactly {len(figures)}: "
                   + ", ".join(f"{n} ({named[n]})" if named[n] else n for n in figures) + ".")
     return (
         "This image was drawn as one panel of a comic. It should show: "
