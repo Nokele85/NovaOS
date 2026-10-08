@@ -107,12 +107,13 @@ async def test_draw_comic_takes_the_page_as_she_wrote_it():
         assert unsaid.isError and 'panel 2 needs "who"' in result_text(unsaid)
         assert "Ferryman, me" in result_text(unsaid)
         tall = await s.call_tool("draw_comic", {"layout": "1-1-1", "panels": PANELS})
-        assert tall.isError and "two at most" in result_text(tall)
+        assert not tall.isError and json.loads(result_text(tall))["layout"] is None
         blind = await s.call_tool("draw_comic", {
             "panels": [{"text": "words only"}, PANELS[0]]})
         assert blind.isError and "panel 1" in result_text(blind)
+        # a cut that does not add up is cut by the host, never a refused page
         cut = await s.call_tool("draw_comic", {"panels": PANELS, "layout": "2-2"})
-        assert cut.isError and "holds 4 panels" in result_text(cut)
+        assert not cut.isError and json.loads(result_text(cut))["layout"] is None
         wordy = await s.call_tool("draw_comic", {
             "panels": [PANELS[0], {"picture": "x", "text": "w" * (MAX_TEXT + 1)}]})
         assert wordy.isError and str(MAX_TEXT) in result_text(wordy)

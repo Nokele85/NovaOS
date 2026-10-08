@@ -668,8 +668,15 @@ def build_server(*, max_minutes: float | None = None,
                 page.append(row)
             if SELF not in named and any(SELF in (row.get("who") or []) for row in page):
                 named = {SELF: "", **named}
-            if layout.strip():
-                parse_layout(layout, len(page))        # refused here, in words
+            # A cut that does not add up is not worth a page: twice in one turn
+            # a wrong `layout` refused the whole call, she gave up on the third
+            # try and told him it was being drawn. The host cuts it instead.
+            cut = layout.strip()
+            if cut:
+                try:
+                    parse_layout(cut, len(page))
+                except ValueError:
+                    cut = ""
             return {"id": uuid.uuid4().hex[:8],
                     "kind": "comic",
                     # status and note first: the result she reads is cut to a
@@ -685,7 +692,7 @@ def build_server(*, max_minutes: float | None = None,
                             "being drawn and will come. Do NOT describe any panel, "
                             "do NOT say what the page looks like, do NOT ask how it "
                             "came out, do NOT call this again.",
-                    "layout": layout.strip() or None,
+                    "layout": cut or None,
                     "title": title.strip() or None,
                     "cast": named or plain or None,
                     "style": style.strip() or None,

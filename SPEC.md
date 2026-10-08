@@ -1132,7 +1132,8 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   **MUST** carry `completes_goal` (and `goal_id`) the way the cameras do, closing the goal when
   that page lands; a goal step's desk entry **MUST** name the page by its `title`; and a doubt the
   check leaves on a landed page **MUST** be told to her as a note on a page that is finished and
-  kept — worded as a shortfall, she redrew the page. A `who` naming someone outside `cast`, a panel without a `picture`, a caption over the limit, or a panel
+  kept — worded as a shortfall, she redrew the page. A `layout` that does not add up to the page **MUST NOT** refuse it: the
+  host cuts the page itself, as it does when none is given. A `who` naming someone outside `cast`, a panel without a `picture`, a caption over the limit, or a panel
   count outside 2–6 **MUST** be refused with what to change. Asked for a comic with only
   `show_picture`, she rendered panel 1 and panel 2 nine times in twelve minutes and one frame
   arrived.
