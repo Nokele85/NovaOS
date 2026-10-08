@@ -601,15 +601,12 @@ def build_server(*, max_minutes: float | None = None,
             from `cast` that are IN this panel, [] for nobody (an empty boat);
             "text": the line under it, optional}. Only the figures in `who`
             are drawn. To be in it yourself put "me" in `who`: the camera
-            knows your face and body — in `cast`, "me" is only what you wear. Write `picture`, the
-            looks in `cast` and `style` in English — the camera reads English
-            best; `text` stays in your language and must not say what the
-            picture contradicts. The picture never contains writing. `style`
+            knows your face and body — in `cast`, "me" is only what you wear. `text` must not say what the picture contradicts. The picture never contains writing. `style`
             is the look of the whole page (e.g. "black and white ink drawing,
             hard contrast, no colour"); left out, a coloured graphic-novel
             look. `layout` cuts the page in rows of 1 (wide), 2 (squares) or
-            3 (tall strips), like "1-2-2"; left out, a different cut each
-            time. `title` is printed on top; `avoid` is anything unwanted.
+            3 (tall strips), like "1-2-2", two wide ones at most; left out, a
+            different cut each time. `title` is printed on top; `avoid` is anything unwanted.
             Each panel is checked against your words and redrawn if wrong. One call is the whole page: it
             takes several minutes and arrives in the chat by itself — never
             call it twice for one page, and do not describe the page as
@@ -636,6 +633,14 @@ def build_server(*, max_minutes: float | None = None,
                 who = panel.get("who")
                 if isinstance(who, str):
                     who = [w for w in (x.strip() for x in who.split(",")) if w]
+                if not isinstance(who, list):
+                    # Left out, the camera has to guess who is in the panel, and
+                    # it guessed both men into all four of her first page.
+                    raise ValueError(
+                        f'panel {n} needs "who": the names of the figures IN that '
+                        f"panel, from {', '.join(dict.fromkeys(list(named) + [SELF]))} — "
+                        '[] when nobody is in it, "me" for yourself. Every panel '
+                        "needs it. Send the whole page again with who in each panel.")
                 if isinstance(who, list):
                     strangers = [str(w) for w in who
                                  if str(w).strip().casefold() not in known]

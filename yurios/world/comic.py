@@ -101,6 +101,10 @@ def parse_layout(layout: str, n: int) -> list[int]:
     if sum(parts) != n:
         raise ValueError(f'layout "{layout}" holds {sum(parts)} panels, but the '
                          f"page has {n} — make them match, or leave layout out")
+    if parts.count(1) > 2:
+        raise ValueError(f'layout "{layout}" has {parts.count(1)} wide panels; a '
+                         "page holds two at most — put the others in rows of 2 "
+                         'or 3, like "1-2-1", or leave layout out')
     return parts
 
 
@@ -155,6 +159,10 @@ def with_her(named: dict[str, str], panels: list[dict], name: str,
     return out, fixed
 
 
+_LABEL = re.compile(r"(?:^|(?<=[.;])\s+)([^\s.:;,][^.:;,]{0,38}):\s+")
+_ARTICLE = re.compile(r"^(?:der|die|das|den|ein|eine|the|a|an)\s+", re.I)
+
+
 def cast_of(cast) -> tuple[dict[str, str], str]:
     """Her cast as (named figures, plain description).
 
@@ -166,7 +174,17 @@ def cast_of(cast) -> tuple[dict[str, str], str]:
         named = {str(k).strip(): " ".join(str(v or "").split())
                  for k, v in cast.items() if str(k).strip()}
         return named, ""
-    return {}, " ".join(str(cast or "").split())
+    plain = " ".join(str(cast or "").split())
+    # "Der Fährmann: hager, … . me: schlank, …" — the object, written as a
+    # sentence. Read as what it means rather than poured into every panel.
+    labels = list(_LABEL.finditer(plain))
+    if labels and labels[0].start() == 0:
+        named = {}
+        for m, nxt in zip(labels, labels[1:] + [None]):
+            look = plain[m.end():nxt.start() if nxt else len(plain)].strip(" .;")
+            named[_ARTICLE.sub("", m.group(1)).strip()] = look
+        return named, ""
+    return {}, plain
 
 
 def figures_in(panel: dict, named: dict[str, str]) -> list[str] | None:
@@ -231,6 +249,30 @@ def passes(verdict: str) -> bool:
     """Did the check let the panel through? Anything that is not a plain
     refusal does: a reader that could not answer must not cost a redraw."""
     return not str(verdict or "").strip().upper().lstrip("`*\"' ").startswith("WRONG")
+
+
+def english_request(lines: list[str]) -> str:
+    """What the model is asked so the camera gets English (§7.6b)."""
+    import json
+    return ("Translate each string of this JSON array into plain, concrete English "
+            "for an image generator. Keep names as they are, keep every detail, add "
+            "nothing. Strings already in English stay as they are. Answer with the "
+            "JSON array only, same length, same order.\n\n"
+            + json.dumps(lines, ensure_ascii=False))
+
+
+def english_answer(answer: str, lines: list[str]) -> list[str]:
+    """The translated lines, or the originals when the answer is not usable."""
+    import json
+    try:
+        found = json.loads(answer[answer.index("["):answer.rindex("]") + 1])
+    except (ValueError, TypeError):
+        return lines
+    if (not isinstance(found, list) or len(found) != len(lines)
+            or not all(isinstance(x, str) and (x.strip() or not src.strip())
+                       for x, src in zip(found, lines))):
+        return lines
+    return [x.strip() for x in found]
 
 
 def as_data_url(data: bytes, side: int = 768) -> str:

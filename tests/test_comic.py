@@ -33,9 +33,10 @@ from yurios.world.comic import (
 from yurios.world.selfies import SelfieLab, build_forge
 from yurios.world.tools.server import build_server
 
-PANELS = [{"picture": "wide shot, a ferryman at black water", "text": "Jede Nacht wartet er."},
-          {"picture": "close on his hand on the oar", "text": ""},
-          {"picture": "a stranger on the jetty", "text": "„Ich will nur reden.“"}]
+PANELS = [{"picture": "wide shot, a ferryman at black water", "who": [],
+           "text": "Jede Nacht wartet er."},
+          {"picture": "close on his hand on the oar", "who": [], "text": ""},
+          {"picture": "a stranger on the jetty", "who": [], "text": "„Ich will nur reden.“"}]
 
 
 def _png(size, colour=(40, 60, 80)) -> bytes:
@@ -101,6 +102,12 @@ async def test_draw_comic_takes_the_page_as_she_wrote_it():
 
         one = await s.call_tool("draw_comic", {"panels": PANELS[:1]})
         assert one.isError and "2 to 6" in result_text(one)
+        unsaid = await s.call_tool("draw_comic", {"cast": {"Ferryman": "old"}, "panels": [
+            {"picture": "he waits", "who": ["Ferryman"]}, {"picture": "he turns"}]})
+        assert unsaid.isError and 'panel 2 needs "who"' in result_text(unsaid)
+        assert "Ferryman, me" in result_text(unsaid)
+        tall = await s.call_tool("draw_comic", {"layout": "1-1-1", "panels": PANELS})
+        assert tall.isError and "two at most" in result_text(tall)
         blind = await s.call_tool("draw_comic", {
             "panels": [{"text": "words only"}, PANELS[0]]})
         assert blind.isError and "panel 1" in result_text(blind)
@@ -150,7 +157,7 @@ async def test_the_lab_draws_every_panel_and_sends_one_page(cfg, clock):
     assert {r.seed for r in seen} == {seen[0].seed} and seen[0].seed is not None
     assert [(r.width, r.height) for r in seen] == [WIDE, HALF, HALF]
     for req, panel in zip(seen, PANELS):
-        assert panel["picture"] in req.prompt and "an old ferryman" in req.prompt
+        assert panel["picture"] in req.prompt
         assert "graphic novel illustration" in req.prompt
         assert forge.character.identity not in req.prompt       # she is not in it
         assert "speech bubbles" in req.negative_prompt and "colour" in req.negative_prompt
@@ -217,7 +224,7 @@ async def test_who_must_be_in_the_cast():
         assert [p.get("who") for p in data["panels"]] == [["Ferryman"], []]
         assert "not finished" in data["note"]
         bad = await s.call_tool("draw_comic", {"cast": CAST, "panels": [
-            {"picture": "x", "who": ["Benni"]}, {"picture": "y"}]})
+            {"picture": "x", "who": ["Benni"]}, {"picture": "y", "who": []}]})
         assert bad.isError and "Ferryman, Stranger" in result_text(bad)
 
 
@@ -311,3 +318,47 @@ async def test_she_can_put_herself_in_a_panel(cfg, clock):
     assert forge.character.identity in seen[0].prompt       # she is in the first…
     assert forge.character.identity not in seen[1].prompt   # …and not in the empty street
     assert "No people" in seen[1].prompt
+
+
+def test_a_cast_written_as_a_sentence_is_read_as_its_figures():
+    """SPEC §7.6b: `Name: look. Name: look.` is the object, written out."""
+    named, plain = cast_of("Der Fährmann: um die fünfzig, hager, langer Mantel. "
+                           "me: schlank, langes dunkles Haar.")
+    assert plain == ""
+    assert named == {"Fährmann": "um die fünfzig, hager, langer Mantel",
+                     "me": "schlank, langes dunkles Haar"}
+    assert cast_of("an old man in a long coat") == ({}, "an old man in a long coat")
+
+
+async def test_the_camera_is_given_english(cfg, clock):
+    """SPEC §7.6b: style, looks and pictures go to the renderer in English;
+    an answer of the wrong shape leaves her words as they are."""
+    from yurios.world.comic import english_answer
+    assert english_answer("no json here", ["a", "b"]) == ["a", "b"]
+    assert english_answer('["x"]', ["a", "b"]) == ["a", "b"]
+    assert english_answer('sure: ["x", "y"]', ["a", "b"]) == ["x", "y"]
+
+    forge, _ = build_forge(cfg)
+    seen = []
+    generate = forge.backend.generate
+
+    def spy(req):
+        seen.append(req)
+        return generate(req)
+
+    forge.backend.generate = spy
+
+    async def english(request):
+        lines = json.loads(request[request.index("["):])
+        return json.dumps([f"EN({x})" if x else "" for x in lines])
+
+    rec = Recorder()
+    lab = SelfieLab(forge, clock=clock, post=rec.post, speak=rec.speak, english=english)
+    lab.start({"id": "c3", "kind": "comic", "cast": {"Fährmann": "hager"},
+               "style": "schwarzweiß Tusche", "layout": "2", "status": "started",
+               "panels": [{"picture": "er wartet", "who": ["Fährmann"], "text": "Er wartet."},
+                          {"picture": "das leere Boot", "who": [], "text": "Leer."}]})
+    await asyncio.gather(*lab._tasks, return_exceptions=True)
+    assert seen[0].prompt.startswith("EN(schwarzweiß Tusche)")
+    assert "EN(er wartet)" in seen[0].prompt and "Fährmann: EN(hager)" in seen[0].prompt
+    assert "EN(das leere Boot)" in seen[1].prompt

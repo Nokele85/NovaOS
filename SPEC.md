@@ -1105,7 +1105,11 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   **MAY** name the figures (`{name: look}`), and a panel then **MUST** be told only the figures in
   its `who` (or, with no `who`, those its `picture` names) together with their number in words —
   `who: []` is a panel with nobody in it, and an unknown head-count **MUST NOT** be read as
-  nobody. The name `me` is hers: listed in a panel's `who` it **MUST** be drawn from the same
+  nobody. The hand **MUST** refuse a page with a panel that has no `who`, naming the figures she
+  may list: given the choice she left it out, and the camera guessed. A one-line cast written as
+  `Name: look. Name: look.` **MUST** be read as the named figures it means. What goes to the
+  renderer — her `style`, the looks and each `picture` — **SHOULD** be put into English by the
+  host first, in one utility call, falling back to her own words on any failure. The name `me` is hers: listed in a panel's `who` it **MUST** be drawn from the same
   locked identity her selfies are (§7.6), followed by whatever she put under `me` in `cast` for
   this page, and it needs no description — so she can be in her own comic and be recognisably her
   in every panel. A panel **MUST** be rendered from her `style` and her words alone, without the

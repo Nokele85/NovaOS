@@ -115,7 +115,12 @@ def build_camera(rt) -> tuple[SelfieLab | None, str]:
                 {"type": "image_url", "image_url": {"url": as_data_url(data)}}]}],
             max_tokens=120)
 
-    lab = SelfieLab(forge, clock=rt.clock, judge=judge,
+    async def english(request: str) -> str:
+        """A comic page's pictures, put into English for the camera (§7.6b)."""
+        return await rt.brain.state.utility.complete(
+            [{"role": "user", "content": request}], max_tokens=1500)
+
+    lab = SelfieLab(forge, clock=rt.clock, judge=judge, english=english,
                     post=rt.post_message,
                     speak=rt.speak_ambient,
                     notify=rt.hub.publish,

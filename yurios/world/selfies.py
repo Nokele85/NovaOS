@@ -304,7 +304,8 @@ class SelfieLab:
                  situation: Optional[Callable[[], str]] = None,
                  signal: Optional[Callable[..., object]] = None,
                  unload_after_s: float = -1.0,
-                 judge: Optional[Callable[[bytes, str], Awaitable[str]]] = None):
+                 judge: Optional[Callable[[bytes, str], Awaitable[str]]] = None,
+                 english: Optional[Callable[[str], Awaitable[str]]] = None):
         self.forge = forge
         self.clock = clock
         self.post = post                       # Runtime.post_message
@@ -320,6 +321,9 @@ class SelfieLab:
         # (png, question) -> verdict: a model that can see, asked whether a drawn
         # comic panel contradicts what she wrote for it (§7.6b). None = no check.
         self.judge = judge
+        # (request) -> answer: the utility model, asked to put a page's pictures
+        # into English for the camera (§7.6b). None = her words as written.
+        self.english = english
         self._loop: asyncio.AbstractEventLoop | None = None
         # Idle unload of a warm local pipeline (SPEC §7.6a). Default -1 here
         # so tests that construct a lab directly keep today's behaviour
@@ -394,6 +398,7 @@ class SelfieLab:
         panels = list(kw.get("panels") or [])
         style = (kw.get("style") or "").strip() or COMIC_STYLE
         named, plain = cast_of(kw.get("cast"))
+        style, named, plain, panels = self._in_english(style, named, plain, panels)
         # `me` in the cast is her: the identity her selfies are rendered from
         character = self.forge.character
         named, panels = with_her(named, panels, getattr(character, "name", ""),
@@ -446,6 +451,31 @@ class SelfieLab:
                                "seed": seed, "layout": "-".join(map(str, page)),
                                "drawn": drawn, "doubts": doubts, "panels": panels}
         return first
+
+    def _in_english(self, style: str, named: dict, plain: str, panels: list):
+        """Her style, her figures' looks and her panels, in English for the camera.
+
+        She thinks in the language she is speaking, and the renderer reads
+        English best; asking her to translate is one more thing to forget. One
+        call for the whole page. No translator, a failure or an answer of the
+        wrong shape all leave her own words as they are."""
+        from .comic import english_answer, english_request
+        loop = getattr(self, "_loop", None)
+        if self.english is None or loop is None:
+            return style, named, plain, panels
+        names = list(named)
+        lines = ([style, plain] + [named[n] for n in names]
+                 + [str(p.get("picture") or "") for p in panels])
+        try:
+            answer = asyncio.run_coroutine_threadsafe(
+                self.english(english_request(lines)), loop).result(timeout=90)
+        except Exception:
+            log.exception("comic: couldn't translate the page — using her words")
+            return style, named, plain, panels
+        out = english_answer(str(answer or ""), lines)
+        k = 2 + len(names)
+        return (out[0] or style, {n: out[2 + i] for i, n in enumerate(names)}, out[1],
+                [{**p, "picture": out[k + i]} for i, p in enumerate(panels)])
 
     def _judge(self, data: bytes, question: str) -> str:
         """Show one drawn panel to the reader with eyes and return its verdict.
