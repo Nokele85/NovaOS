@@ -386,7 +386,8 @@ ENRICHED = {"MIND_TOOL_ALLOWLIST": _hands_field,
             "SEARCH_BACKEND": _choice("off", "searxng", "fake"),
             "SEARCH_SAFESEARCH": _choice("0", "1", "2"),
             "CHAT_IMAGE_INPUT": _choice("auto", "on", "off"),
-            "SELFIE_BACKEND": _choice("off", "openrouter", "diffusers", "krea2", "mock"),
+            "SELFIE_BACKEND": _choice("off", "openrouter", "diffusers", "krea2",
+                                      "comfyui", "mock"),
             "MIND_SOUL_IN_PROMPTS": _choice("full", "brief", "off"),
             "NOTIFY_BACKEND": _choice("auto", "shell", "libnotify", "off"),
             "DESKTOP_BODY": _choice("vrm", "live2d"),
@@ -424,6 +425,15 @@ HELP: dict[str, str] = {
                           "family) or a Krea 2 export",
     "MIND_TOOL_COOLDOWN_S": "per-hand overrides of the repeat cooldown, "
                             "e.g. web_search=3600,research=604800",
+    # this fork's remote camera and story voice — shipped empty, so the
+    # sentence lives here (a trailing comment would be read as the value)
+    "SELFIE_COMFY_LORA": "a LoRA file to add to every render, as ComfyUI lists it — "
+                         "blank for none",
+    "SELFIE_COMFY_TRIGGER": "the LoRA's trigger word, put in front of the prompt",
+    "STORY_TTS_URL": "the story voice server (Qwen3-TTS), e.g. http://192.168.0.104:8091",
+    "STORY_TTS_SUPERVISOR_URL": "the supervisor that loads and unloads the story voice, "
+                                "e.g. http://192.168.0.104:8092",
+    "STORY_TTS_TOKEN": "the token the story voice supervisor asks for",
 }
 
 
@@ -794,6 +804,7 @@ PAGES: list[dict] = [
              ("TOOL_RATE_RESEARCH", "Research"),
              ("TOOL_RATE_SELFIE", "Selfie"),
              ("TOOL_RATE_PICTURE", "Show a picture"),
+             ("TOOL_RATE_STORY", "Tell a story"),
              ("TOOL_RATE_TIMER", "Timer"),
              ("TOOL_RATE_MUSIC", "Music"),
              ("TOOL_RATE_GOAL", "Goal creation"),
@@ -845,6 +856,18 @@ PAGES: list[dict] = [
              ("SELFIE_KREA2_STEPS", "Krea 2 steps"),
              ("SELFIE_KREA2_CFG", "Krea 2 guidance"),
          ]},
+         {"title": "ComfyUI on another machine", "advanced": True, "fields": [
+             ("SELFIE_COMFY_HOST", "ComfyUI host"),
+             ("SELFIE_COMFY_PORT", "ComfyUI port"),
+             ("SELFIE_COMFY_TIMEOUT", "Render timeout (s)"),
+             ("SELFIE_COMFY_RELEASE_AFTER_RENDER", "Free its models after a render"),
+             ("SELFIE_COMFY_UNET", "Diffusion model file"),
+             ("SELFIE_COMFY_CLIP", "Text encoder file"),
+             ("SELFIE_COMFY_VAE", "VAE file"),
+             ("SELFIE_COMFY_LORA", "LoRA file"),
+             ("SELFIE_COMFY_LORA_STRENGTH", "LoRA strength"),
+             ("SELFIE_COMFY_TRIGGER", "LoRA trigger word"),
+         ]},
          {"title": "Sharing the GPU with her brain", "fields": [
              ("SELFIE_LLM_PARK", "Park her model during a render"),
              ("SELFIE_WARM_HEADROOM_GIB", "VRAM to leave free (GiB)"),
@@ -890,6 +913,21 @@ PAGES: list[dict] = [
              ("SOVITS_PROMPT_TEXT", "Reference transcript"),
              ("SOVITS_PROMPT_LANG", "Reference language"),
              ("SOVITS_TEXT_LANG", "Reply language"),
+         ]},
+         {"title": "Stories told aloud", "fields": [
+             ("STORY_ENABLED", "Long voiced stories"),
+             ("STORY_SCENES", "Scenes per story"),
+             ("STORY_MIN_WORDS", "Fewest words"),
+             ("STORY_MAX_WORDS", "Most words"),
+             ("STORY_TTS_URL", "Story voice server"),
+             ("STORY_TTS_SUPERVISOR_URL", "Story voice supervisor"),
+             ("STORY_TTS_TOKEN", "Supervisor token"),
+             ("STORY_TTS_LANGUAGE", "Language"),
+             ("STORY_TTS_SPEAKER", "Narrator's voice"),
+             ("STORY_DIRECTOR", "Cast the spoken lines"),
+             ("STORY_VOICE_USER", "Your voice"),
+             ("STORY_VOICE_MAN", "Other men's voice"),
+             ("STORY_VOICE_WOMAN", "Other women's voice"),
          ]},
          {"title": "Turn-taking", "fields": [
              ("VAD_BACKEND", "Voice activity detector"),
