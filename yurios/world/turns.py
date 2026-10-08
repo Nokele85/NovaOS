@@ -149,6 +149,13 @@ _STORY_RECALL = re.compile(
     r"\b(?:erinner\w*|weißt\s+du\s+noch|weisst\s+du\s+noch|wie\s+ging|"
     r"nochmal|noch\s+mal|remember|"
     r"(?:letzte[nr]?|gestrige[nr]?|vorige[nr]?)\s+(?:\w*geschichte|story))\b")
+# A story to be *drawn* is not a story to be voiced. Found live, 2026-10-08:
+# "mach mir eine Comic Story" started the audio job and answered with its
+# canned promise, before she had read a word of it (SPEC §7.8).
+_STORY_DRAWN = re.compile(
+    r"\b(?:comic\w*|manga\w*|bilder?geschichte\w*|panels?|"
+    r"\w*zeichn\w*|mal(?:e|st|en)?\s+(?:mir|uns)|illustrier\w*|draw\w*|"
+    r"picture\s+story)")
 
 
 def _text_of(chunks: list[str]) -> str:
@@ -262,7 +269,7 @@ class TextTurns:
         also says "short" or "erotic".
         """
         line = text.casefold()
-        if _STORY_RECALL.search(line):
+        if _STORY_RECALL.search(line) or _STORY_DRAWN.search(line):
             return False
         return bool(_NEW_STORY.search(line) and _STORY_REQUEST.search(line))
 

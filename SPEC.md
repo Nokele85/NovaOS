@@ -1177,7 +1177,9 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   theme, register, form, characters, what to avoid, and per scene the outline, its length, what is
   said in it and how it sounds — **MUST** be written by her from the conversation, since she is the
   only part of the chain that was in it. A brief that cannot be written **MUST** still leave a story
-  startable. When she brings an outline, no planner **MAY** re-plan it.
+  startable. When she brings an outline, no planner **MAY** re-plan it. A request for a story to
+  be *drawn* — a comic, a picture story, panels — is not such a request and **MUST** reach the model
+  like any other turn: asked for "eine Comic Story", the handoff once started the audio job instead.
 
   **The form is fixed before the first word.** Who narrates, how the second figure is addressed and
   the tense **MUST** be set before scene 1 — hers when the brief names one, the house form otherwise

@@ -35,6 +35,12 @@ def test_a_request_for_a_new_story_is_a_story_intent(text):
     "Was ist die Story hinter deinem Namen?",
     "Die Geschichte mit dem Router nervt mich",
     "Mach mal Musik an",
+    # SPEC §7.8, found live (2026-10-08): a story to be drawn is hers to answer
+    "Das sieht gut aus und nun mach mir eine Comic Story ich glaub an dich",
+    "Kannst du mir eine Geschichte zeichnen?",
+    "Erzähl mir eine Bildergeschichte in vier Panels",
+    "Mal mir bitte eine kleine Geschichte",
+    "draw me a story about the sea",
 ])
 def test_recall_and_everyday_mentions_are_not(text):
     assert not TextTurns._story_intent(text)
