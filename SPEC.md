@@ -3008,7 +3008,10 @@ needs a sandbox. That means execution *on the host*. An installation **MAY** lis
 MCP server that run code somewhere else — this fork's `device_exec` and `device_set_autostart` run
 MicroPython on a microcontroller of her own, on the owner's explicit yes — because the threat model
 there is the device's, not the machine's; such hands are still named in `HANDS`, still on the
-allowlist by name, and still audited like any other.
+allowlist by name, and still audited like any other. The same goes for the music she writes for
+that board (`device_play_music`, `device_stop_music`): a melody in a notation the board's own
+reader checks on the host first, played in the background, quiet unless she is asked otherwise,
+capped in volume, and — when it loops — ended by itself after a bounded number of minutes.
 
 - §26.1 **One rule for every call she makes, and off means invisible** (normative). A hand is
   usable — in a reply, a greeting, a murmur, a reach-out, a goal step or a night's job alike —
