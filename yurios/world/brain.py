@@ -643,7 +643,9 @@ class ToolBrain(BrainAdapter):
                     call, turn, outcomes=outcomes, goal_about=goal_about)
             raw.append(f'\n[[{call.tool} → {result}]]\n')
             if (call.tool == "draw_comic" and prev_spoken.strip()
-                    and '"status": "started"' in str(result)):
+                    and not str(result).startswith(("denied", "error", "Error"))):
+                # (not `"started" in result`: the result she is shown is cut to
+                # a limit, and a page's contract is longer than that)
                 # A page takes minutes and she has not seen it (§7.6b). Handed
                 # the "started" back, she continued the reply by walking him
                 # through four finished panels — three times, whatever the

@@ -667,12 +667,8 @@ def build_server(*, max_minutes: float | None = None,
                 parse_layout(layout, len(page))        # refused here, in words
             return {"id": uuid.uuid4().hex[:8],
                     "kind": "comic",
-                    "layout": layout.strip() or None,
-                    "title": title.strip() or None,
-                    "cast": named or plain or None,
-                    "style": style.strip() or None,
-                    "avoid": avoid.strip() or None,
-                    "panels": page,
+                    # status and note first: the result she reads is cut to a
+                    # limit, and behind four panels neither was ever seen
                     "status": "started",
                     # Said as an order and not as news: twice she answered a
                     # "started" by walking him through four finished panels,
@@ -683,7 +679,13 @@ def build_server(*, max_minutes: float | None = None,
                             "Answer now with ONE short sentence saying the page is "
                             "being drawn and will come. Do NOT describe any panel, "
                             "do NOT say what the page looks like, do NOT ask how it "
-                            "came out, do NOT call this again."}
+                            "came out, do NOT call this again.",
+                    "layout": layout.strip() or None,
+                    "title": title.strip() or None,
+                    "cast": named or plain or None,
+                    "style": style.strip() or None,
+                    "avoid": avoid.strip() or None,
+                    "panels": page}
 
     # --- her desk (SPEC §34.2) ------------------------------------------------
     # The only hands that write inside the Vault. Everything they can reach is
