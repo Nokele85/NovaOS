@@ -1105,7 +1105,10 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   **MAY** name the figures (`{name: look}`), and a panel then **MUST** be told only the figures in
   its `who` (or, with no `who`, those its `picture` names) together with their number in words —
   `who: []` is a panel with nobody in it, and an unknown head-count **MUST NOT** be read as
-  nobody. A panel **MUST** be rendered from her `style` and her words alone, without the
+  nobody. The name `me` is hers: listed in a panel's `who` it **MUST** be drawn from the same
+  locked identity her selfies are (§7.6), followed by whatever she put under `me` in `cast` for
+  this page, and it needs no description — so she can be in her own comic and be recognisably her
+  in every panel. A panel **MUST** be rendered from her `style` and her words alone, without the
   character's quality preamble (`ImageForge.panel`): that preamble names a look, and it was said
   first. When her model can see (§35.1), each drawn panel **MUST** be shown to it with what she
   wrote, and a panel it finds in clear contradiction **MUST** be drawn again with a new seed, at

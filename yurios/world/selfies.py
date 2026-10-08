@@ -389,10 +389,15 @@ class SelfieLab:
             panel_sizes,
             passes,
             rows,
+            with_her,
         )
         panels = list(kw.get("panels") or [])
         style = (kw.get("style") or "").strip() or COMIC_STYLE
         named, plain = cast_of(kw.get("cast"))
+        # `me` in the cast is her: the identity her selfies are rendered from
+        character = self.forge.character
+        named, panels = with_her(named, panels, getattr(character, "name", ""),
+                                 getattr(character, "identity", ""))
         avoid = ", ".join(x for x in ((kw.get("avoid") or "").strip(), COMIC_AVOID) if x)
         seed = random.getrandbits(31)
         page = rows(len(panels), kw.get("layout") or "", seed)

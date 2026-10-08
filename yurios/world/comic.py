@@ -122,6 +122,39 @@ def panel_sizes(page: list[int]) -> list[tuple[int, int]]:
     return [SHAPES[count] for count in page for _ in range(count)]
 
 
+#: The name she is in the cast under. Her look is the camera's to know — the
+#: same locked identity a selfie is rendered from — so a comic can have her in
+#: it, recognisably her, without her describing herself differently each time.
+SELF = "me"
+
+
+def with_her(named: dict[str, str], panels: list[dict], name: str,
+             identity: str) -> tuple[dict[str, str], list[dict]]:
+    """Her cast and panels with `me` resolved to who she is (§7.6b).
+
+    `me` becomes her own name, and its look becomes her identity followed by
+    whatever she added for this page (what she is wearing, say). Panels that
+    list `me` list her name instead. A page she is not in comes back as it was."""
+    name = (name or "").strip() or "the heroine"
+    mine = [k for k in named if k.casefold() in (SELF, name.casefold())]
+    asked = any(str(w).strip().casefold() in (SELF, name.casefold())
+                for p in panels for w in (p.get("who") or []) if isinstance(p.get("who"), list))
+    if not mine and not asked:
+        return named, panels
+    extra = " ".join(named[k] for k in mine if named[k])
+    out = {k: v for k, v in named.items() if k not in mine}
+    out = {name: ". ".join(x.strip().rstrip(".") for x in (identity, extra) if x and x.strip()),
+           **out}
+    fixed = []
+    for panel in panels:
+        who = panel.get("who")
+        if isinstance(who, list):
+            panel = {**panel, "who": [name if str(w).strip().casefold() in (SELF, name.casefold())
+                                      else w for w in who]}
+        fixed.append(panel)
+    return out, fixed
+
+
 def cast_of(cast) -> tuple[dict[str, str], str]:
     """Her cast as (named figures, plain description).
 
@@ -148,7 +181,8 @@ def figures_in(panel: dict, named: dict[str, str]) -> list[str] | None:
         return [n for n in named if any(n.casefold() == str(w).strip().casefold()
                                         for w in who)]
     said = str(panel.get("picture") or "").casefold()
-    found = [n for n in named if n.casefold() in said]
+    # `me` is never found by mention: the two letters are inside "home" and "time"
+    found = [n for n in named if n.casefold() != SELF and n.casefold() in said]
     return found or None
 
 

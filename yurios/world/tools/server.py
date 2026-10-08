@@ -600,7 +600,8 @@ def build_server(*, max_minutes: float | None = None,
             is SEEN — the shot, the place, the one moment; "who": the names
             from `cast` that are IN this panel, [] for nobody (an empty boat);
             "text": the line under it, optional}. Only the figures in `who`
-            are drawn, so list exactly who is there. Write `picture`, the
+            are drawn. To be in it yourself put "me" in `who`: the camera
+            knows your face and body — in `cast`, "me" is only what you wear. Write `picture`, the
             looks in `cast` and `style` in English — the camera reads English
             best; `text` stays in your language and must not say what the
             picture contradicts. The picture never contains writing. `style`
@@ -608,19 +609,19 @@ def build_server(*, max_minutes: float | None = None,
             hard contrast, no colour"); left out, a coloured graphic-novel
             look. `layout` cuts the page in rows of 1 (wide), 2 (squares) or
             3 (tall strips), like "1-2-2"; left out, a different cut each
-            time. `title` is printed on top; `avoid` is anything unwanted in
-            every panel. Each panel is checked against what you wrote and
-            drawn again when it contradicts it. One call is the whole page: it
+            time. `title` is printed on top; `avoid` is anything unwanted.
+            Each panel is checked against your words and redrawn if wrong. One call is the whole page: it
             takes several minutes and arrives in the chat by itself — never
             call it twice for one page, and do not describe the page as
             finished: it is not drawn yet."""
-            from ..comic import MAX_PANELS, MAX_TEXT, MIN_PANELS, cast_of, parse_layout
+            from ..comic import MAX_PANELS, MAX_TEXT, MIN_PANELS, SELF, cast_of, parse_layout
             if not isinstance(panels, list) or not (
                     MIN_PANELS <= len(panels) <= MAX_PANELS):
                 raise ValueError(f"a page is {MIN_PANELS} to {MAX_PANELS} panels; "
                                  f"this had {len(panels) if isinstance(panels, list) else 0}")
             named, plain = cast_of(cast)
             known = {n.casefold(): n for n in named}
+            known.setdefault(SELF, SELF)             # she is always in her own cast
             page = []
             for n, panel in enumerate(panels, 1):
                 if not isinstance(panel, dict) or not str(panel.get("picture") or "").strip():
@@ -645,6 +646,8 @@ def build_server(*, max_minutes: float | None = None,
                             f"{', '.join(named) or 'no named figures; make cast an object of name: look'}")
                     row["who"] = [known[str(w).strip().casefold()] for w in who]
                 page.append(row)
+            if SELF not in named and any(SELF in (row.get("who") or []) for row in page):
+                named = {SELF: "", **named}
             if layout.strip():
                 parse_layout(layout, len(page))        # refused here, in words
             return {"id": uuid.uuid4().hex[:8],

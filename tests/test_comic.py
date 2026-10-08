@@ -25,6 +25,7 @@ from yurios.world.comic import (
     figures_in,
     panel_prompt,
     passes,
+    with_her,
     panel_sizes,
     parse_layout,
     rows,
@@ -264,3 +265,49 @@ async def test_a_panel_that_contradicts_her_is_drawn_again(cfg, clock):
     assert meta["comic"]["doubts"] == ["panel 2: WRONG: someone stands in the boat"]
     assert "not everything came out" in meta["template"]["look"]
     assert "panel 2" in rec.cues[0]                # …and she is told, not left to boast
+
+
+def test_me_is_her_and_needs_no_description():
+    """SPEC §7.6b: `me` resolves to her locked identity plus what she wears —
+    by `who`, never by the two letters turning up inside "home"."""
+    named, _ = cast_of({"me": "in a yellow raincoat", "Stranger": "young, pale"})
+    panels = [{"picture": "at home, time passes", "who": ["me"]},
+              {"picture": "the Stranger alone", "who": ["Stranger"]},
+              {"picture": "nobody at home"}]
+    named, panels = with_her(named, panels, "Nova", "a silver-haired woman, grey eyes")
+    assert named["Nova"] == "a silver-haired woman, grey eyes. in a yellow raincoat"
+    assert "me" not in named and panels[0]["who"] == ["Nova"]
+    assert "silver-haired" in panel_prompt("ink", panels[0], named, "")[0]
+    assert "silver-haired" not in panel_prompt("ink", panels[1], named, "")[0]
+    assert figures_in({"picture": "at home, some time later"}, {"me": "x"}) is None
+    # a page she is not in is left exactly as it was
+    assert with_her({"A": "x"}, [{"picture": "p"}], "Nova", "id") == ({"A": "x"}, [{"picture": "p"}])
+
+
+async def test_she_can_put_herself_in_a_panel(cfg, clock):
+    """SPEC §7.6b: `who: ["me"]` with no cast at all is enough."""
+    srv = build_server(max_minutes=180)
+    async with create_connected_server_and_client_session(srv._mcp_server) as s:
+        r = await s.call_tool("draw_comic", {"panels": [
+            {"picture": "she sits at the window", "who": ["me"]},
+            {"picture": "the empty street", "who": []}]})
+        assert not r.isError
+        contract = json.loads(result_text(r))
+    assert contract["cast"] == {"me": ""}
+
+    forge, _ = build_forge(cfg)
+    seen = []
+    generate = forge.backend.generate
+
+    def spy(req):
+        seen.append(req)
+        return generate(req)
+
+    forge.backend.generate = spy
+    rec = Recorder()
+    lab = SelfieLab(forge, clock=clock, post=rec.post, speak=rec.speak)
+    lab.start(contract)
+    await asyncio.gather(*lab._tasks, return_exceptions=True)
+    assert forge.character.identity in seen[0].prompt       # she is in the first…
+    assert forge.character.identity not in seen[1].prompt   # …and not in the empty street
+    assert "No people" in seen[1].prompt

@@ -294,7 +294,8 @@ The host renders each panel with the same seed, style and cast line (her likenes
 cuts the page itself (`yurios/world/comic.py`): frames, reading order, rows of one wide, two square
 or three tall panels (`layout`, e.g. `"1-2-2"`; left out, a different cut each time), and her `text` set in real type under each panel — the renderer is told to draw no writing at all.
 `cast` can name the figures (`{"Ferryman": "…", "Stranger": "…"}`); a panel's `who` then says which
-of them are in it, and only those are drawn — `"who": []` is an empty panel. Panels are rendered
+of them are in it, and only those are drawn — `"who": []` is an empty panel. `"me"` in `who` is
+her: drawn from the identity her selfies use, plus whatever `cast` says under `"me"` (her clothes). Panels are rendered
 from her `style` alone, without the character's quality preamble, and when her model can see
 (`CHAT_IMAGE_INPUT`), each one is checked against what she wrote and redrawn when it contradicts
 it (twice per panel, four times per page at most); what is still wrong is named to her.
