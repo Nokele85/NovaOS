@@ -599,10 +599,11 @@ def build_server(*, max_minutes: float | None = None,
             shot, who is in it, what they do; "text": the caption or line under
             it, optional, in the language you are speaking}. The picture never
             contains writing; every word of the page comes from `text`. `cast`
-            describes the recurring figures ONCE (age, build, clothes, hair) and
-            is repeated into every panel so they stay the same people. `style`
-            is the look of the whole page; leave it out for black-and-white
-            ink. `layout` is how the page is cut, rows of 1 (a wide
+            describes EVERY recurring figure ONCE (age, build, clothes, hair) and
+            is repeated into every panel so they stay the same people — a
+            figure you leave out of it looks different in each panel. `style`
+            is the look of the whole page (e.g. "black and white ink"); leave
+            it out for a coloured graphic-novel look. `layout` is how the page is cut, rows of 1 (a wide
             panel), 2 (squares) or 3 (tall strips) in reading order, like
             "1-2-2" or "3-1"; leave it out and the page is cut for you, a
             different way each time. `title` is printed on top; `avoid` is

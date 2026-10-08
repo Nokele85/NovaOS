@@ -28,13 +28,15 @@ MIN_PANELS, MAX_PANELS = 2, 6
 MAX_TEXT = 220
 
 #: Said before every panel when she names no style of her own: one hand, one
-#: page. The "no text" half matters as much as the ink — letters a diffusion
-#: model draws are noise, and the page sets the real ones underneath.
-COMIC_STYLE = ("black and white ink comic panel, bold brush lines, strong "
-               "contrast, hatched shadows, graphic novel art")
+#: page. Deliberately not "comic panel" — the first real page (2026-10-08) took
+#: that word literally and drew panels inside the panels, half of them in ink
+#: and half in colour. One scene, one look, and what the camera is good at.
+COMIC_STYLE = ("a single scene, graphic novel illustration, clean ink "
+               "outlines, cinematic light, muted colours")
 #: Kept out of every panel, added to whatever she asked to avoid.
 COMIC_AVOID = ("text, letters, words, speech bubbles, captions, signature, "
-               "watermark, panel borders, multiple panels, collage")
+               "watermark, panel borders, multiple panels, split image, inset, "
+               "collage, picture in picture")
 
 PAGE_W = 1600
 MARGIN = 44

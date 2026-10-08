@@ -145,7 +145,7 @@ async def test_the_lab_draws_every_panel_and_sends_one_page(cfg, clock):
     assert [(r.width, r.height) for r in seen] == [WIDE, HALF, HALF]
     for req, panel in zip(seen, PANELS):
         assert panel["picture"] in req.prompt and "an old ferryman" in req.prompt
-        assert "ink comic panel" in req.prompt
+        assert "graphic novel illustration" in req.prompt
         assert forge.character.identity not in req.prompt       # she is not in it
         assert "speech bubbles" in req.negative_prompt and "colour" in req.negative_prompt
     # the models were kept for the page and handed back once, at its end
