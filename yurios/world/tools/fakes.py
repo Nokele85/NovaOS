@@ -97,6 +97,14 @@ SPECS = [
              {"properties": {"subject": {"type": "string"},
                              "avoid": {"type": "string"}},
               "required": ["subject"]}),
+    ToolSpec("draw_comic", "Draw one comic page: panels with your words under them.",
+             {"properties": {"panels": {"type": "array"},
+                             "title": {"type": "string"},
+                             "cast": {"type": "string"},
+                             "layout": {"type": "string"},
+                             "style": {"type": "string"},
+                             "avoid": {"type": "string"}},
+              "required": ["panels"]}),
     ToolSpec("web_search", "Search the web and get back a handful of titles, "
              "links and snippets.",
              {"properties": {"query": {"type": "string"},
@@ -227,6 +235,16 @@ class FakeToolRunner:
                                "avoid": args.get("avoid") or None,
                                "kind": "picture", "status": "started",
                                "note": "the picture will appear in the chat shortly"})
+        if tool == "draw_comic":
+            return json.dumps({"id": f"fake{len(self.calls)}",
+                               "title": args.get("title") or None,
+                               "cast": args.get("cast") or None,
+                               "layout": args.get("layout") or None,
+                               "style": args.get("style") or None,
+                               "avoid": args.get("avoid") or None,
+                               "panels": args.get("panels") or [],
+                               "kind": "comic", "status": "started",
+                               "note": "the page will appear in the chat shortly"})
         if tool == "web_search":
             return json.dumps({"query": args.get("query", ""), "results": [
                 {"title": "an overview", "url": "https://example.invalid/overview",

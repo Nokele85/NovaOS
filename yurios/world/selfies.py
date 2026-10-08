@@ -125,7 +125,7 @@ def _noun(kind: str) -> str:
     """What to call the thing she just made. `kind` comes off the tool contract;
     a contract from before there were two cameras has none, and a selfie is the
     right thing to assume."""
-    return "picture" if kind == "picture" else "selfie"
+    return kind if kind in ("picture", "comic") else "selfie"
 
 
 def _to_vault(contract: dict) -> bool:
@@ -355,7 +355,56 @@ class SelfieLab:
         if kind == "picture":
             return self.forge.picture(kw.get("subject", ""),
                                       avoid=kw.get("avoid", ""), save=False)
+        if kind == "comic":
+            return self._comic(kw)
         return self.forge.selfie(**kw)
+
+    def _comic(self, kw: dict):
+        """One page: every panel through the same camera, then cut and lettered
+        by the host (§7.6b, world/comic.py).
+
+        One seed, one style line and one cast line across all panels — the only
+        consistency a text-to-image model offers, and enough that the page reads
+        as one hand. A camera that hands its models back after every render is
+        asked to keep them for the page and gives them back once, at the end:
+        four panels are otherwise four model loads."""
+        import random
+
+        from .comic import COMIC_AVOID, COMIC_STYLE, compose_page, panel_sizes, rows
+        panels = list(kw.get("panels") or [])
+        style = (kw.get("style") or "").strip() or COMIC_STYLE
+        cast = (kw.get("cast") or "").strip()
+        avoid = ", ".join(x for x in ((kw.get("avoid") or "").strip(), COMIC_AVOID) if x)
+        seed = random.getrandbits(31)
+        page = rows(len(panels), kw.get("layout") or "", seed)
+        sizes = panel_sizes(page)
+        backend = getattr(self.forge, "backend", None)
+        hands_back = getattr(backend, "release_after_render", None)
+        if hands_back:
+            backend.release_after_render = False
+        shots, first = [], None
+        try:
+            for i, panel in enumerate(panels):
+                width, height = sizes[i]
+                subject = ". ".join(
+                    x.rstrip(". ") for x in (style, panel.get("picture", ""), cast) if x)
+                shot = self.forge.picture(subject, avoid=avoid, seed=seed, save=False,
+                                          width=width, height=height)
+                first = first or shot
+                shots.append((shot.data, panel.get("text") or ""))
+        finally:
+            if hands_back:
+                backend.release_after_render = True
+                release = getattr(backend, "_release", None)
+                if callable(release):
+                    release()
+        title = (kw.get("title") or "").strip()
+        first.data = compose_page(shots, title=title, page=page)
+        first.meta["template"] = {"look": title or "a comic page"}
+        first.meta["comic"] = {"title": title, "cast": cast, "style": style,
+                               "seed": seed, "layout": "-".join(map(str, page)),
+                               "panels": panels}
+        return first
 
     def _render(self, kind: str = "selfie", **kw):
         """One render, borrowing the LLM's VRAM when the card needs it: the
@@ -590,6 +639,10 @@ class SelfieLab:
             # she placed herself — "it is night, rain on the window" appended to
             # her sunlit meadow is worse than adding nothing at all.
             kw = {"subject": c.get("subject") or "", "avoid": c.get("avoid") or ""}
+        elif kind == "comic":
+            kw = {"title": c.get("title") or "", "cast": c.get("cast") or "",
+                  "style": c.get("style") or "", "avoid": c.get("avoid") or "",
+                  "layout": c.get("layout") or "", "panels": c.get("panels") or []}
         else:
             scene, mood = c.get("scene") or None, c.get("mood") or None
             framing, lighting = c.get("framing") or None, c.get("lighting") or None

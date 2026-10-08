@@ -28,6 +28,7 @@ reports the truth (`"mcp"` / `"fake"` / `"off"` / `"failed: …"`).
 | `create_goal` | `text`, `kind?` | adds or deduplicates a standing goal and returns its exact ID | the mind is on |
 | `take_selfie` | `look?`, `scene?`, `framing?`, `lighting?`, `mood?`, `wardrobe?`, `avoid?` | starts a render off-turn | `SELFIE_BACKEND` is not `off` |
 | `show_picture` | `subject`, `avoid?` | starts a render of something other than Yuri | `SELFIE_BACKEND` is not `off` |
+| `draw_comic` | `panels` (2–6 of `{picture, text?}`), `title?`, `cast?`, `layout?`, `style?`, `avoid?` | starts one comic page: every panel rendered, framed, her words set under each, sent as one image | `SELFIE_BACKEND` is not `off` |
 | `web_search` | `query`, `k?` | returns titles, links, and snippets from SearXNG | `SEARCH_BACKEND` is not `off` |
 | `read_page` | `url` | reads one page and shelves it | `SEARCH_BACKEND` is not `off` |
 | `research` | `topic`, `depth?` | reads several pages off-turn and posts what she found | `SEARCH_BACKEND` is not `off` |

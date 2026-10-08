@@ -815,7 +815,8 @@ DESK_VERBS = {"read_note": "read", "read_skill": "read skill",
               "delete_note": "deleted", "write_skill": "wrote skill",
               "delete_skill": "deleted skill", "web_search": "searched for",
               "read_page": "read the page", "take_selfie": "started a selfie",
-              "show_picture": "showed a picture", "research": "started research on"}
+              "show_picture": "showed a picture", "draw_comic": "started a comic page",
+              "research": "started research on"}
 
 
 def desk_line(loop, reach: Reach) -> str:

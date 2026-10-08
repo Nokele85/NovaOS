@@ -789,6 +789,7 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   | `play_music` | `action`, `track?`, `volume?` | `{playing, track}` | `music` event to the stage (§4) |
   | `take_selfie` | `look?` (the whole picture in her own words), `scene?`, `framing?`, `lighting?`, `mood?`, `wardrobe?`, `avoid?` (template keys or free-form — carried verbatim, never refused; unnamed slots are left unnamed, never rolled) | `{id, look, scene, framing, lighting, mood, wardrobe, avoid, kind:"selfie", status:"started"}` | host renders off-turn, posts the photo (§7.6) |
   | `show_picture` | `subject` (required — the whole picture in her own words; no library, no slots), `avoid?` | `{id, subject, avoid, kind:"picture", status:"started"}` | host renders off-turn *without her likeness*, posts the picture (§7.6) |
+  | `draw_comic` | `panels` (required — 2–6 of `{picture, text?}` in reading order), `title?`, `cast?`, `layout?` (rows of 1–3, e.g. `1-2-2`), `style?`, `avoid?` | `{id, title, cast, layout, style, avoid, panels, kind:"comic", status:"started"}` | host renders every panel off-turn, cuts one page, sets her words under the panels, posts the page (§7.6b) |
   | `web_search` | `query`, `k?` (≤ `SEARCH_RESULTS`) | `{query, results:[{title, url, snippet}]}` | none (§7.7) |
   | `read_page` | `url` | `{url, title, gist, chars, text, status:"read"}` | host shelves the full text as knowledge (§7.7, §20) |
   | `research` | `topic`, `depth?` (≤ `RESEARCH_MAX_PAGES`) | `{id, topic, depth, kind:"research", status:"started"}` | host searches, reads and shelves off-turn, posts what it found (§7.7) |
@@ -1087,6 +1088,21 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   that thing was made. It is the camera's missing feedback loop — backend, checkpoint, sampler and
   library rows are a dozen knobs with no record of which ones ever took a good photograph, and a
   score beside the seed makes that a question the ledger can answer.
+- §7.6b **A comic page: `draw_comic`.** One picture is not a sequence, and an image model cannot
+  letter. `draw_comic` **MUST** take the page as she wrote it — 2 to 6 panels in reading order, each
+  a `picture` (what is seen) and an optional `text` (what is said under it) — and follow §7.6's
+  start-don't-await rule through the same lab, lock and announce path as the two cameras. The host
+  renders each panel *without her likeness* and with one seed, one `style` and one `cast` line
+  across the page; it then cuts the page itself (`yurios/world/comic.py`): frames, reading order,
+  rows of one wide, two square or three tall panels — her `layout` when she gives one, and
+  otherwise an arrangement the host picks afresh for each page, so that two pages are not cut
+  alike — and every word of `text` set in real type by the host — the renderer
+  **MUST** be told to draw no writing, and no word on the page **MAY** come from it. The page
+  arrives as **one** message. A panel without a `picture`, a caption over the limit, or a panel
+  count outside 2–6 **MUST** be refused with what to change. Asked for a comic with only
+  `show_picture`, she rendered panel 1 and panel 2 nine times in twelve minutes and one frame
+  arrived.
+
 - §7.6a **One card, one pipeline** (normative). A host runs every character in one process
   against one GPU, and each of them builds a camera of its own — so the card, not the character,
   owns what is resident on it. A local backend **MUST** be shared by every character that asked

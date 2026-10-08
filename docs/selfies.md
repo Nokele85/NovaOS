@@ -278,6 +278,24 @@ A character runtime points `SELFIE_CHARACTER` at her own file. If it's missing, 
 renders a **neutral stand-in** and says so loudly rather than falling back to whoever the house
 ships — a photo of the wrong person is worse than a photo of no one.
 
+## draw_comic — a page instead of a picture
+
+`show_picture` is one frame. For a comic she needs a sequence, the same people in every panel, and
+words — and an image model can do none of the three on its own. `draw_comic` takes the page as she
+writes it:
+
+```
+[[draw_comic {"title": "Der Fährmann", "cast": "an old ferryman, long coat, wide hat",
+              "panels": [{"picture": "wide shot, he stands at the black water", "text": "Jede Nacht wartet er."},
+                         {"picture": "close on his hand on the oar", "text": ""}]}]]
+```
+
+The host renders each panel with the same seed, style and cast line (her likeness left out), then
+cuts the page itself (`yurios/world/comic.py`): frames, reading order, rows of one wide, two square
+or three tall panels (`layout`, e.g. `"1-2-2"`; left out, a different cut each time), and her `text` set in real type under each panel — the renderer is told to draw no writing at all.
+2 to 6 panels; the page arrives as one image a few minutes later. It shares the camera's lock and
+`TOOL_RATE_PICTURE`.
+
 ## show_picture — the camera pointed away from her
 
 `take_selfie` can only ever answer *"here is a picture of me"*. `show_picture` is the other half:

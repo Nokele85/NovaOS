@@ -34,7 +34,7 @@ async def test_list_tools_is_exactly_the_hands_she_has():
     async with create_connected_server_and_client_session(server()._mcp_server) as s:
         listed = await s.list_tools()
         assert sorted(t.name for t in listed.tools) == [
-            "play_music", "set_timer", "show_picture", "take_selfie"]
+            "draw_comic", "play_music", "set_timer", "show_picture", "take_selfie"]
         timer = next(t for t in listed.tools if t.name == "set_timer")
         assert "minutes" in timer.inputSchema["properties"]
         assert "minutes" in timer.inputSchema.get("required", [])
@@ -49,8 +49,8 @@ async def test_the_web_hands_appear_only_when_search_is_configured():
     async with create_connected_server_and_client_session(
             web_server()._mcp_server) as s:
         names = sorted(t.name for t in (await s.list_tools()).tools)
-    assert names == ["play_music", "read_page", "research", "set_timer",
-                     "show_picture", "take_selfie", "web_search"]
+    assert names == ["draw_comic", "play_music", "read_page", "research",
+                     "set_timer", "show_picture", "take_selfie", "web_search"]
 
 
 async def test_web_search_returns_rows_a_model_can_speak_to():
@@ -724,6 +724,7 @@ UNSHOWN_TO_THE_MIND = {
     "take_selfie": {"scene", "mood", "wardrobe", "framing", "lighting", "avoid",
                     "goal_id", "completes_goal"},  # `look` carries all of it
     "show_picture": {"avoid"},
+    "draw_comic": {"style", "avoid", "layout"},   # the defaults are the right ones
     "set_timer": {"goal_id", "completes_goal"},
     "read_note": {"end_line"},                    # `next_start_line` pages without it
     "edit_note": {"start_line", "end_line"},      # a repeat is refused with what to add

@@ -162,6 +162,11 @@ HANDS: dict[str, Hand] = {
     "show_picture": Hand(
         "expensive", "make a picture of something she is thinking about",
         '{"subject": "..."}', needs="SELFIE_BACKEND"),
+    "draw_comic": Hand(
+        "expensive", "draw one comic page: several panels with her words under them",
+        '{"title": "...", "cast": "who is in it, described once", "panels": '
+        '[{"picture": "what is seen", "text": "the line under it"}, '
+        '{"picture": "...", "text": "..."}]}', needs="SELFIE_BACKEND"),
     "elecrow_status": Hand(
         "cheap", "check whether her Elecrow board and firmware workspace are reachable",
         '{"project_name": "nova-device"}'),
@@ -266,7 +271,7 @@ NEEDS_CAMERA = tuple(n for n, h in HANDS.items() if h.needs == "SELFIE_BACKEND")
 
 #: Tools that answer `{"status": "started"}` and finish off-tick (§7.6). A goal
 #: that dispatches one goes to `waiting` and is woken by `task_completion`.
-START_DONT_AWAIT = ("research", "take_selfie", "show_picture")
+START_DONT_AWAIT = ("research", "take_selfie", "show_picture", "draw_comic")
 
 #: How a goal step says something to the user (SPEC §18.2b). Not a row in
 #: `HANDS`: nothing runs and no tool server is asked, so neither the switches

@@ -585,6 +585,61 @@ def build_server(*, max_minutes: float | None = None,
                     "note": "the picture will appear in the chat shortly — "
                             "no need to wait for it, and no need to ask again"}
 
+        # A page, not a picture (§7.6b). Asked for a comic she had only
+        # `show_picture`: one frame per call, a different man in each, no words
+        # in any of them, and nothing that held them together.
+        @mcp.tool()
+        def draw_comic(panels: list[dict], title: str = "", cast: str = "",
+                       layout: str = "", style: str = "", avoid: str = "") -> dict:
+            """Draw ONE comic page and send it: several panels in reading
+            order, framed, with your words set under each. Use this — not
+            `show_picture` several times — whenever a comic, a picture story or
+            panels are wanted. `panels` is 2 to 6 objects, each
+            {"picture": what is SEEN in that panel, in your own words — the
+            shot, who is in it, what they do; "text": the caption or line under
+            it, optional, in the language you are speaking}. The picture never
+            contains writing; every word of the page comes from `text`. `cast`
+            describes the recurring figures ONCE (age, build, clothes, hair) and
+            is repeated into every panel so they stay the same people. `style`
+            is the look of the whole page; leave it out for black-and-white
+            ink. `layout` is how the page is cut, rows of 1 (a wide
+            panel), 2 (squares) or 3 (tall strips) in reading order, like
+            "1-2-2" or "3-1"; leave it out and the page is cut for you, a
+            different way each time. `title` is printed on top; `avoid` is
+            anything you don't want in any panel. One call is the whole page — it
+            takes a few minutes and arrives in the chat by itself, so never
+            call it twice for the same page."""
+            from ..comic import MAX_PANELS, MAX_TEXT, MIN_PANELS, parse_layout
+            if not isinstance(panels, list) or not (
+                    MIN_PANELS <= len(panels) <= MAX_PANELS):
+                raise ValueError(f"a page is {MIN_PANELS} to {MAX_PANELS} panels; "
+                                 f"this had {len(panels) if isinstance(panels, list) else 0}")
+            page = []
+            for n, panel in enumerate(panels, 1):
+                if not isinstance(panel, dict) or not str(panel.get("picture") or "").strip():
+                    raise ValueError(
+                        f'panel {n} needs a "picture": what is seen in it')
+                text = " ".join(str(panel.get("text") or "").split())
+                if len(text) > MAX_TEXT:
+                    raise ValueError(
+                        f"panel {n}'s text is {len(text)} characters; a caption "
+                        f"is at most {MAX_TEXT} — say less, or split the panel")
+                page.append({"picture": str(panel["picture"]).strip(), "text": text})
+            if layout.strip():
+                parse_layout(layout, len(page))        # refused here, in words
+            return {"id": uuid.uuid4().hex[:8],
+                    "kind": "comic",
+                    "layout": layout.strip() or None,
+                    "title": title.strip() or None,
+                    "cast": cast.strip() or None,
+                    "style": style.strip() or None,
+                    "avoid": avoid.strip() or None,
+                    "panels": page,
+                    "status": "started",
+                    "note": f"the page ({len(page)} panels) is being drawn and "
+                            "will appear in the chat in a few minutes — no need "
+                            "to wait for it, and no need to ask again"}
+
     # --- her desk (SPEC §34.2) ------------------------------------------------
     # The only hands that write inside the Vault. Everything they can reach is
     # under `workspace/`, and `Workspace.resolve` is the single place that is

@@ -64,6 +64,7 @@ def tool_rates(cfg: Config) -> dict[str, int]:
     if cfg.selfie_backend != "off":
         rates["take_selfie"] = cfg.tool_rate_selfie
         rates["show_picture"] = cfg.tool_rate_picture
+        rates["draw_comic"] = cfg.tool_rate_picture
     if cfg.search_backend != "off":            # …and the same rule for the web (§7.7)
         rates["web_search"] = cfg.tool_rate_search
         rates["read_page"] = cfg.tool_rate_read
