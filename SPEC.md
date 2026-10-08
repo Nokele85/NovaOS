@@ -789,7 +789,7 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   | `play_music` | `action`, `track?`, `volume?` | `{playing, track}` | `music` event to the stage (§4) |
   | `take_selfie` | `look?` (the whole picture in her own words), `scene?`, `framing?`, `lighting?`, `mood?`, `wardrobe?`, `avoid?` (template keys or free-form — carried verbatim, never refused; unnamed slots are left unnamed, never rolled) | `{id, look, scene, framing, lighting, mood, wardrobe, avoid, kind:"selfie", status:"started"}` | host renders off-turn, posts the photo (§7.6) |
   | `show_picture` | `subject` (required — the whole picture in her own words; no library, no slots), `avoid?` | `{id, subject, avoid, kind:"picture", status:"started"}` | host renders off-turn *without her likeness*, posts the picture (§7.6) |
-  | `draw_comic` | `panels` (required — 2–6 of `{picture, text?}` in reading order), `title?`, `cast?`, `layout?` (rows of 1–3, e.g. `1-2-2`), `style?`, `avoid?` | `{id, title, cast, layout, style, avoid, panels, kind:"comic", status:"started"}` | host renders every panel off-turn, cuts one page, sets her words under the panels, posts the page (§7.6b) |
+  | `draw_comic` | `panels` (required — 2–6 of `{picture, text?}` in reading order), `title?`, `cast?` (`{name: look}`, or one line), `layout?` (rows of 1–3, e.g. `1-2-2`), `style?`, `avoid?`; a panel may carry `who` | `{id, title, cast, layout, style, avoid, panels, kind:"comic", status:"started"}` | host renders every panel off-turn, cuts one page, sets her words under the panels, posts the page (§7.6b) |
   | `web_search` | `query`, `k?` (≤ `SEARCH_RESULTS`) | `{query, results:[{title, url, snippet}]}` | none (§7.7) |
   | `read_page` | `url` | `{url, title, gist, chars, text, status:"read"}` | host shelves the full text as knowledge (§7.7, §20) |
   | `research` | `topic`, `depth?` (≤ `RESEARCH_MAX_PAGES`) | `{id, topic, depth, kind:"research", status:"started"}` | host searches, reads and shelves off-turn, posts what it found (§7.7) |
@@ -1098,7 +1098,20 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   otherwise an arrangement the host picks afresh for each page, so that two pages are not cut
   alike — and every word of `text` set in real type by the host — the renderer
   **MUST** be told to draw no writing, and no word on the page **MAY** come from it. The page
-  arrives as **one** message. A panel without a `picture`, a caption over the limit, or a panel
+  arrives as **one** message.
+
+  **A page has to mean what it says.** The first page she drew put both men into every panel,
+  a rower into the boat her caption called empty, and colour over the ink she asked for. So: `cast`
+  **MAY** name the figures (`{name: look}`), and a panel then **MUST** be told only the figures in
+  its `who` (or, with no `who`, those its `picture` names) together with their number in words —
+  `who: []` is a panel with nobody in it, and an unknown head-count **MUST NOT** be read as
+  nobody. A panel **MUST** be rendered from her `style` and her words alone, without the
+  character's quality preamble (`ImageForge.panel`): that preamble names a look, and it was said
+  first. When her model can see (§35.1), each drawn panel **MUST** be shown to it with what she
+  wrote, and a panel it finds in clear contradiction **MUST** be drawn again with a new seed, at
+  most `PANEL_REDRAWS` times and `PAGE_REDRAWS` per page; a check that fails or cannot answer
+  keeps the panel. What is still refused after that **MUST** be named to her when the page lands,
+  not passed off as finished. A `who` naming someone outside `cast`, a panel without a `picture`, a caption over the limit, or a panel
   count outside 2–6 **MUST** be refused with what to change. Asked for a comic with only
   `show_picture`, she rendered panel 1 and panel 2 nine times in twelve minutes and one frame
   arrived.

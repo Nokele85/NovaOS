@@ -589,32 +589,38 @@ def build_server(*, max_minutes: float | None = None,
         # `show_picture`: one frame per call, a different man in each, no words
         # in any of them, and nothing that held them together.
         @mcp.tool()
-        def draw_comic(panels: list[dict], title: str = "", cast: str = "",
+        def draw_comic(panels: list[dict], title: str = "", cast: dict | str = "",
                        layout: str = "", style: str = "", avoid: str = "") -> dict:
-            """Draw ONE comic page and send it: several panels in reading
-            order, framed, with your words set under each. Use this — not
-            `show_picture` several times — whenever a comic, a picture story or
-            panels are wanted. `panels` is 2 to 6 objects, each
-            {"picture": what is SEEN in that panel, in your own words — the
-            shot, who is in it, what they do; "text": the caption or line under
-            it, optional, in the language you are speaking}. The picture never
-            contains writing; every word of the page comes from `text`. `cast`
-            describes EVERY recurring figure ONCE (age, build, clothes, hair) and
-            is repeated into every panel so they stay the same people — a
-            figure you leave out of it looks different in each panel. `style`
-            is the look of the whole page (e.g. "black and white ink"); leave
-            it out for a coloured graphic-novel look. `layout` is how the page is cut, rows of 1 (a wide
-            panel), 2 (squares) or 3 (tall strips) in reading order, like
-            "1-2-2" or "3-1"; leave it out and the page is cut for you, a
-            different way each time. `title` is printed on top; `avoid` is
-            anything you don't want in any panel. One call is the whole page — it
-            takes a few minutes and arrives in the chat by itself, so never
-            call it twice for the same page."""
-            from ..comic import MAX_PANELS, MAX_TEXT, MIN_PANELS, parse_layout
+            """Draw ONE comic page and send it: panels in reading order,
+            framed, your words set under each. Use this — never `show_picture`
+            or `take_selfie` — for a comic, a picture story or panels. `cast`
+            names every recurring figure ONCE: {"Ferryman": "about fifty,
+            gaunt, long dark coat, grey hair", "Stranger": "young, pale, light
+            hooded coat"}. `panels` is 2 to 6 objects, each {"picture": what
+            is SEEN — the shot, the place, the one moment; "who": the names
+            from `cast` that are IN this panel, [] for nobody (an empty boat);
+            "text": the line under it, optional}. Only the figures in `who`
+            are drawn, so list exactly who is there. Write `picture`, the
+            looks in `cast` and `style` in English — the camera reads English
+            best; `text` stays in your language and must not say what the
+            picture contradicts. The picture never contains writing. `style`
+            is the look of the whole page (e.g. "black and white ink drawing,
+            hard contrast, no colour"); left out, a coloured graphic-novel
+            look. `layout` cuts the page in rows of 1 (wide), 2 (squares) or
+            3 (tall strips), like "1-2-2"; left out, a different cut each
+            time. `title` is printed on top; `avoid` is anything unwanted in
+            every panel. Each panel is checked against what you wrote and
+            drawn again when it contradicts it. One call is the whole page: it
+            takes several minutes and arrives in the chat by itself — never
+            call it twice for one page, and do not describe the page as
+            finished: it is not drawn yet."""
+            from ..comic import MAX_PANELS, MAX_TEXT, MIN_PANELS, cast_of, parse_layout
             if not isinstance(panels, list) or not (
                     MIN_PANELS <= len(panels) <= MAX_PANELS):
                 raise ValueError(f"a page is {MIN_PANELS} to {MAX_PANELS} panels; "
                                  f"this had {len(panels) if isinstance(panels, list) else 0}")
+            named, plain = cast_of(cast)
+            known = {n.casefold(): n for n in named}
             page = []
             for n, panel in enumerate(panels, 1):
                 if not isinstance(panel, dict) or not str(panel.get("picture") or "").strip():
@@ -625,21 +631,35 @@ def build_server(*, max_minutes: float | None = None,
                     raise ValueError(
                         f"panel {n}'s text is {len(text)} characters; a caption "
                         f"is at most {MAX_TEXT} — say less, or split the panel")
-                page.append({"picture": str(panel["picture"]).strip(), "text": text})
+                row = {"picture": str(panel["picture"]).strip(), "text": text}
+                who = panel.get("who")
+                if isinstance(who, str):
+                    who = [w for w in (x.strip() for x in who.split(",")) if w]
+                if isinstance(who, list):
+                    strangers = [str(w) for w in who
+                                 if str(w).strip().casefold() not in known]
+                    if strangers:
+                        raise ValueError(
+                            f"panel {n}'s who names {', '.join(strangers)}, who "
+                            "is not in `cast` — cast has: "
+                            f"{', '.join(named) or 'no named figures; make cast an object of name: look'}")
+                    row["who"] = [known[str(w).strip().casefold()] for w in who]
+                page.append(row)
             if layout.strip():
                 parse_layout(layout, len(page))        # refused here, in words
             return {"id": uuid.uuid4().hex[:8],
                     "kind": "comic",
                     "layout": layout.strip() or None,
                     "title": title.strip() or None,
-                    "cast": cast.strip() or None,
+                    "cast": named or plain or None,
                     "style": style.strip() or None,
                     "avoid": avoid.strip() or None,
                     "panels": page,
                     "status": "started",
-                    "note": f"the page ({len(page)} panels) is being drawn and "
-                            "will appear in the chat in a few minutes — no need "
-                            "to wait for it, and no need to ask again"}
+                    "note": f"the page ({len(page)} panels) is being drawn NOW and "
+                            "is not finished: it arrives in the chat by itself in "
+                            "several minutes. Say that it is on its way — do not "
+                            "describe it as done, and do not call this again"}
 
     # --- her desk (SPEC §34.2) ------------------------------------------------
     # The only hands that write inside the Vault. Everything they can reach is

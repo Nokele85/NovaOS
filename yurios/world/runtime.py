@@ -104,7 +104,18 @@ def build_camera(rt) -> tuple[SelfieLab | None, str]:
     # the config: SELFIE_BACKEND=diffusers resolves to either local
     # camera depending on the checkpoint. One that can't run yet keeps
     # its floor — the lab refuses its shots before the parker is asked.
-    lab = SelfieLab(forge, clock=rt.clock,
+    async def judge(data: bytes, question: str) -> str:
+        """A drawn comic panel, shown to her model when it can see (§7.6b)."""
+        if not getattr(rt, "image_input", False):
+            return "OK"
+        from .comic import as_data_url
+        return await rt.brain.state.utility.complete(
+            [{"role": "user", "content": [
+                {"type": "text", "text": question},
+                {"type": "image_url", "image_url": {"url": as_data_url(data)}}]}],
+            max_tokens=120)
+
+    lab = SelfieLab(forge, clock=rt.clock, judge=judge,
                     post=rt.post_message,
                     speak=rt.speak_ambient,
                     notify=rt.hub.publish,

@@ -100,7 +100,7 @@ SPECS = [
     ToolSpec("draw_comic", "Draw one comic page: panels with your words under them.",
              {"properties": {"panels": {"type": "array"},
                              "title": {"type": "string"},
-                             "cast": {"type": "string"},
+                             "cast": {"type": ["object", "string"]},
                              "layout": {"type": "string"},
                              "style": {"type": "string"},
                              "avoid": {"type": "string"}},

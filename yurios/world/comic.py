@@ -32,11 +32,27 @@ MAX_TEXT = 220
 #: that word literally and drew panels inside the panels, half of them in ink
 #: and half in colour. One scene, one look, and what the camera is good at.
 COMIC_STYLE = ("a single scene, graphic novel illustration, clean ink "
-               "outlines, cinematic light, muted colours")
+               "outlines, cinematic light, muted colours, highly detailed")
 #: Kept out of every panel, added to whatever she asked to avoid.
 COMIC_AVOID = ("text, letters, words, speech bubbles, captions, signature, "
                "watermark, panel borders, multiple panels, split image, inset, "
                "collage, picture in picture")
+
+#: How often one panel may be drawn again after the check refused it, and how
+#: many redraws a whole page may spend. A redraw is a minute of GPU; a page that
+#: cannot be got right in these is sent with its doubts named (§7.6b).
+PANEL_REDRAWS, PAGE_REDRAWS = 2, 4
+
+#: What the camera is told about how many people are in a panel — the one thing
+#: a text-to-image model gets wrong most, and the thing a reader forgives least.
+_COUNT = {0: "No people anywhere in this picture, the scene is empty of figures",
+          1: "Exactly one person in this picture, nobody else",
+          2: "Exactly two people in this picture",
+          3: "Exactly three people in this picture"}
+_NOT = {0: "people, person, human, figure, silhouette, character",
+        1: "two people, second person, extra person, crowd, duplicate",
+        2: "three people, third person, crowd",
+        3: "crowd"}
 
 PAGE_W = 1600
 MARGIN = 44
@@ -104,6 +120,93 @@ def rows(n: int, layout: str = "", seed: int | None = None) -> list[int]:
 def panel_sizes(page: list[int]) -> list[tuple[int, int]]:
     """The size each panel should be rendered at, in reading order."""
     return [SHAPES[count] for count in page for _ in range(count)]
+
+
+def cast_of(cast) -> tuple[dict[str, str], str]:
+    """Her cast as (named figures, plain description).
+
+    `{"Fährmann": "old, long coat", …}` is the form that lets a panel hold only
+    the figures that are in it. A plain string is the older form: one line that
+    goes into every panel, which is what drew both men into all four panels of
+    the first page."""
+    if isinstance(cast, dict):
+        named = {str(k).strip(): " ".join(str(v or "").split())
+                 for k, v in cast.items() if str(k).strip()}
+        return named, ""
+    return {}, " ".join(str(cast or "").split())
+
+
+def figures_in(panel: dict, named: dict[str, str]) -> list[str] | None:
+    """Who is in this panel: her `who` when she gave one, else the figures the
+    picture names. `None` is "not known" — nothing named, nothing listed — and
+    must not be read as "nobody": a panel that says only "he turns his head" has
+    someone in it."""
+    if not named:
+        return None
+    who = panel.get("who")
+    if isinstance(who, list):
+        return [n for n in named if any(n.casefold() == str(w).strip().casefold()
+                                        for w in who)]
+    said = str(panel.get("picture") or "").casefold()
+    found = [n for n in named if n.casefold() in said]
+    return found or None
+
+
+def panel_prompt(style: str, panel: dict, named: dict[str, str],
+                 plain: str) -> tuple[str, str]:
+    """(what the camera is asked for, what it is told to leave out) for one panel.
+
+    Only the figures that are in the panel are described, each under its name,
+    and the head-count is said in words — so a wide shot of an empty boat is not
+    handed two men to put somewhere."""
+    parts = [style, str(panel.get("picture") or "")]
+    leave_out = ""
+    figures = figures_in(panel, named)
+    if figures is not None:
+        parts += [f"{name}: {named[name]}" for name in figures if named[name]]
+        if len(figures) in _COUNT:
+            parts.append(_COUNT[len(figures)])
+            leave_out = _NOT[len(figures)]
+    elif plain:
+        parts.append(plain)
+    return ". ".join(p.strip().rstrip(".") for p in parts if p and p.strip()) + ".", leave_out
+
+
+def check_question(style: str, panel: dict, named: dict[str, str]) -> str:
+    """What the reader with eyes is asked about one drawn panel (§7.6b)."""
+    figures = figures_in(panel, named)
+    if figures is None:
+        people = ""
+    elif not figures:
+        people = " Nobody should be visible in it."
+    else:
+        people = (f" Visible in it should be exactly {len(figures)}: "
+                  + ", ".join(f"{n} ({named[n]})" if named[n] else n for n in figures) + ".")
+    return (
+        "This image was drawn as one panel of a comic. It should show: "
+        f"«{panel.get('picture', '')}».{people} The look asked for: {style}.\n"
+        "Does the image clearly contradict that — a wrong number of people, "
+        "something essential missing, or the opposite of what was asked (a boat "
+        "that should be empty with someone in it; colour where black and white "
+        "was asked)? Ignore small details, exact poses and drawing quality.\n"
+        "Answer with ONE line: `OK`, or `WRONG: ` and what contradicts it in a "
+        "few words.")
+
+
+def passes(verdict: str) -> bool:
+    """Did the check let the panel through? Anything that is not a plain
+    refusal does: a reader that could not answer must not cost a redraw."""
+    return not str(verdict or "").strip().upper().lstrip("`*\"' ").startswith("WRONG")
+
+
+def as_data_url(data: bytes, side: int = 768) -> str:
+    """A panel small enough to show a model: a JPEG data URL."""
+    import base64
+    img = Image.open(io.BytesIO(data)).convert("RGB")
+    img.thumbnail((side, side))
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=85)
+    return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
 
 
 @lru_cache(maxsize=8)

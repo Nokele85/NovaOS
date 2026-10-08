@@ -192,6 +192,22 @@ class ImageForge:
         result.meta["template"] = chosen
         return result
 
+    def panel(self, prompt: str, *, avoid: str = "", seed: Optional[int] = None,
+              width: int = 1024, height: int = 1024, **over: Any) -> ImageResult:
+        """One comic panel (SPEC §7.6b): her words, and none of the house register.
+
+        `picture()` opens every prompt with the character's quality preamble —
+        for a photo of the rain that is the look of the house, and for a comic
+        it is the reason a page asked for in black ink came back in saturated
+        colour: the preamble said "rich saturated color" first and louder. A
+        panel's look is the page's `style`, so nothing is put in front of it.
+        The base negative stays; it is about defects, not about taste."""
+        negative = " ".join(x for x in (self.character.base_negative.strip(),
+                                        avoid.strip()) if x)
+        req = GenRequest(prompt=prompt.strip(), negative_prompt=negative,
+                         width=width, height=height, seed=seed, extra=over)
+        return self._finish(self.backend.generate(req), "panel", False)
+
     def edit(self, image: str | Path, instruction: str, *, label: str = "edit",
              seed: Optional[int] = None, strength: float = 0.7,
              use_identity: bool = True, save: bool = True, **over: Any) -> ImageResult:

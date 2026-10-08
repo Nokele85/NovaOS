@@ -303,7 +303,8 @@ class SelfieLab:
                  quiet: Optional[Callable[[], Awaitable[None]]] = None,
                  situation: Optional[Callable[[], str]] = None,
                  signal: Optional[Callable[..., object]] = None,
-                 unload_after_s: float = -1.0):
+                 unload_after_s: float = -1.0,
+                 judge: Optional[Callable[[bytes, str], Awaitable[str]]] = None):
         self.forge = forge
         self.clock = clock
         self.post = post                       # Runtime.post_message
@@ -316,6 +317,10 @@ class SelfieLab:
         # `selfie_status` is for a page that is watching the render; this is for
         # the mind, which is not, and whose goal is sitting in `waiting` on it.
         self.signal = signal
+        # (png, question) -> verdict: a model that can see, asked whether a drawn
+        # comic panel contradicts what she wrote for it (§7.6b). None = no check.
+        self.judge = judge
+        self._loop: asyncio.AbstractEventLoop | None = None
         # Idle unload of a warm local pipeline (SPEC §7.6a). Default -1 here
         # so tests that construct a lab directly keep today's behaviour
         # (never time out); `build_camera` passes `SELFIE_UNLOAD_AFTER_S`
@@ -360,20 +365,34 @@ class SelfieLab:
         return self.forge.selfie(**kw)
 
     def _comic(self, kw: dict):
-        """One page: every panel through the same camera, then cut and lettered
-        by the host (§7.6b, world/comic.py).
+        """One page: every panel through the same camera, checked, then cut and
+        lettered by the host (§7.6b, world/comic.py).
 
-        One seed, one style line and one cast line across all panels — the only
-        consistency a text-to-image model offers, and enough that the page reads
-        as one hand. A camera that hands its models back after every render is
-        asked to keep them for the page and gives them back once, at the end:
-        four panels are otherwise four model loads."""
+        One seed and one style line across all panels — the only consistency a
+        text-to-image model offers, and enough that the page reads as one hand.
+        Each panel is told only the figures that are in it, and each is shown to
+        a reader with eyes before it is kept: what contradicts her words is drawn
+        again, a bounded number of times. A camera that hands its models back
+        after every render is asked to keep them for the page and gives them
+        back once, at the end: four panels are otherwise four model loads."""
         import random
 
-        from .comic import COMIC_AVOID, COMIC_STYLE, compose_page, panel_sizes, rows
+        from .comic import (
+            COMIC_AVOID,
+            COMIC_STYLE,
+            PAGE_REDRAWS,
+            PANEL_REDRAWS,
+            cast_of,
+            check_question,
+            compose_page,
+            panel_prompt,
+            panel_sizes,
+            passes,
+            rows,
+        )
         panels = list(kw.get("panels") or [])
         style = (kw.get("style") or "").strip() or COMIC_STYLE
-        cast = (kw.get("cast") or "").strip()
+        named, plain = cast_of(kw.get("cast"))
         avoid = ", ".join(x for x in ((kw.get("avoid") or "").strip(), COMIC_AVOID) if x)
         seed = random.getrandbits(31)
         page = rows(len(panels), kw.get("layout") or "", seed)
@@ -382,15 +401,26 @@ class SelfieLab:
         hands_back = getattr(backend, "release_after_render", None)
         if hands_back:
             backend.release_after_render = False
-        shots, first = [], None
+        shots, first, drawn, doubts, spare = [], None, [], [], PAGE_REDRAWS
         try:
             for i, panel in enumerate(panels):
                 width, height = sizes[i]
-                subject = ". ".join(
-                    x.rstrip(". ") for x in (style, panel.get("picture", ""), cast) if x)
-                shot = self.forge.picture(subject, avoid=avoid, seed=seed, save=False,
-                                          width=width, height=height)
+                prompt, leave_out = panel_prompt(style, panel, named, plain)
+                question = check_question(style, panel, named)
+                tries = 0
+                while True:
+                    shot = self.forge.panel(
+                        prompt, avoid=", ".join(x for x in (leave_out, avoid) if x),
+                        seed=seed + tries, width=width, height=height)
+                    verdict = self._judge(shot.data, question)
+                    if passes(verdict) or tries >= PANEL_REDRAWS or spare <= 0:
+                        break
+                    log.info("comic: panel %d drawn again (%s)", i + 1, verdict.strip()[:120])
+                    tries, spare = tries + 1, spare - 1
+                if not passes(verdict):
+                    doubts.append(f"panel {i + 1}: {verdict.strip()[:140]}")
                 first = first or shot
+                drawn.append(tries + 1)
                 shots.append((shot.data, panel.get("text") or ""))
         finally:
             if hands_back:
@@ -400,11 +430,33 @@ class SelfieLab:
                     release()
         title = (kw.get("title") or "").strip()
         first.data = compose_page(shots, title=title, page=page)
-        first.meta["template"] = {"look": title or "a comic page"}
-        first.meta["comic"] = {"title": title, "cast": cast, "style": style,
+        # What she is told when the page lands (the announce cue reads `look`):
+        # a panel the check still refuses is named, so she does not present as
+        # finished a page whose last panel says the opposite of her caption.
+        look = title or "a comic page"
+        if doubts:
+            look += " — not everything came out as you wrote it: " + "; ".join(doubts)
+        first.meta["template"] = {"look": look}
+        first.meta["comic"] = {"title": title, "cast": named or plain, "style": style,
                                "seed": seed, "layout": "-".join(map(str, page)),
-                               "panels": panels}
+                               "drawn": drawn, "doubts": doubts, "panels": panels}
         return first
+
+    def _judge(self, data: bytes, question: str) -> str:
+        """Show one drawn panel to the reader with eyes and return its verdict.
+
+        Called from the render thread; the reader lives on the loop. No reader,
+        no loop, an error or a timeout all read as `OK` — the check is there to
+        catch a contradiction, never to be the reason a page does not arrive."""
+        loop = getattr(self, "_loop", None)
+        if self.judge is None or loop is None:
+            return "OK"
+        try:
+            return str(asyncio.run_coroutine_threadsafe(
+                self.judge(data, question), loop).result(timeout=90) or "OK")
+        except Exception:
+            log.exception("comic: the panel check failed — keeping the panel")
+            return "OK"
 
     def _render(self, kind: str = "selfie", **kw):
         """One render, borrowing the LLM's VRAM when the card needs it: the
@@ -553,6 +605,7 @@ class SelfieLab:
     def start(self, contract: dict) -> None:
         """Spawn one render from the tool's validated contract. Never blocks,
         never raises — the turn that asked is already moving on."""
+        self._loop = asyncio.get_running_loop()      # the render thread's way back
         task = asyncio.create_task(self._job(dict(contract)),
                                    name=f"selfie-{contract.get('id', '?')}")
         self._tasks.add(task)

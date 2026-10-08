@@ -164,9 +164,10 @@ HANDS: dict[str, Hand] = {
         '{"subject": "..."}', needs="SELFIE_BACKEND"),
     "draw_comic": Hand(
         "expensive", "draw one comic page: several panels with her words under them",
-        '{"title": "...", "cast": "who is in it, described once", "panels": '
-        '[{"picture": "what is seen", "text": "the line under it"}, '
-        '{"picture": "...", "text": "..."}]}', needs="SELFIE_BACKEND"),
+        '{"title": "...", "cast": {"Anna": "how she looks, in English"}, "panels": '
+        '[{"picture": "what is seen, in English", "who": ["Anna"], "text": "the line '
+        'under it"}, {"picture": "...", "who": [], "text": "..."}]}',
+        needs="SELFIE_BACKEND"),
     "elecrow_status": Hand(
         "cheap", "check whether her Elecrow board and firmware workspace are reachable",
         '{"project_name": "nova-device"}'),

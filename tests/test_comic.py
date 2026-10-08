@@ -19,7 +19,12 @@ from yurios.world.comic import (
     TALL,
     WIDE,
     arrangements,
+    cast_of,
+    check_question,
     compose_page,
+    figures_in,
+    panel_prompt,
+    passes,
     panel_sizes,
     parse_layout,
     rows,
@@ -159,3 +164,103 @@ async def test_the_lab_draws_every_panel_and_sends_one_page(cfg, clock):
     assert meta["comic"]["layout"] == "1-2"
     assert meta["kind"] == "comic" and meta["template"]["look"] == "Der Fährmann"
     assert [p["text"] for p in meta["comic"]["panels"]] == [p["text"] for p in PANELS]
+
+
+
+CAST = {"Ferryman": "about fifty, gaunt, long dark coat", "Stranger": "young, pale, light coat"}
+
+
+def test_a_panel_holds_only_the_figures_that_are_in_it():
+    """SPEC §7.6b: named figures, `who` per panel, the head-count in words —
+    and "not known" is never read as "nobody"."""
+    named, plain = cast_of(CAST)
+    assert plain == "" and list(named) == ["Ferryman", "Stranger"]
+    assert cast_of("an old man") == ({}, "an old man")
+
+    alone = {"picture": "he waits at the black water", "who": ["ferryman"]}
+    empty = {"picture": "the empty boat drifts", "who": []}
+    named_in_words = {"picture": "the Stranger steps out of the fog"}
+    unknown = {"picture": "he turns his head"}
+    assert figures_in(alone, named) == ["Ferryman"]
+    assert figures_in(empty, named) == []
+    assert figures_in(named_in_words, named) == ["Stranger"]
+    assert figures_in(unknown, named) is None
+
+    prompt, leave_out = panel_prompt("ink", alone, named, "")
+    assert "Ferryman: about fifty" in prompt and "Stranger" not in prompt
+    assert "Exactly one person" in prompt and "second person" in leave_out
+    prompt, leave_out = panel_prompt("ink", empty, named, "")
+    assert "No people" in prompt and "gaunt" not in prompt and "person" in leave_out
+    prompt, leave_out = panel_prompt("ink", unknown, named, "")
+    assert "No people" not in prompt and leave_out == ""
+    # the older, one-line cast still goes into every panel
+    assert "an old man" in panel_prompt("ink", unknown, {}, "an old man")[0]
+
+    asked = check_question("black ink", empty, named)
+    assert "Nobody should be visible" in asked and "the empty boat drifts" in asked
+    assert passes("OK") and passes("") and passes("looks fine to me")
+    assert not passes("WRONG: someone stands in the boat") and not passes("`wrong: colour")
+
+
+async def test_who_must_be_in_the_cast():
+    """SPEC §7.6b: a `who` naming someone outside `cast` is refused with the
+    names she does have."""
+    srv = build_server(max_minutes=180)
+    async with create_connected_server_and_client_session(srv._mcp_server) as s:
+        ok = await s.call_tool("draw_comic", {"cast": CAST, "panels": [
+            {"picture": "he waits", "who": ["ferryman"], "text": "Er wartet."},
+            {"picture": "the empty boat", "who": []}]})
+        assert not ok.isError
+        data = json.loads(result_text(ok))
+        assert data["cast"] == CAST
+        assert [p.get("who") for p in data["panels"]] == [["Ferryman"], []]
+        assert "not finished" in data["note"]
+        bad = await s.call_tool("draw_comic", {"cast": CAST, "panels": [
+            {"picture": "x", "who": ["Benni"]}, {"picture": "y"}]})
+        assert bad.isError and "Ferryman, Stranger" in result_text(bad)
+
+
+async def test_a_panel_that_contradicts_her_is_drawn_again(cfg, clock):
+    """SPEC §7.6b: each panel is shown to a reader with eyes; a refusal costs a
+    redraw with a new seed, bounded, and what is still refused is named."""
+    forge, _ = build_forge(cfg)
+    seen = []
+    generate = forge.backend.generate
+
+    def spy(req):
+        seen.append(req)
+        return generate(req)
+
+    forge.backend.generate = spy
+    asked = []
+
+    async def judge(data, question):
+        asked.append(question)
+        if "empty boat" in question:
+            return "WRONG: someone stands in the boat"          # never comes right
+        return "WRONG: two people" if len(asked) == 1 else "OK"  # right on the 2nd try
+
+    rec = Recorder()
+    lab = SelfieLab(forge, clock=clock, post=rec.post, speak=rec.speak, judge=judge)
+    lab.start({"id": "c2", "kind": "comic", "title": "Der Fährmann", "cast": CAST,
+               "style": "black and white ink", "layout": "2", "status": "started",
+               "panels": [{"picture": "he waits", "who": ["Ferryman"], "text": "Er wartet."},
+                          {"picture": "the empty boat", "who": [], "text": "Leer."}]})
+    await asyncio.gather(*lab._tasks, return_exceptions=True)
+
+    # panel 1: two draws (refused once); panel 2: three (refused to the limit)
+    assert len(seen) == 5
+    assert len({r.seed for r in seen[:2]}) == 2
+    for req in seen:
+        assert req.prompt.startswith("black and white ink")     # her look, said first
+        assert forge.character.quality_preamble.strip()[:20] not in req.prompt
+    assert "Ferryman: about fifty" in seen[0].prompt and "Stranger" not in seen[0].prompt
+    assert "No people" in seen[-1].prompt
+
+    (post,) = rec.posts
+    meta = json.loads((cfg.selfie_dir / post["image_url"].removeprefix("/selfies/"))
+                      .with_suffix(".json").read_text())
+    assert meta["comic"]["drawn"] == [2, 3]
+    assert meta["comic"]["doubts"] == ["panel 2: WRONG: someone stands in the boat"]
+    assert "not everything came out" in meta["template"]["look"]
+    assert "panel 2" in rec.cues[0]                # …and she is told, not left to boast
