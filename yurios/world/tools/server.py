@@ -590,27 +590,32 @@ def build_server(*, max_minutes: float | None = None,
         # in any of them, and nothing that held them together.
         @mcp.tool()
         def draw_comic(panels: list[dict], title: str = "", cast: dict | str = "",
-                       layout: str = "", style: str = "", avoid: str = "") -> dict:
+                       layout: str = "", style: str = "", avoid: str = "",
+                       goal_id: str = "", completes_goal: bool = False) -> dict:
             """Draw ONE comic page and send it: panels in reading order,
-            framed, your words set under each. Use this — never `show_picture`
-            or `take_selfie` — for a comic, a picture story or panels. `cast`
-            names every recurring figure ONCE: {"Ferryman": "about fifty,
-            gaunt, long dark coat, grey hair", "Stranger": "young, pale, light
-            hooded coat"}. `panels` is 2 to 6 objects, each {"picture": what
-            is SEEN — the shot, the place, the one moment; "who": the names
-            from `cast` that are IN this panel, [] for nobody (an empty boat);
-            "text": the line under it, optional}. Only the figures in `who`
-            are drawn. To be in it yourself put "me" in `who`: the camera
-            knows your face and body — in `cast`, "me" is only what you wear. `text` must not say what the picture contradicts. The picture never contains writing. `style`
-            is the look of the whole page (e.g. "black and white ink drawing,
-            hard contrast, no colour"); left out, a coloured graphic-novel
-            look. `layout` cuts the page in rows of 1 (wide), 2 (squares) or
-            3 (tall strips), like "1-2-2", two wide ones at most; left out, a
-            different cut each time. `title` is printed on top; `avoid` is anything unwanted.
-            Each panel is checked against your words and redrawn if wrong. One call is the whole page: it
-            takes several minutes and arrives in the chat by itself — never
-            call it twice for one page, and do not describe the page as
-            finished: it is not drawn yet."""
+            framed, your words under each. Use this — never `show_picture` or
+            `take_selfie` — for a comic or picture story. `cast` names
+            every recurring figure ONCE: {"Ferryman": "about fifty, gaunt,
+            long dark coat", "Stranger": "young, pale, light hooded coat"}.
+            `panels` is 2 to 6 objects, each {"picture": what is SEEN — the
+            shot, the place, the one moment; "who": the names from `cast` IN
+            this panel, [] for nobody; "text": the line under it, optional}.
+            Only the figures in `who` are drawn. To be in it yourself put "me"
+            in `who`: the camera knows your face — in `cast`, "me" is only
+            what you wear. `text` must not say what the picture contradicts;
+            the picture never contains writing. `style` is the look of the
+            whole page (e.g. "black and white ink, no colour"); left out, a
+            coloured graphic-novel look. `layout` cuts the page in rows of 1
+            (wide), 2 or 3 panels, like "1-2-2", two wide ones at most; left
+            out, a different cut each time. `title` names the page ("Story —
+            page 3: …") and is printed on top; `avoid` is anything unwanted.
+            Draw each page ONCE: a page whose title is already in your notes
+            as started exists — go on to the next. On the LAST page of a
+            story set `completes_goal`=true (with the goal's `goal_id` when
+            you have it): the goal closes when that page lands. Panels are
+            checked against your words and redrawn if wrong. It takes minutes
+            and arrives by itself; do not describe the page as finished: it
+            is not drawn yet."""
             from ..comic import (
                 _ARTICLE,
                 MAX_PANELS,
@@ -685,6 +690,8 @@ def build_server(*, max_minutes: float | None = None,
                     "cast": named or plain or None,
                     "style": style.strip() or None,
                     "avoid": avoid.strip() or None,
+                    "goal_id": goal_id.strip() or None,
+                    "completes_goal": bool(completes_goal),
                     "panels": page}
 
     # --- her desk (SPEC §34.2) ------------------------------------------------

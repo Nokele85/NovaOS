@@ -445,7 +445,11 @@ class SelfieLab:
         # finished a page whose last panel says the opposite of her caption.
         look = title or "a comic page"
         if doubts:
-            look += " — not everything came out as you wrote it: " + "; ".join(doubts)
+            # A note, not a task. Worded as "not everything came out as you
+            # wrote it", she took it as one and drew the whole page again.
+            look += (" — this page is finished and kept; do not draw it again. "
+                     "For your eyes only, where the drawing strays from your "
+                     "words: " + "; ".join(doubts))
         first.meta["template"] = {"look": look}
         first.meta["comic"] = {"title": title, "cast": named or plain, "style": style,
                                "seed": seed, "layout": "-".join(map(str, page)),

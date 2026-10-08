@@ -724,7 +724,7 @@ UNSHOWN_TO_THE_MIND = {
     "take_selfie": {"scene", "mood", "wardrobe", "framing", "lighting", "avoid",
                     "goal_id", "completes_goal"},  # `look` carries all of it
     "show_picture": {"avoid"},
-    "draw_comic": {"style", "avoid", "layout"},   # the defaults are the right ones
+    "draw_comic": {"style", "avoid", "layout", "goal_id"},   # the step's own goal is stamped
     "set_timer": {"goal_id", "completes_goal"},
     "read_note": {"end_line"},                    # `next_start_line` pages without it
     "edit_note": {"start_line", "end_line"},      # a repeat is refused with what to add

@@ -163,10 +163,11 @@ HANDS: dict[str, Hand] = {
         "expensive", "make a picture of something she is thinking about",
         '{"subject": "..."}', needs="SELFIE_BACKEND"),
     "draw_comic": Hand(
-        "expensive", "draw one comic page: several panels with her words under them",
+        "expensive", "draw one comic page: several panels with her words under them; "
+        "`completes_goal` true on a story's last page closes the goal",
         '{"title": "...", "cast": {"Anna": "how she looks"}, "panels": '
         '[{"picture": "what is seen", "who": ["Anna"], "text": "the line under it"}, '
-        '{"picture": "...", "who": [], "text": "..."}]}',
+        '{"picture": "...", "who": [], "text": "..."}], "completes_goal": false}',
         needs="SELFIE_BACKEND"),
     "elecrow_status": Hand(
         "cheap", "check whether her Elecrow board and firmware workspace are reachable",

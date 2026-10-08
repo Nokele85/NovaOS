@@ -1124,7 +1124,15 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   with a plain "started", she walked him through four finished panels that did not exist — and
   went on doing so whatever the result said. So a reply in which she has already spoken **MUST**
   end at a started `draw_comic`: no continuation pass is run, and what she makes of the page she
-  says when it lands. A `who` naming someone outside `cast`, a panel without a `picture`, a caption over the limit, or a panel
+  says when it lands.
+
+  **A story has a last page.** Given a goal to draw a six-page story she drew eleven pages and was
+  on a twelfth: nothing she could do ended the goal, her desk said "started a comic page" each
+  time without saying which, and every landing page woke the goal for another. So `draw_comic`
+  **MUST** carry `completes_goal` (and `goal_id`) the way the cameras do, closing the goal when
+  that page lands; a goal step's desk entry **MUST** name the page by its `title`; and a doubt the
+  check leaves on a landed page **MUST** be told to her as a note on a page that is finished and
+  kept — worded as a shortfall, she redrew the page. A `who` naming someone outside `cast`, a panel without a `picture`, a caption over the limit, or a panel
   count outside 2–6 **MUST** be refused with what to change. Asked for a comic with only
   `show_picture`, she rendered panel 1 and panel 2 nine times in twelve minutes and one frame
   arrived.

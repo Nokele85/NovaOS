@@ -103,7 +103,9 @@ SPECS = [
                              "cast": {"type": ["object", "string"]},
                              "layout": {"type": "string"},
                              "style": {"type": "string"},
-                             "avoid": {"type": "string"}},
+                             "avoid": {"type": "string"},
+                             "goal_id": {"type": "string"},
+                             "completes_goal": {"type": "boolean"}},
               "required": ["panels"]}),
     ToolSpec("web_search", "Search the web and get back a handful of titles, "
              "links and snippets.",
@@ -243,6 +245,8 @@ class FakeToolRunner:
                                "style": args.get("style") or None,
                                "avoid": args.get("avoid") or None,
                                "panels": args.get("panels") or [],
+                               "goal_id": args.get("goal_id") or None,
+                               "completes_goal": bool(args.get("completes_goal")),
                                "kind": "comic", "status": "started",
                                "note": "the page will appear in the chat shortly"})
         if tool == "web_search":

@@ -282,7 +282,7 @@ async def test_a_panel_that_contradicts_her_is_drawn_again(cfg, clock):
                       .with_suffix(".json").read_text())
     assert meta["comic"]["drawn"] == [2, 3]
     assert meta["comic"]["doubts"] == ["panel 2: WRONG: someone stands in the boat"]
-    assert "not everything came out" in meta["template"]["look"]
+    assert "finished and kept; do not draw it again" in meta["template"]["look"]
     assert "panel 2" in rec.cues[0]                # …and she is told, not left to boast
 
 
@@ -406,3 +406,33 @@ async def test_a_started_page_ends_the_reply(cfg, guard, timers, controller, clo
     assert len(chat.calls) == 1, "she was asked to go on about a page she has not seen"
     (contract,) = lab.started
     assert contract["kind"] == "comic"
+
+
+async def test_the_last_page_closes_the_goal_and_the_desk_names_the_page(cfg, clock):
+    """SPEC §7.6b: `completes_goal` travels to the landing signal like a
+    selfie's does, and a step's desk entry says which page was started."""
+    from types import SimpleNamespace
+
+    from yurios.mind.goalwork import desk_line
+    from yurios.mind.handwork import Reach
+
+    srv = build_server(max_minutes=180)
+    async with create_connected_server_and_client_session(srv._mcp_server) as s:
+        r = await s.call_tool("draw_comic", {"title": "Der Fährmann — Seite 6", "panels": [
+            {"picture": "a", "who": []}, {"picture": "b", "who": []}],
+            "goal_id": "g-story", "completes_goal": True})
+        contract = json.loads(result_text(r))
+    assert contract["goal_id"] == "g-story" and contract["completes_goal"] is True
+
+    forge, _ = build_forge(cfg)
+    rec, landed = Recorder(), []
+    lab = SelfieLab(forge, clock=clock, post=rec.post, speak=rec.speak,
+                    signal=lambda kind, payload, **kw: landed.append(payload))
+    lab.start({**contract, "_goal_id": "g-story", "_complete_goal": True})
+    await asyncio.gather(*lab._tasks, return_exceptions=True)
+    assert landed[0]["goal_id"] == "g-story" and landed[0]["complete_goal"] is True
+
+    reach = Reach(tool="draw_comic", args={"title": "Der Fährmann — Seite 6", "panels": []},
+                  verdict="ok", result="", why="")
+    loop = SimpleNamespace(cfg=SimpleNamespace(user_name="Sam"))
+    assert desk_line(loop, reach) == "started a comic page Der Fährmann — Seite 6"

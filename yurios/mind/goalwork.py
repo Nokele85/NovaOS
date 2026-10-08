@@ -828,8 +828,10 @@ def desk_line(loop, reach: Reach) -> str:
     step's conclusion above the list being the reason it was worth reading.
     """
     args = reach.args or {}
+    # `title` for a comic page: "started a comic page" eleven times over told
+    # her nothing about which pages existed, and she drew page 1 seven times.
     target = str(args.get("path") or args.get("name") or args.get("query")
-                 or args.get("folder") or args.get("url") or "")
+                 or args.get("folder") or args.get("url") or args.get("title") or "")
     if reach.told and reach.verdict == "ok":
         said = trim(str(args.get("text") or ""), 300)
         return (f"told {loop.cfg.user_name}: “{said}” — queued, not sent yet; "
