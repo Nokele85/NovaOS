@@ -201,6 +201,12 @@ def test_a_panel_holds_only_the_figures_that_are_in_it():
     assert "No people" in prompt and "gaunt" not in prompt and "person" in leave_out
     prompt, leave_out = panel_prompt("ink", unknown, named, "")
     assert "No people" not in prompt and leave_out == ""
+    # black and white is said last and colour kept out — a picture that names
+    # "an orange cushion" is otherwise painted orange
+    for look in ("black and white ink", "schwarzweiß Tusche, keine Farbe", "monochrome"):
+        prompt, leave_out = panel_prompt(look, unknown, named, "")
+        assert prompt.endswith("no colour anywhere.") and "orange" in leave_out
+    assert "monochrome" not in panel_prompt("watercolour", unknown, named, "")[0].lower()
     # the older, one-line cast still goes into every panel
     assert "an old man" in panel_prompt("ink", unknown, {}, "an old man")[0]
 

@@ -1114,7 +1114,8 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   this page, and it needs no description — so she can be in her own comic and be recognisably her
   in every panel. A panel **MUST** be rendered from her `style` and her words alone, without the
   character's quality preamble (`ImageForge.panel`): that preamble names a look, and it was said
-  first. When her model can see (§35.1), each drawn panel **MUST** be shown to it with what she
+  first. A `style` that asks for black and white **MUST** also be said last and have colour
+  kept out of the panel: a `picture` that names an orange cushion is painted orange otherwise. When her model can see (§35.1), each drawn panel **MUST** be shown to it with what she
   wrote, and a panel it finds in clear contradiction **MUST** be drawn again with a new seed, at
   most `PANEL_REDRAWS` times and `PAGE_REDRAWS` per page; a check that fails or cannot answer
   keeps the panel. What is still refused after that **MUST** be named to her when the page lands,

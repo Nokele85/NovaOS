@@ -165,6 +165,15 @@ _LABEL = re.compile(r"(?:^|(?<=[.;])\s+)([^\s.:;,][^.:;,]{0,38}):\s+")
 _ARTICLE = re.compile(r"^(?:der|die|das|den|ein|eine|the|a|an)\s+", re.I)
 
 
+_MONO = re.compile(r"black.{0,5}white|monochrome|no colou?r|schwarz.?wei|ohne farbe|"
+                   r"keine farbe|s/w\b", re.I)
+#: Said last, and kept out, when the page's look is black and white: a picture
+#: that names "an orange and green cushion" is otherwise painted in orange and
+#: green, whatever the style line in front of it said.
+MONO_LAST = "Strictly monochrome: black ink on white only, no colour anywhere"
+MONO_NOT = "colour, color, colourful, coloured, tinted, orange, red, green, blue, yellow"
+
+
 def cast_of(cast) -> tuple[dict[str, str], str]:
     """Her cast as (named figures, plain description).
 
@@ -223,6 +232,9 @@ def panel_prompt(style: str, panel: dict, named: dict[str, str],
             leave_out = _NOT[len(figures)]
     elif plain:
         parts.append(plain)
+    if _MONO.search(style or ""):
+        parts.append(MONO_LAST)
+        leave_out = ", ".join(x for x in (leave_out, MONO_NOT) if x)
     return ". ".join(p.strip().rstrip(".") for p in parts if p and p.strip()) + ".", leave_out
 
 
