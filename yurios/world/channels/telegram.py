@@ -417,6 +417,11 @@ class TelegramChannel(Channel):
         data = resp.json()
         if not data.get("ok"):
             raise RuntimeError(f"telegram sendPhoto: {data.get('description')}")
+        # The same proof `_send_audio` logs: "did the page arrive?" could
+        # otherwise only be answered by asking the person holding the phone.
+        log.info("telegram: delivered %s (%.1f MB) as message %s", path.name,
+                 path.stat().st_size / 1e6,
+                 (data.get("result") or {}).get("message_id"))
 
     async def _send_audio(self, path: Path, caption: str) -> None:
         mime = "audio/mpeg" if path.suffix.lower() == ".mp3" else "audio/wav"

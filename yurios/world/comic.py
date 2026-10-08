@@ -171,7 +171,7 @@ def cast_of(cast) -> tuple[dict[str, str], str]:
     goes into every panel, which is what drew both men into all four panels of
     the first page."""
     if isinstance(cast, dict):
-        named = {str(k).strip(): " ".join(str(v or "").split())
+        named = {_ARTICLE.sub("", str(k).strip()): " ".join(str(v or "").split())
                  for k, v in cast.items() if str(k).strip()}
         return named, ""
     plain = " ".join(str(cast or "").split())

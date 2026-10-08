@@ -611,7 +611,15 @@ def build_server(*, max_minutes: float | None = None,
             takes several minutes and arrives in the chat by itself — never
             call it twice for one page, and do not describe the page as
             finished: it is not drawn yet."""
-            from ..comic import MAX_PANELS, MAX_TEXT, MIN_PANELS, SELF, cast_of, parse_layout
+            from ..comic import (
+                _ARTICLE,
+                MAX_PANELS,
+                MAX_TEXT,
+                MIN_PANELS,
+                SELF,
+                cast_of,
+                parse_layout,
+            )
             if not isinstance(panels, list) or not (
                     MIN_PANELS <= len(panels) <= MAX_PANELS):
                 raise ValueError(f"a page is {MIN_PANELS} to {MAX_PANELS} panels; "
@@ -642,6 +650,8 @@ def build_server(*, max_minutes: float | None = None,
                         '[] when nobody is in it, "me" for yourself. Every panel '
                         "needs it. Send the whole page again with who in each panel.")
                 if isinstance(who, list):
+                    # "Der Fährmann" for the cast's "Fährmann" is the same man
+                    who = [_ARTICLE.sub("", str(w).strip()) for w in who]
                     strangers = [str(w) for w in who
                                  if str(w).strip().casefold() not in known]
                     if strangers:
@@ -664,10 +674,16 @@ def build_server(*, max_minutes: float | None = None,
                     "avoid": avoid.strip() or None,
                     "panels": page,
                     "status": "started",
-                    "note": f"the page ({len(page)} panels) is being drawn NOW and "
-                            "is not finished: it arrives in the chat by itself in "
-                            "several minutes. Say that it is on its way — do not "
-                            "describe it as done, and do not call this again"}
+                    # Said as an order and not as news: twice she answered a
+                    # "started" by walking him through four finished panels,
+                    # five minutes before there was a page to look at.
+                    "note": f"STARTED, NOT DONE. The {len(page)} panels do not exist "
+                            "yet and you have not seen them. The page is drawn over "
+                            "the next minutes and arrives in the chat by itself. "
+                            "Answer now with ONE short sentence saying the page is "
+                            "being drawn and will come. Do NOT describe any panel, "
+                            "do NOT say what the page looks like, do NOT ask how it "
+                            "came out, do NOT call this again."}
 
     # --- her desk (SPEC §34.2) ------------------------------------------------
     # The only hands that write inside the Vault. Everything they can reach is

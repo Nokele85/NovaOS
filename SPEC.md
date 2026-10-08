@@ -1118,7 +1118,9 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   wrote, and a panel it finds in clear contradiction **MUST** be drawn again with a new seed, at
   most `PANEL_REDRAWS` times and `PAGE_REDRAWS` per page; a check that fails or cannot answer
   keeps the panel. What is still refused after that **MUST** be named to her when the page lands,
-  not passed off as finished. A `who` naming someone outside `cast`, a panel without a `picture`, a caption over the limit, or a panel
+  not passed off as finished. And because the page lands minutes after the call, the call's
+  result **MUST** say that nothing is drawn yet and that she is not to describe it: answered
+  with a plain "started", she walked him through four finished panels that did not exist. A `who` naming someone outside `cast`, a panel without a `picture`, a caption over the limit, or a panel
   count outside 2–6 **MUST** be refused with what to change. Asked for a comic with only
   `show_picture`, she rendered panel 1 and panel 2 nine times in twelve minutes and one frame
   arrived.

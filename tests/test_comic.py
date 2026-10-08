@@ -222,7 +222,13 @@ async def test_who_must_be_in_the_cast():
         data = json.loads(result_text(ok))
         assert data["cast"] == CAST
         assert [p.get("who") for p in data["panels"]] == [["Ferryman"], []]
-        assert "not finished" in data["note"]
+        assert "NOT DONE" in data["note"] and "Do NOT describe" in data["note"]
+        # "Der Fährmann" in who is the cast's "Ferryman"-style name with an article
+        art = await s.call_tool("draw_comic", {"cast": {"Der Fährmann": "alt"}, "panels": [
+            {"picture": "x", "who": ["der Fährmann"]}, {"picture": "y", "who": ["Fährmann"]}]})
+        assert not art.isError
+        assert [p["who"] for p in json.loads(result_text(art))["panels"]] == [
+            ["Fährmann"], ["Fährmann"]]
         bad = await s.call_tool("draw_comic", {"cast": CAST, "panels": [
             {"picture": "x", "who": ["Benni"]}, {"picture": "y", "who": []}]})
         assert bad.isError and "Ferryman, Stranger" in result_text(bad)
