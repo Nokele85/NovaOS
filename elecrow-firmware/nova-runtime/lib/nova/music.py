@@ -236,17 +236,17 @@ def _feed(out):
                 _feeder = None
                 _now["playing"] = False
     if data is None:
-        if _amb is None:
+        if _amb is None and not _fading:
             _finish()
             return
         data = _HUSH                    # no piece: the ambience alone
     try:
         size = len(data)
         level = _vol if _vol is not None else FIRST_VOLUME
-        if _amb is not None or level < 100:
+        if _amb is not None or _fading or level < 100:
             mixed = memoryview(_mix[_turn])[:size]
             _turn = (_turn + 1) % len(_mix)
-            if _amb is not None:
+            if _amb is not None or _fading:
                 mixed[:] = data
                 _amb_render(mixed, size // 2)
                 if level < 100:
@@ -258,6 +258,7 @@ def _feed(out):
     except Exception as e:
         _now["error"] = repr(e)
         _amb = None
+        _fading.clear()
         _finish()
 
 
@@ -427,45 +428,54 @@ def _mix_in(out, src, off: int, n: int, gain: int):
 #:   ("p", from hz, to hz, glide %, ring ms, gain, pause from, pause to (s * 10),
 #:        repeats, chime?)   single notes now and then (birds, drips, chimes)
 AIRS = {
-    "rain": (("n", 1, 60, 230, 230, 20), ("n", 0, 7, 350, 650, 30),
-             ("t", 3900, 32113, 900, 120)),
-    "drizzle": (("n", 1, 90, 110, 150, 30), ("t", 1300, 32000, 600, 150)),
-    "downpour": (("n", 1, 40, 520, 640, 20), ("n", 0, 10, 700, 1000, 20),
-                 ("t", 9000, 32000, 1100, 140)),
-    "thunder": (("t", 4, 32764, 4000, 3), ("t", 2, 32766, 4000, 2)),
-    "wind": (("n", 0, 5, 200, 1500, 25), ("n", 0, 18, 60, 520, 20), ("n", 1, 60, 30, 150, 20)),
-    "gale": (("n", 0, 8, 700, 2600, 15), ("n", 0, 26, 200, 900, 12), ("n", 1, 50, 60, 320, 15)),
-    "leaves": (("n", 1, 90, 40, 420, 15), ("n", 0, 40, 40, 300, 20)),
-    "fire": (("n", 0, 4, 500, 900, 20), ("t", 330, 32440, 2600, 200),
-             ("t", 1300, 31800, 500, 255)),
-    "embers": (("n", 0, 3, 300, 500, 30), ("t", 90, 32300, 1800, 220)),
-    "crickets": (("c", 4400, 9000, 250, 3, 300), ("c", 4750, 11500, 230, 3, 220),
-                 ("c", 4100, 14000, 270, 4, 180)),
-    "cicadas": (("c", 5200, 16000, 60, 120, 150), ("c", 4700, 23000, 70, 140, 110)),
-    "frogs": (("c", 620, 20000, 400, 4, 420), ("c", 480, 31000, 520, 3, 380),
-              ("c", 760, 44000, 330, 5, 260)),
-    "birds": (("p", 2400, 4600, 30, 70, 700, 5, 40, 4, 0), ("p", 1800, 3200, -20, 90, 500, 15, 70, 2, 0),
-              ("p", 3000, 5200, 12, 50, 420, 20, 90, 6, 0)),
-    "owl": (("p", 360, 420, -3, 260, 900, 60, 160, 2, 0),),
-    "stream": (("n", 0, 30, 300, 900, 4), ("n", 1, 90, 110, 140, 10), ("t", 2000, 32300, 500, 60)),
-    "waves": (("n", 0, 12, 80, 1600, 60), ("n", 1, 50, 20, 380, 60)),
-    "waterfall": (("n", 0, 25, 900, 1100, 20), ("n", 1, 60, 300, 360, 20)),
-    "drips": (("p", 900, 1700, 40, 45, 900, 8, 45, 1, 0), ("p", 600, 1100, 50, 60, 700, 20, 80, 1, 0)),
-    "chimes": (("p", 800, 2000, 0, 900, 650, 20, 90, 1, 1), ("p", 800, 2000, 0, 900, 500, 35, 120, 2, 1)),
-    "bells": (("p", 400, 900, 0, 1800, 700, 60, 200, 0, 1),),
-    "hum": (("n", 0, 2, 900, 1200, 40), ("c", 240, 16000, 8000, 1, 60)),
+    "rain": (("n", 1, 60, 200, 230, 40), ("n", 0, 7, 380, 520, 50),
+             ("t", 1700, 32113, 520, 120)),
+    "drizzle": (("n", 1, 90, 110, 140, 50), ("t", 600, 32000, 380, 150)),
+    "downpour": (("n", 1, 40, 500, 580, 40), ("n", 0, 10, 700, 880, 40),
+                 ("t", 4200, 32000, 700, 140)),
+    "thunder": (("t", 2, 32765, 3600, 3),),
+    "wind": (("n", 0, 5, 350, 900, 50), ("n", 0, 18, 90, 300, 40)),
+    "gale": (("n", 0, 8, 700, 1600, 35), ("n", 0, 26, 200, 600, 30), ("n", 1, 50, 60, 200, 30)),
+    "leaves": (("n", 1, 90, 60, 260, 35), ("n", 0, 40, 50, 180, 40)),
+    "fire": (("n", 0, 4, 520, 760, 40), ("t", 150, 32440, 1700, 200),
+             ("t", 420, 31800, 320, 255)),
+    "embers": (("n", 0, 3, 320, 460, 50), ("t", 50, 32300, 1300, 220)),
+    "crickets": (("c", 4186, 11000, 250, 3, 230), ("c", 4699, 17000, 230, 3, 150)),
+    "cicadas": (("c", 5274, 16000, 60, 120, 110),),
+    "frogs": (("c", 659, 34000, 400, 4, 300), ("c", 523, 52000, 520, 3, 260)),
+    "birds": (("p", 2093, 4186, 6, 80, 520, 30, 110, 2, 1), ("p", 1568, 3136, -5, 110, 380, 50, 160, 1, 1)),
+    "owl": (("p", 392, 392, -2, 280, 800, 90, 220, 1, 0),),
+    "stream": (("n", 0, 30, 380, 700, 8), ("n", 1, 90, 110, 130, 20), ("t", 900, 32300, 340, 60)),
+    "waves": (("n", 0, 12, 100, 1300, 70), ("n", 1, 50, 20, 300, 70)),
+    "waterfall": (("n", 0, 25, 900, 1040, 40), ("n", 1, 60, 300, 340, 40)),
+    "drips": (("p", 1047, 2093, 10, 50, 700, 15, 60, 0, 1),),
+    "chimes": (("p", 1047, 2093, 0, 1100, 520, 35, 120, 1, 1),),
+    "bells": (("p", 523, 1047, 0, 2000, 600, 80, 240, 0, 1),),
+    "hum": (("n", 0, 2, 900, 1100, 60),),
 }
-#: Names for mixtures that are asked for often.
+#: Names for mixtures that are asked for often. Two or three sounds, no more:
+#: a place is a ground (rain, wind, fire) and one thing living in it.
 PLACES = {
-    "night": "crickets+owl+wind", "forest": "leaves+birds+wind", "storm": "downpour+thunder+gale",
-    "campfire": "fire+crickets", "beach": "waves+wind", "jungle": "cicadas+frogs+birds+drizzle",
-    "pond": "frogs+crickets+stream", "cave": "drips+hum", "garden": "birds+chimes+leaves",
-    "hearth": "embers+rain", "meadow": "birds+crickets+wind", "temple": "bells+chimes+wind",
+    "night": "crickets+owl", "forest": "leaves+birds", "storm": "downpour+thunder+gale",
+    "campfire": "fire+crickets", "beach": "waves+wind", "jungle": "cicadas+frogs+drizzle",
+    "pond": "frogs+stream", "cave": "drips+hum", "garden": "birds+chimes",
+    "hearth": "embers+rain", "meadow": "birds+wind", "temple": "bells+wind",
 }
 MAX_AIRS = 8
-CHIME = (784, 880, 988, 1175, 1319, 1568, 1760, 1976)
-_amb = None
+#: Every sound with a pitch - a bird, a drip, a chime, a cricket - sings one of
+#: these five notes (C D E G A) in some octave. Thrown anywhere, they were a
+#: pile of noises beside the music; on one scale they belong to it, whatever
+#: white-key chord is sounding.
+SCALE = (261.63, 293.66, 329.63, 392.0, 440.0)
+#: A scene stays what it is until it is changed: the same rain goes on raining,
+#: only never drop for drop the same. When it is changed, the old one sinks
+#: away over FADE_S seconds while the new one rises - a place is left, not cut.
+FADE_S = 4
+_amb = None                     # [scene, layers, until, how much of it is there (0..256)]
+_fading = []                    # scenes on their way out
+_scratch = None
 _HUSH = bytes(SLICE * 2)
+_NOTHING = bytes(PAD_SLICE * 2)
 
 
 def ambiences():
@@ -630,14 +640,33 @@ def _amb_ping(out, n: int, tab, state):
 
 
 def _amb_render(buf, n):
-    """Lay the ambience into one slice (which may already hold music)."""
-    global _amb
-    amb = _amb
-    if amb[2] and time.ticks_diff(time.ticks_ms(), amb[2]) >= 0:
+    """Lay the ambience into one slice (which may already hold music): the
+    scene that is there, rising to its full level, and any that is leaving."""
+    global _amb, _scratch
+    if _scratch is None:
+        _scratch = memoryview(bytearray(PAD_SLICE * 2))
+    if _amb is not None and _amb[2] and time.ticks_diff(time.ticks_ms(), _amb[2]) >= 0:
+        _fading.append(_amb)                    # its time is up: it fades too
         _amb = None
-        return
+    step = max(1, n * 256 // (FADE_S * RATE))
+    nothing = memoryview(_NOTHING)
+    for entry in ([_amb] if _amb is not None else []) + list(_fading):
+        if entry is _amb:
+            entry[3] = min(256, entry[3] + step)
+        else:
+            entry[3] -= step
+            if entry[3] <= 0:
+                _fading.remove(entry)
+                continue
+        part = _scratch[:n * 2]
+        part[:] = nothing[:n * 2]
+        _amb_layers(part, n, entry[1])
+        _mix_in(buf, part, 0, n, entry[3])
+
+
+def _amb_layers(buf, n, layers):
     tab = _table()
-    for layer in amb[1]:
+    for layer in layers:
         kind, st = layer[0], layer[1]
         if kind == 0:
             if layer[2] != layer[3]:            # its loudness drifts to a new mood
@@ -645,7 +674,7 @@ def _amb_render(buf, n):
                 if layer[5] <= 0:
                     layer[4] = layer[2] + _rnd(layer[3] - layer[2] + 1)
                     layer[5] = layer[6] * (RATE // 20) + _rnd(layer[6] * (RATE // 10))
-                st[5] = st[4] + (layer[4] - st[4]) * min(n, 4000) // 12000
+                st[5] = st[4] + (layer[4] - st[4]) * min(n, 4000) // 40000    # slowly
             _amb_noise(buf, n, st)
         elif kind == 1:
             _amb_ticks(buf, n, st)
@@ -663,9 +692,12 @@ def _amb_render(buf, n):
                 else:
                     layer[4] = _rnd(spec[8] + 1)
                     layer[3] = (spec[6] + _rnd(spec[7] - spec[6] + 1)) * (RATE // 10)
-                hz = CHIME[_rnd(len(CHIME))] if spec[9] else spec[1] + _rnd(spec[2] - spec[1] + 1)
-                if spec[9] and spec[2] < 1000:
-                    hz //= 2
+                hz = spec[1] + _rnd(spec[2] - spec[1] + 1)
+                if spec[9]:                     # onto the scale, in its own octave
+                    note = SCALE[_rnd(len(SCALE))]
+                    while note * 2 <= hz:
+                        note *= 2
+                    hz = note
                 ring = spec[4] * (RATE // 1000)
                 st[0] = 0
                 st[1] = int(hz / RATE * (1 << 30))
@@ -676,17 +708,20 @@ def _amb_render(buf, n):
             _amb_ping(buf, n, tab, st)
 
 
-def ambience(scene="rain", level=50, minutes=0):
+def ambience(scene="rain", level=35, minutes=0):
     """The air around the music: rain, wind, a fire, crickets ... made here and
     never twice the same. It runs on its own - with a piece playing over it or
-    with nothing at all - until ambience("off"), or for `minutes`. `scene` is
+    with nothing at all - and stays the same scene until ambience("off"), another
+    scene, or `minutes` are over; a change fades over a few seconds. `scene` is
     one of ambiences(), or several mixed with +, "rain+fire+owl"; places like
     "forest", "night", "storm", "campfire" are mixtures with a name. `level`
-    is 0..100, how loud it is beside the music (50 when left out); the knob
+    is 0..100, how loud it is beside the music (35 when left out); the knob
     turns both. Returns status()."""
     global _amb
     if not scene or scene in ("off", "none", "stop"):
-        _amb = None                             # the speaker's next request ends it
+        if _amb is not None:
+            _fading.append(_amb)                # it sinks away, it is not cut
+            _amb = None
         return status()
     wanted = []
     for name in str(scene).replace(" ", "").lower().split("+"):
@@ -716,7 +751,10 @@ def ambience(scene="rain", level=50, minutes=0):
             else:
                 layers.append([3, array("i", [0, 0, 0, 0, 32000, spec[5] * share // 50, 0]),
                                spec, _rnd(spec[7] * (RATE // 10)) + RATE // 4, 0])
-    _amb = ("+".join(wanted), layers, _until(minutes))
+    if _amb is not None:
+        _fading.clear()                         # one scene leaving at a time is enough
+        _fading.append(_amb)
+    _amb = ["+".join(wanted), layers, _until(minutes), 0]
     _open()
     return status()
 

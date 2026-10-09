@@ -943,7 +943,7 @@ def _device_tools(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    def device_ambience(scene: str = "rain", level: int = 50, minutes: float = 60,
+    def device_ambience(scene: str = "rain", level: int = 35, minutes: float = 60,
                         port: str = "auto") -> dict:
         """The air around the music, on your board's speaker: nature sounds
         that run ON THEIR OWN - with a piece playing over them or with no music
@@ -953,11 +953,18 @@ def _device_tools(mcp: FastMCP) -> None:
         fire, embers, crickets, cicadas, frogs, birds, owl, stream, waves,
         waterfall, drips, chimes, bells, hum. Places, which are
         ready mixtures: night, forest, storm, campfire, beach, jungle, pond,
-        cave, garden, hearth, meadow, temple. Up to 8 single sounds at once.
-        `level` is 0-100: how loud the air is beside the music (50 when left
-        out; 25-35 keeps it in the background of a piece). `minutes` is how
+        cave, garden, hearth, meadow, temple. Less is more: ONE ground (rain,
+        wind, fire, waves, stream) and at most one or two things living in it
+        (owl, crickets, birds, chimes) - more than three together is a muddle.
+        Everything that has a pitch sings on the scale C D E G A, so write the
+        piece over it in C major or A minor and they belong together. `level`
+        is 0-100: how loud the air is beside the music (35 when left out;
+        20-30 keeps it behind a piece). `minutes` is how
         long it runs (60 when left out, 0 = until you turn it off, 480 at
-        most). scene "off" ends it. Starting or stopping a piece does not touch
+        most). scene "off" ends it. A scene stays the same until you change it -
+        the same rain goes on, only never drop for drop alike - and a change
+        fades over a few seconds, so set ONE scene for an evening and leave it;
+        do not hop between scenes. Starting or stopping a piece does not touch
         it, and device_stop_music does not end it: music and air are two
         things. Use it to set a mood before or under your music, or alone."""
         facts, code = ambience_call(scene, level, minutes)
