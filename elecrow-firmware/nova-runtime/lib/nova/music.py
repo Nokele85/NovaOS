@@ -590,7 +590,7 @@ ERHU_LOW, ERHU_HIGH = 260.0, 1200.0
 #: whatever note is bowed: (centre in Hz, width in Hz, strength). A fixed mix
 #: of overtones moved these with every note, and that is an organ, not a
 #: fiddle.
-ERHU_BOX = ((950.0, 350.0, 1.6), (2700.0, 500.0, 0.9))
+ERHU_BOX = ((1200.0, 280.0, 2.6), (2900.0, 500.0, 0.8))
 
 
 def _erhu_wave(freq):
@@ -600,7 +600,7 @@ def _erhu_wave(freq):
     h = 1
     while h * freq < 5000 and h <= 16:
         hz = h * freq
-        weight = 0.3
+        weight = 0.14
         for centre, width, strength in ERHU_BOX:
             weight += strength / (1 + ((hz - centre) / width) ** 2)
         parts.append((h, weight / h))
@@ -715,8 +715,8 @@ def _erhu_slices(notes, tempo, loop, until):
                 state[1] = goal - goal // (14 + _rnd(10))
             state[4] = top * (70 + _rnd(31)) // 100
             state[6] = 0
-            state[7] = 5600 + _rnd(1100)
-            state[8] = 900 + _rnd(600)              # a wide, singing vibrato
+            state[7] = 5900 + _rnd(1300)            # 5.6 to 6.9 times a second and
+            state[8] = 1100 + _rnd(800)             # 60 to 100 cents wide: measured
             state[9] = 11 if _rnd(3) == 0 else 10   # now and then a long slide
             for j in range(slices):
                 if j == slices - 1 and slices > 2:      # the bow turning
