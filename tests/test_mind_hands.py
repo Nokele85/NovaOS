@@ -1014,7 +1014,7 @@ def test_her_board_is_described_as_a_computer_she_writes_on():
     # the owner's two additions of the same day (SPEC §26.1) …
     for added in ("device_exec", "device_set_autostart", "device_api",
                   "device_play_music", "device_play_pad", "device_play_harp",
-                  "device_play_erhu", "device_play_keys",
+                  "device_play_erhu", "device_play_keys", "device_ambience",
                   "device_stop_music"):
         assert HANDS[added].klass == "cheap", added
     # … and the boundary that stays where it is

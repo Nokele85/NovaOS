@@ -262,3 +262,27 @@ def test_an_instrument_pack_is_cut_from_a_soundfont(tmp_path):
     (zone,) = json.loads(head)["zones"]
     assert zone["hz"] == 440.0 and len(pcm) == zone["n"] * 2
     assert zone["loop"] and zone["loop"][1] == zone["n"]       # it ends where its loop does
+
+
+def test_the_air_around_the_music_is_a_call_of_its_own():
+    import re
+
+    import elecrow_mcp_server as server
+    facts, code = server.ambience_call(" Rain + fire ", 40, 30)
+    assert facts == {"scene": "rain+fire", "level": 40, "minutes": 30.0}
+    assert "music.ambience('rain+fire', level=40" in code
+    compile(code, "<ambience>", "exec")
+    assert server.ambience_call("off", 50, 0)[0] == {"scene": "off"}
+    bad = server.ambience_call("rain+traffic", 50, 0)[0]
+    assert bad["status"] == "bad_scene" and "crickets" in bad["error"] and "forest" in bad["error"]
+    assert server.ambience_call("storm", 500, 9999)[0] == {"scene": "storm", "level": 100,
+                                                           "minutes": 480.0}
+    # the names the tool offers are the names the board has
+    source = (LIB / "music.py").read_text(encoding="utf-8")
+    airs = source[source.index("AIRS = {"):source.index("PLACES = {")]
+    places = source[source.index("PLACES = {"):source.index("MAX_AIRS")]
+    assert set(re.findall(r'^    "(\w+)": \(', airs, re.M)) == set(server.AMBIENCES)
+    assert set(re.findall(r'"(\w+)": "', places)) == set(server.PLACES)
+    for mix in re.findall(r': "([\w+]+)"', places):
+        assert set(mix.split("+")) <= set(server.AMBIENCES), mix
+    assert "ambience(scene" in elecrow_api.api_card(API, "music")

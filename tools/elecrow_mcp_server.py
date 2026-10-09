@@ -223,6 +223,32 @@ def keys_call(score: str, instrument: str, style: str, tempo: int, volume: float
             "seconds_per_pass": round(reader.seconds(chords, int(tempo)), 1)}, code
 
 
+#: The sounds of the air `nova.music` makes (its AIRS and PLACES).
+AMBIENCES = ("rain", "drizzle", "downpour", "thunder", "wind", "gale", "leaves", "fire",
+             "embers", "crickets", "cicadas", "frogs", "birds", "owl", "stream", "waves",
+             "waterfall", "drips", "chimes", "bells", "hum")
+PLACES = ("night", "forest", "storm", "campfire", "beach", "jungle", "pond", "cave",
+          "garden", "hearth", "meadow", "temple")
+
+
+def ambience_call(scene: str, level: int, minutes: float) -> tuple[dict | None, str]:
+    """(refusal, code) for the air around the music — `music.ambience`."""
+    scene = "+".join(n for n in str(scene).replace(" ", "").lower().split("+") if n)
+    if scene in ("", "off", "none", "stop"):
+        return {"scene": "off"}, ("import json\nfrom nova import music\n"
+                                  "print(json.dumps(music.ambience('off')))\n")
+    unknown = [n for n in scene.split("+") if n not in AMBIENCES and n not in PLACES]
+    if unknown:
+        return {"ok": False, "status": "bad_scene",
+                "error": f"there is no ambience {unknown[0]!r}; single sounds: "
+                         + ", ".join(AMBIENCES) + "; places: " + ", ".join(PLACES)}, ""
+    level = max(0, min(100, int(level)))
+    minutes = max(0.0, min(480.0, float(minutes)))
+    code = ("import json\nfrom nova import music\n"
+            f"print(json.dumps(music.ambience({scene!r}, level={level}, minutes={minutes!r})))\n")
+    return {"scene": scene, "level": level, "minutes": minutes}, code
+
+
 def _check(files: dict) -> list[str]:
     """What would fail when this app runs; [] when nothing was found or nothing can be checked."""
     api = _api()
@@ -917,8 +943,38 @@ def _device_tools(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
+    def device_ambience(scene: str = "rain", level: int = 50, minutes: float = 60,
+                        port: str = "auto") -> dict:
+        """The air around the music, on your board's speaker: nature sounds
+        that run ON THEIR OWN - with a piece playing over them or with no music
+        at all - and are made new every moment, never a loop. `scene` is one
+        sound or several mixed with +, like "rain+fire" or "wind+owl+crickets".
+        Single sounds: rain, drizzle, downpour, thunder, wind, gale, leaves,
+        fire, embers, crickets, cicadas, frogs, birds, owl, stream, waves,
+        waterfall, drips, chimes, bells, hum. Places, which are
+        ready mixtures: night, forest, storm, campfire, beach, jungle, pond,
+        cave, garden, hearth, meadow, temple. Up to 8 single sounds at once.
+        `level` is 0-100: how loud the air is beside the music (50 when left
+        out; 25-35 keeps it in the background of a piece). `minutes` is how
+        long it runs (60 when left out, 0 = until you turn it off, 480 at
+        most). scene "off" ends it. Starting or stopping a piece does not touch
+        it, and device_stop_music does not end it: music and air are two
+        things. Use it to set a mood before or under your music, or alone."""
+        facts, code = ambience_call(scene, level, minutes)
+        if not code:
+            return facts
+        result = _json_out(_device_call(port, [code], timeout=15))
+        if result.get("ok"):
+            result.update(facts)
+            result["note"] = ("The ambience is off." if facts["scene"] == "off" else
+                              f"The air is running on the board now ({facts['scene']}). It keeps "
+                              "running under any piece you play; device_ambience scene=\"off\" ends it.")
+        return result
+
+    @mcp.tool()
     def device_stop_music(port: str = "auto") -> dict:
-        """Stop the music playing on your board's speaker."""
+        """Stop the piece playing on your board's speaker. An ambience
+        (device_ambience) keeps running; scene "off" there ends that."""
         code = ("import json\nfrom nova import music\n"
                 "music.stop()\nprint(json.dumps(music.status()))\n")
         return _json_out(_device_call(port, [code], timeout=8))

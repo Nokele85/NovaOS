@@ -97,9 +97,11 @@ _SILENCE = bytes(960)                   # 30 ms at RATE
 
 def status():
     """What is playing right now: {"playing", "title", "loop", "loops", "notes",
-    "error", "volume"} - volume is the knob, in percent."""
+    "error", "volume", "ambience"} - volume is the knob, in percent; ambience
+    is the air that is running beside the piece, or None."""
     now = dict(_now)
     now["volume"] = volume()
+    now["ambience"] = _amb[0] if _amb is not None else None
     return now
 
 
@@ -193,64 +195,101 @@ def _finish():
 
 
 def stop(wait_ms=900):
-    """End the piece that is playing. True once the speaker is silent."""
-    global _stop
+    """End the piece that is playing. The ambience, if there is one, goes on -
+    ambience("off") ends that. True once the piece is silent."""
+    global _stop, _feeder
+    if _feeder is None and not _now["playing"]:
+        return True
     _stop = True
     start = time.ticks_ms()
     while _now["playing"] and time.ticks_diff(time.ticks_ms(), start) < wait_ms:
         time.sleep_ms(20)               # the speaker's next request ends it
-    if _now["playing"]:
-        _finish()                       # ...and if none came, end it here
-    return not _now["playing"]
+    if _now["playing"] or _feeder is not None:
+        _feeder = None                  # ...and if none came, end it here
+        _now["playing"] = False
+        if _amb is None:
+            _finish()
+    _stop = False
+    return True
 
 
 def _feed(out):
-    # Called by the speaker when it has taken the last slice.
-    if _stop or out is not _out:
-        if out is _out:
-            _finish()
+    # Called by the speaker when it has taken the last slice: the next slice of
+    # the piece, the ambience laid under it, the knob on the way out.
+    global _turn, _feeder, _stop, _amb
+    if out is not _out:
         return
-    global _turn
+    data = None
+    if _feeder is not None:
+        if _stop:
+            _feeder = None
+            _now["playing"] = False
+            _stop = False
+        else:
+            try:
+                data = next(_feeder)
+            except StopIteration:
+                _feeder = None
+                _now["playing"] = False
+            except Exception as e:      # never die without a word
+                _now["error"] = repr(e)
+                _feeder = None
+                _now["playing"] = False
+    if data is None:
+        if _amb is None:
+            _finish()
+            return
+        data = _HUSH                    # no piece: the ambience alone
     try:
-        data = next(_feeder)
+        size = len(data)
         level = _vol if _vol is not None else FIRST_VOLUME
-        if level < 100:                         # the knob, on the way out
-            size = len(data)
-            quieter = memoryview(_mix[_turn])[:size]
+        if _amb is not None or level < 100:
+            mixed = memoryview(_mix[_turn])[:size]
             _turn = (_turn + 1) % len(_mix)
-            _scale(data, quieter, size // 2, level)
-            data = quieter
+            if _amb is not None:
+                mixed[:] = data
+                _amb_render(mixed, size // 2)
+                if level < 100:
+                    _scale(mixed, mixed, size // 2, level)
+            else:
+                _scale(data, mixed, size // 2, level)
+            data = mixed
         out.write(data)
-    except StopIteration:
-        _finish()
-    except Exception as e:                  # never die without a word
+    except Exception as e:
         _now["error"] = repr(e)
+        _amb = None
         _finish()
 
 
-def _start(feeder, rate):
-    global _stop, _out, _feeder
-    from machine import I2S, Pin
-
-    import nova
-    global _mix
-    _stop = False
-    _feeder = feeder
+def _open():
+    global _out, _mix
     if _mix is None:
         _mix = [bytearray(PAD_SLICE * 2) for _ in range(3)]
     try:
         knob()
-    except Exception:                       # no button is no reason for no music
+    except Exception:                   # no button is no reason for no music
         pass
+    if _out is not None:
+        return
+    from machine import I2S, Pin
+
+    import nova
     try:
         _out = I2S(0, sck=Pin(B.SPK_BCK), ws=Pin(B.SPK_WS), sd=Pin(B.SPK_DATA),
-                   mode=I2S.TX, bits=16, format=I2S.MONO, rate=rate, ibuf=8192)
+                   mode=I2S.TX, bits=16, format=I2S.MONO, rate=RATE, ibuf=8192)
         _out.irq(_feed)
         nova.io().mute(False)
-        _out.write(_SILENCE)                # the first slice starts the asking
+        _out.write(_SILENCE)            # the first slice starts the asking
     except Exception:
         _finish()
         raise
+
+
+def _start(feeder, rate):
+    global _stop, _feeder
+    _stop = False
+    _feeder = feeder
+    _open()
 
 
 _TAB = None
@@ -373,6 +412,313 @@ def _mix_in(out, src, off: int, n: int, gain: int):
             y = -32767
         o[i] = y & 0xFFFF
         i += 1
+
+
+# ---- the air around the music ---------------------------------------------------------
+
+#: Rain, wind, a fire, crickets: none of these is a recording. They are what
+#: they are in nature - noise, shaped - and so they are made here, endlessly
+#: and never twice the same, out of four small machines:
+#:   ("n", high?, smoothing, gain from, gain to, seconds between moods * 10)
+#:        coloured noise whose loudness drifts between two levels (wind, surf)
+#:   ("t", chance, keep, gain, smoothing)   random ticks that die away (drops,
+#:        crackle, thunder: one a second is chance 65)
+#:   ("c", hertz, period, pulse, pulses, gain)   a pulsed tone (crickets, frogs)
+#:   ("p", from hz, to hz, glide %, ring ms, gain, pause from, pause to (s * 10),
+#:        repeats, chime?)   single notes now and then (birds, drips, chimes)
+AIRS = {
+    "rain": (("n", 1, 60, 230, 230, 20), ("n", 0, 7, 350, 650, 30),
+             ("t", 3900, 32113, 900, 120)),
+    "drizzle": (("n", 1, 90, 110, 150, 30), ("t", 1300, 32000, 600, 150)),
+    "downpour": (("n", 1, 40, 520, 640, 20), ("n", 0, 10, 700, 1000, 20),
+                 ("t", 9000, 32000, 1100, 140)),
+    "thunder": (("t", 4, 32764, 4000, 3), ("t", 2, 32766, 4000, 2)),
+    "wind": (("n", 0, 5, 200, 1500, 25), ("n", 0, 18, 60, 520, 20), ("n", 1, 60, 30, 150, 20)),
+    "gale": (("n", 0, 8, 700, 2600, 15), ("n", 0, 26, 200, 900, 12), ("n", 1, 50, 60, 320, 15)),
+    "leaves": (("n", 1, 90, 40, 420, 15), ("n", 0, 40, 40, 300, 20)),
+    "fire": (("n", 0, 4, 500, 900, 20), ("t", 330, 32440, 2600, 200),
+             ("t", 1300, 31800, 500, 255)),
+    "embers": (("n", 0, 3, 300, 500, 30), ("t", 90, 32300, 1800, 220)),
+    "crickets": (("c", 4400, 9000, 250, 3, 300), ("c", 4750, 11500, 230, 3, 220),
+                 ("c", 4100, 14000, 270, 4, 180)),
+    "cicadas": (("c", 5200, 16000, 60, 120, 150), ("c", 4700, 23000, 70, 140, 110)),
+    "frogs": (("c", 620, 20000, 400, 4, 420), ("c", 480, 31000, 520, 3, 380),
+              ("c", 760, 44000, 330, 5, 260)),
+    "birds": (("p", 2400, 4600, 30, 70, 700, 5, 40, 4, 0), ("p", 1800, 3200, -20, 90, 500, 15, 70, 2, 0),
+              ("p", 3000, 5200, 12, 50, 420, 20, 90, 6, 0)),
+    "owl": (("p", 360, 420, -3, 260, 900, 60, 160, 2, 0),),
+    "stream": (("n", 0, 30, 300, 900, 4), ("n", 1, 90, 110, 140, 10), ("t", 2000, 32300, 500, 60)),
+    "waves": (("n", 0, 12, 80, 1600, 60), ("n", 1, 50, 20, 380, 60)),
+    "waterfall": (("n", 0, 25, 900, 1100, 20), ("n", 1, 60, 300, 360, 20)),
+    "drips": (("p", 900, 1700, 40, 45, 900, 8, 45, 1, 0), ("p", 600, 1100, 50, 60, 700, 20, 80, 1, 0)),
+    "chimes": (("p", 800, 2000, 0, 900, 650, 20, 90, 1, 1), ("p", 800, 2000, 0, 900, 500, 35, 120, 2, 1)),
+    "bells": (("p", 400, 900, 0, 1800, 700, 60, 200, 0, 1),),
+    "hum": (("n", 0, 2, 900, 1200, 40), ("c", 240, 16000, 8000, 1, 60)),
+}
+#: Names for mixtures that are asked for often.
+PLACES = {
+    "night": "crickets+owl+wind", "forest": "leaves+birds+wind", "storm": "downpour+thunder+gale",
+    "campfire": "fire+crickets", "beach": "waves+wind", "jungle": "cicadas+frogs+birds+drizzle",
+    "pond": "frogs+crickets+stream", "cave": "drips+hum", "garden": "birds+chimes+leaves",
+    "hearth": "embers+rain", "meadow": "birds+crickets+wind", "temple": "bells+chimes+wind",
+}
+MAX_AIRS = 8
+CHIME = (784, 880, 988, 1175, 1319, 1568, 1760, 1976)
+_amb = None
+_HUSH = bytes(SLICE * 2)
+
+
+def ambiences():
+    """Every sound of the air there is: the single ones, then the mixed places."""
+    return sorted(AIRS) + sorted(PLACES)
+
+
+@micropython.viper
+def _amb_noise(out, n: int, state):
+    # 0 seed, 1 the smoothed value, 2 smoothing, 3 high (1) or low (0), 4 gain
+    # now, 5 gain at the slice's end
+    o = ptr16(out)
+    st = ptr32(state)
+    seed = int(st[0])
+    lp = int(st[1])
+    a = int(st[2])
+    high = int(st[3])
+    g0 = int(st[4])
+    g1 = int(st[5])
+    i = 0
+    while i < n:
+        seed = seed * 214013 + 2531011
+        w = ((seed >> 15) & 0xFFFF) - 32768
+        lp += ((w - lp) * a) >> 8
+        x = lp
+        if high:
+            x = w - lp
+        y = int(o[i])
+        if y >= 32768:
+            y -= 65536
+        y += (x * (g0 + ((g1 - g0) * i) // n)) >> 12
+        if y > 32767:
+            y = 32767
+        elif y < -32767:
+            y = -32767
+        o[i] = y & 0xFFFF
+        i += 1
+    st[0] = seed
+    st[1] = lp
+    st[4] = g1
+
+
+@micropython.viper
+def _amb_ticks(out, n: int, state):
+    # 0 seed, 1 how loud the last tick still is, 2 chance of a new one, 3 how
+    # much of it is kept each sample, 4 gain, 5 the smoothed value, 6 smoothing
+    o = ptr16(out)
+    st = ptr32(state)
+    seed = int(st[0])
+    env = int(st[1])
+    chance = int(st[2])
+    keep = int(st[3])
+    gain = int(st[4])
+    lp = int(st[5])
+    a = int(st[6])
+    i = 0
+    while i < n:
+        seed = seed * 214013 + 2531011
+        if ((seed >> 11) & 0xFFFFF) < chance:
+            env = 12000 + ((seed >> 4) & 0x3FFF)
+        w = ((seed >> 15) & 0xFFFF) - 32768
+        lp += ((w - lp) * a) >> 8
+        if env > 4:
+            y = int(o[i])
+            if y >= 32768:
+                y -= 65536
+            y += (((lp * env) >> 15) * gain) >> 12
+            if y > 32767:
+                y = 32767
+            elif y < -32767:
+                y = -32767
+            o[i] = y & 0xFFFF
+            env = (env * keep) >> 15
+        i += 1
+    st[0] = seed
+    st[1] = env
+    st[5] = lp
+
+
+@micropython.viper
+def _amb_chirp(out, n: int, tab, state):
+    # 0 phase, 1 step, 2 where in its period, 3 the period, 4 one pulse,
+    # 5 how many pulses, 6 gain
+    o = ptr16(out)
+    t = ptr16(tab)
+    st = ptr32(state)
+    phase = int(st[0])
+    step = int(st[1])
+    at = int(st[2])
+    period = int(st[3])
+    pulse = int(st[4])
+    sounding = pulse * 2 * int(st[5])
+    gain = int(st[6])
+    i = 0
+    while i < n:
+        if at < sounding and ((at // pulse) & 1) == 0:
+            phase = (phase + step) & 0x3FFFFFFF
+            s = int(t[(phase >> 18) & 4095])
+            if s >= 32768:
+                s -= 65536
+            edge = at % pulse
+            if edge > pulse - edge:
+                edge = pulse - edge
+            y = int(o[i])
+            if y >= 32768:
+                y -= 65536
+            y += (((s * edge * 2) // pulse) * gain) >> 12
+            if y > 32767:
+                y = 32767
+            elif y < -32767:
+                y = -32767
+            o[i] = y & 0xFFFF
+        at += 1
+        if at >= period:
+            at = 0
+        i += 1
+    st[0] = phase
+    st[2] = at
+
+
+@micropython.viper
+def _amb_ping(out, n: int, tab, state):
+    # one note ringing out: 0 phase, 1 step, 2 how the step slides, 3 how loud
+    # it still is, 4 how much is kept each sample, 5 gain, 6 samples of its
+    # soft beginning left
+    o = ptr16(out)
+    t = ptr16(tab)
+    st = ptr32(state)
+    phase = int(st[0])
+    step = int(st[1])
+    slide = int(st[2])
+    env = int(st[3])
+    keep = int(st[4])
+    gain = int(st[5])
+    rise = int(st[6])
+    i = 0
+    while i < n and env > 8:
+        phase = (phase + step) & 0x3FFFFFFF
+        step += slide
+        s = int(t[(phase >> 18) & 4095])
+        if s >= 32768:
+            s -= 65536
+        x = (s * env) >> 15
+        if rise > 0:
+            x = (x * (160 - rise)) // 160
+            rise -= 1
+        y = int(o[i])
+        if y >= 32768:
+            y -= 65536
+        y += (x * gain) >> 12
+        if y > 32767:
+            y = 32767
+        elif y < -32767:
+            y = -32767
+        o[i] = y & 0xFFFF
+        env = (env * keep) >> 15
+        i += 1
+    st[0] = phase
+    st[1] = step
+    st[3] = env
+    st[6] = rise
+
+
+def _amb_render(buf, n):
+    """Lay the ambience into one slice (which may already hold music)."""
+    global _amb
+    amb = _amb
+    if amb[2] and time.ticks_diff(time.ticks_ms(), amb[2]) >= 0:
+        _amb = None
+        return
+    tab = _table()
+    for layer in amb[1]:
+        kind, st = layer[0], layer[1]
+        if kind == 0:
+            if layer[2] != layer[3]:            # its loudness drifts to a new mood
+                layer[5] -= n
+                if layer[5] <= 0:
+                    layer[4] = layer[2] + _rnd(layer[3] - layer[2] + 1)
+                    layer[5] = layer[6] * (RATE // 20) + _rnd(layer[6] * (RATE // 10))
+                st[5] = st[4] + (layer[4] - st[4]) * min(n, 4000) // 12000
+            _amb_noise(buf, n, st)
+        elif kind == 1:
+            _amb_ticks(buf, n, st)
+        elif kind == 2:
+            if st[2] < n:                       # the next call a little sooner or later
+                st[3] = layer[2] + _rnd(layer[2] // 3)
+            _amb_chirp(buf, n, tab, st)
+        else:
+            spec = layer[2]
+            layer[3] -= n
+            if layer[3] <= 0:
+                if layer[4] > 0:                # a quick repeat, as birds do
+                    layer[4] -= 1
+                    layer[3] = RATE // 8 + _rnd(RATE // 10)
+                else:
+                    layer[4] = _rnd(spec[8] + 1)
+                    layer[3] = (spec[6] + _rnd(spec[7] - spec[6] + 1)) * (RATE // 10)
+                hz = CHIME[_rnd(len(CHIME))] if spec[9] else spec[1] + _rnd(spec[2] - spec[1] + 1)
+                if spec[9] and spec[2] < 1000:
+                    hz //= 2
+                ring = spec[4] * (RATE // 1000)
+                st[0] = 0
+                st[1] = int(hz / RATE * (1 << 30))
+                st[2] = st[1] * spec[3] // 100 // ring
+                st[3] = 20000 + _rnd(12000)
+                st[4] = 32768 - 32768 // ring
+                st[6] = 160
+            _amb_ping(buf, n, tab, st)
+
+
+def ambience(scene="rain", level=50, minutes=0):
+    """The air around the music: rain, wind, a fire, crickets ... made here and
+    never twice the same. It runs on its own - with a piece playing over it or
+    with nothing at all - until ambience("off"), or for `minutes`. `scene` is
+    one of ambiences(), or several mixed with +, "rain+fire+owl"; places like
+    "forest", "night", "storm", "campfire" are mixtures with a name. `level`
+    is 0..100, how loud it is beside the music (50 when left out); the knob
+    turns both. Returns status()."""
+    global _amb
+    if not scene or scene in ("off", "none", "stop"):
+        _amb = None                             # the speaker's next request ends it
+        return status()
+    wanted = []
+    for name in str(scene).replace(" ", "").lower().split("+"):
+        for part in PLACES.get(name, name).split("+"):
+            if part and part not in AIRS:
+                raise ValueError("no ambience %r - there is: %s" % (part, ", ".join(ambiences())))
+            if part and part not in wanted:
+                wanted.append(part)
+    if not wanted or len(wanted) > MAX_AIRS:
+        raise ValueError("one to %d sounds at once, joined by +" % MAX_AIRS)
+    share = max(0, min(100, int(level)))
+    layers = []
+    for name in wanted:
+        for spec in AIRS[name]:
+            seed = random.getrandbits(30)
+            if spec[0] == "n":
+                low, high = spec[3] * share // 50, spec[4] * share // 50
+                layers.append([0, array("i", [seed, 0, spec[2], spec[1], low, low]),
+                               low, high, low, 0, spec[5]])
+            elif spec[0] == "t":
+                layers.append([1, array("i", [seed, 0, spec[1], spec[2],
+                                              spec[3] * share // 50, 0, spec[4]])])
+            elif spec[0] == "c":
+                layers.append([2, array("i", [0, int(spec[1] / RATE * (1 << 30)), _rnd(spec[2]),
+                                              spec[2], spec[3], spec[4], spec[5] * share // 50]),
+                               spec[2]])
+            else:
+                layers.append([3, array("i", [0, 0, 0, 0, 32000, spec[5] * share // 50, 0]),
+                               spec, _rnd(spec[7] * (RATE // 10)) + RATE // 4, 0])
+    _amb = ("+".join(wanted), layers, _until(minutes))
+    _open()
+    return status()
 
 
 def _until(minutes):

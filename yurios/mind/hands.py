@@ -246,6 +246,10 @@ HANDS: dict[str, Hand] = {
         "broken into notes a different way each time",
         '{"score": "A3+E4+C5:8 F3+C4+A4:8 C4+G4+E5:8 G3+D4+B4:8", "tempo": 60, '
         '"minutes": 10, "title": "..."}'),
+    "device_ambience": Hand(
+        "cheap", "let nature sounds run on her board - rain, wind, fire, crickets, "
+        "birds, waves and more, mixed freely - alone or under her music",
+        '{"scene": "rain+fire", "level": 40, "minutes": 60}'),
     "device_play_keys": Hand(
         "cheap", "play chords she composed on a recorded instrument on her board "
         "(pads, choir, strings, harp, vibraphone, music box) - the best sound it has",
