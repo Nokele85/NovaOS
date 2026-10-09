@@ -585,30 +585,39 @@ def harp(score, tempo=60, volume=None, loop=True, minutes=10, title=""):
 #: is drawn sample by sample - the bow biting in, the pitch sliding from note
 #: to note instead of jumping, and a vibrato that only sets in once a note is
 #: held, never twice at the same speed or depth.
-ERHU_PARTS = (1.0, 0.8, 0.72, 0.45, 0.5, 0.3, 0.26, 0.16, 0.14, 0.09, 0.07, 0.05)
-ERHU_LOW, ERHU_HIGH = 260.0, 1600.0
-_ERHU = None
+ERHU_LOW, ERHU_HIGH = 260.0, 1200.0
+#: The sound box - a small drum of snakeskin - rings at the same places
+#: whatever note is bowed: (centre in Hz, width in Hz, strength). A fixed mix
+#: of overtones moved these with every note, and that is an organ, not a
+#: fiddle.
+ERHU_BOX = ((950.0, 350.0, 1.6), (2700.0, 500.0, 0.9))
 
 
-def _erhu_table():
-    global _ERHU
-    if _ERHU is None:
-        sine = _table()
-        norm = sum(ERHU_PARTS)
-        _ERHU = array("h", bytes(4096))
-        for i in range(2048):
-            v = 0.0
-            for h, weight in enumerate(ERHU_PARTS, 1):
-                v += weight * sine[(i * h * 2) & 4095]
-            _ERHU[i] = int(v / norm)
-    return _ERHU
+def _erhu_wave(freq):
+    # One period of the bowed string at this pitch: a sawtooth's overtones
+    # (1/n), each weighed by how the box answers at its frequency.
+    parts = []
+    h = 1
+    while h * freq < 5000 and h <= 16:
+        hz = h * freq
+        weight = 0.3
+        for centre, width, strength in ERHU_BOX:
+            weight += strength / (1 + ((hz - centre) / width) ** 2)
+        parts.append((h, weight / h))
+        h += 1
+    norm = sum(w for _, w in parts)
+    wave = bytearray(4096)
+    sine = _table()
+    for h, w in parts:
+        _add_sine(wave, 2048, sine, ((h << 30) // 2048) & 0x3FFFFFFF, int(30000 * w / norm))
+    return wave
 
 
 @micropython.viper
 def _bow(out, n: int, tab, state):
     # state: 0 phase, 1 step, 2 the step it glides to, 3 loudness, 4 the
     # loudness it swells to, 5 vibrato phase, 6 vibrato depth, 7 vibrato speed,
-    # 8 the depth it grows to
+    # 8 the depth it grows to, 9 how slowly the pitch glides, 10 the rosin's noise
     o = ptr16(out)
     t = ptr16(tab)
     st = ptr32(state)
@@ -621,9 +630,11 @@ def _bow(out, n: int, tab, state):
     depth = int(st[6])
     speed = int(st[7])
     deep = int(st[8])
+    glide = int(st[9])
+    seed = int(st[10])
     i = 0
     while i < n:
-        step += (goal - step) >> 10
+        step += (goal - step) >> glide
         amp += (want - amp) >> 9
         depth += (deep - depth) >> 13
         lfo = (lfo + speed) & 0xFFFFFF
@@ -636,8 +647,10 @@ def _bow(out, n: int, tab, state):
         s = int(t[(phase >> 19) & 2047])
         if s >= 32768:
             s -= 65536
-        o[i] = ((s * amp) >> 15) & 0xFFFF
+        seed = seed * 214013 + 2531011          # the hair of the bow on the string
+        o[i] = (((s * amp) >> 15) + (((((seed >> 16) & 0xFF) - 128) * amp) >> 13)) & 0xFFFF
         i += 1
+    st[10] = seed
     st[0] = phase
     st[1] = step
     st[3] = amp
@@ -645,10 +658,26 @@ def _bow(out, n: int, tab, state):
     st[6] = depth
 
 
+def _erhu_fit(freq):
+    while freq < ERHU_LOW:
+        freq *= 2
+    while freq > ERHU_HIGH:
+        freq /= 2
+    return freq
+
+
 def _erhu_slices(notes, tempo, loop, until):
-    tab = _erhu_table()
-    state = array("i", [0] * 9)
+    waves = {}
+    for freq, _ in notes:
+        if freq:
+            freq = _erhu_fit(freq)
+            if int(freq * 10) not in waves:
+                waves[int(freq * 10)] = _erhu_wave(freq)
+    tab = bytes(4096)
+    state = array("i", [0] * 11)
     state[7] = 5767
+    state[9] = 10
+    state[10] = 12345
     dry = [bytearray(SLICE * 2) for _ in range(8)]
     outs = [bytearray(SLICE * 2) for _ in range(3)]
     made = 0
@@ -678,18 +707,17 @@ def _erhu_slices(notes, tempo, loop, until):
                 for _ in range(slices):
                     yield one()
                 continue
-            while freq < ERHU_LOW:
-                freq *= 2
-            while freq > ERHU_HIGH:
-                freq /= 2
+            freq = _erhu_fit(freq)
+            tab = waves[int(freq * 10)]
             goal = int(freq / RATE * (1 << 30))
             state[2] = goal
             if state[3] < 600 or _rnd(3) == 0:  # slide up into the note
                 state[1] = goal - goal // (14 + _rnd(10))
             state[4] = top * (70 + _rnd(31)) // 100
             state[6] = 0
-            state[7] = 5200 + _rnd(1300)
-            state[8] = 420 + _rnd(380)
+            state[7] = 5600 + _rnd(1100)
+            state[8] = 900 + _rnd(600)              # a wide, singing vibrato
+            state[9] = 11 if _rnd(3) == 0 else 10   # now and then a long slide
             for j in range(slices):
                 if j == slices - 1 and slices > 2:      # the bow turning
                     state[4] = state[4] * 6 // 10
