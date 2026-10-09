@@ -7,6 +7,7 @@ the full hour and died on the tone. Offline: the library is read as source.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -207,3 +208,51 @@ def test_a_bowed_string_is_a_call_like_the_others():
     compile(code, "<erhu>", "exec")
     assert server.erhu_call("E4 X", 60, 0, True, 5, "")[0]["status"] == "bad_score"
     assert "erhu(score" in elecrow_api.api_card(API, "music")
+
+
+def test_recorded_instruments_are_a_call_like_the_others():
+    import elecrow_mcp_server as server
+    facts, code = server.keys_call("A3+E4+C5:8 F3+C4+A4:8", "choir", "", 60, 0, True, 5, "Atem")
+    assert facts == {"chords": 2, "instrument": "choir", "volume": None, "minutes": 5.0,
+                     "seconds_per_pass": 16.0}
+    assert "music.keys(" in code and "instrument='choir'" in code
+    compile(code, "<keys>", "exec")
+    bad = server.keys_call("A3", "erhu", "", 60, 0, True, 5, "")[0]
+    assert bad["status"] == "bad_instrument" and "warmpad" in bad["error"]
+    assert server.keys_call("A3", "harp", "sideways", 60, 0, True, 5, "")[0]["status"] == "bad_style"
+    assert "keys(score" in elecrow_api.api_card(API, "music")
+
+
+def test_an_instrument_pack_is_cut_from_a_soundfont(tmp_path):
+    """tools/elecrow_samples.py, on a SoundFont small enough to build here."""
+    import struct
+
+    import elecrow_samples as cut
+
+    def chunk(tag, body):
+        return tag + struct.pack("<I", len(body)) + body + (b"\0" if len(body) & 1 else b"")
+
+    def name(text):
+        return text.encode().ljust(20, b"\0")
+
+    wave = b"".join(struct.pack("<h", int(9000 * ((i % 100) / 50 - 1))) for i in range(22050))
+    shdr = (struct.pack("<20sIIIIIBbHH", name("A4"), 0, 22050, 20000, 22000, 22050, 69, 0, 0, 1)
+            + struct.pack("<20sIIIIIBbHH", name("EOS"), 0, 0, 0, 0, 0, 0, 0, 0, 0))
+    igen = struct.pack("<HH", 43, 0x7F00) + struct.pack("<HH", 54, 1) + struct.pack("<HH", 53, 0)
+    pdta = (chunk(b"phdr", struct.pack("<20sHHHIII", name("Warm"), 89, 0, 0, 0, 0, 0)
+                  + struct.pack("<20sHHHIII", name("EOP"), 0, 0, 1, 0, 0, 0))
+            + chunk(b"pbag", struct.pack("<HH", 0, 0) + struct.pack("<HH", 1, 0))
+            + chunk(b"pgen", struct.pack("<HH", 41, 0) + struct.pack("<HH", 0, 0))
+            + chunk(b"inst", struct.pack("<20sH", name("Warm"), 0) + struct.pack("<20sH", name("EOI"), 1))
+            + chunk(b"ibag", struct.pack("<HH", 0, 0) + struct.pack("<HH", 3, 0))
+            + chunk(b"igen", igen + struct.pack("<HH", 0, 0))
+            + chunk(b"shdr", shdr))
+    body = b"sfbk" + chunk(b"LIST", b"sdta" + chunk(b"smpl", wave)) + chunk(b"LIST", b"pdta" + pdta)
+    path = tmp_path / "tiny.sf2"
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+
+    data = cut.pack(cut.load(path), "warmpad")
+    head, pcm = data.split(b"\n", 1)
+    (zone,) = json.loads(head)["zones"]
+    assert zone["hz"] == 440.0 and len(pcm) == zone["n"] * 2
+    assert zone["loop"] and zone["loop"][1] == zone["n"]       # it ends where its loop does

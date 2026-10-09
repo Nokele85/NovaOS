@@ -178,6 +178,48 @@ def erhu_call(score: str, tempo: int, volume: float, loop: bool, minutes: float,
             "seconds_per_pass": round(reader.seconds(notes, int(tempo)), 1)}, code
 
 
+#: The recorded instruments `tools/elecrow_samples.py` cuts, and what each is for.
+KEYS_INSTRUMENTS = {
+    "warmpad": "a soft, warm synthesiser pad - held", "halo": "a glassy, airy pad - held",
+    "choir": "voices singing aah - held", "strings": "a string ensemble - held",
+    "harp": "a harp - plucked", "vibes": "a vibraphone - struck, long shimmer",
+    "musicbox": "a music box - struck, bright", "piano": "a grand piano - struck",
+}
+
+
+def keys_call(score: str, instrument: str, style: str, tempo: int, volume: float,
+              loop: bool, minutes: float, title: str) -> tuple[dict | None, str]:
+    """(refusal, code) for a recorded instrument — `music.keys`."""
+    reader = _score()
+    if reader is None:
+        return {"ok": False, "status": "no_runtime_source",
+                "message": "The runtime's source is not on this machine."}, ""
+    try:
+        chords = reader.parse_chords(score)
+    except ValueError as exc:
+        return {"ok": False, "status": "bad_score", "error": str(exc),
+                "message": "Nothing was played. Correct the score and call again."}, ""
+    if instrument not in KEYS_INSTRUMENTS:
+        return {"ok": False, "status": "bad_instrument",
+                "error": f"there is no instrument {instrument!r}; there is: "
+                         + ", ".join(KEYS_INSTRUMENTS)}, ""
+    if style not in ("", "hold", "broken"):
+        return {"ok": False, "status": "bad_style",
+                "error": 'style is "hold", "broken", or left out'}, ""
+    if not 20 <= int(tempo) <= 160:
+        return {"ok": False, "status": "bad_tempo",
+                "error": "tempo is beats per minute, 20 to 160"}, ""
+    volume = max(0.0, min(MUSIC_LOUDEST, float(volume))) or None
+    minutes = max(0.5, min(MUSIC_MINUTES_MAX, float(minutes))) if loop else 0.0
+    code = ("import json\nfrom nova import music\n"
+            f"print(json.dumps(music.keys({score!r}, instrument={instrument!r}, "
+            f"style={style!r}, tempo={int(tempo)}, volume={volume!r}, "
+            f"loop={bool(loop)!r}, minutes={minutes!r}, title={str(title)[:60]!r})))\n")
+    return {"chords": len(chords), "instrument": instrument, "volume": volume,
+            "minutes": minutes,
+            "seconds_per_pass": round(reader.seconds(chords, int(tempo)), 1)}, code
+
+
 def _check(files: dict) -> list[str]:
     """What would fail when this app runs; [] when nothing was found or nothing can be checked."""
     api = _api()
@@ -830,6 +872,42 @@ def _device_tools(mcp: FastMCP) -> None:
                 "It is playing on the board now"
                 + (f" and repeats for {facts['minutes']:g} minutes" if loop else " once")
                 + f" (one pass is {facts['seconds_per_pass']} s). device_stop_music ends it.")
+        return result
+
+    @mcp.tool()
+    def device_play_keys(score: str, instrument: str = "warmpad", style: str = "",
+                         tempo: int = 50, volume: float = 0.0, loop: bool = True,
+                         minutes: float = MUSIC_MINUTES, title: str = "",
+                         port: str = "auto") -> dict:
+        """Play chords you composed on a RECORDED instrument on your board -
+        real samples, like a digital piano. This is the best-sounding music
+        the board makes: use it first, for anything meant to be beautiful or
+        relaxing. `instrument`: "warmpad" (soft warm pad), "halo" (glassy airy
+        pad), "choir" (voices singing aah), "strings" (string ensemble) - these
+        are held; "harp", "vibes" (vibraphone, long shimmer), "musicbox",
+        "piano" - these are struck. `score` is chords, voices joined by +, then
+        :BEATS (4 when left out), like "A3+E4+C5:8 F3+C4+A4:8 C4+G4+E5:8 -:2";
+        three or four voices a chord in octaves 3-5, any number of chords.
+        `style` is "hold" (the whole chord sounding, melting into the next -
+        spheric, for the held instruments) or "broken" (the chord as single
+        notes in an order that changes every pass - for the struck ones); left
+        out, each instrument gets the one that suits it. `tempo` is beats per
+        minute, 20-160; 40-50 with long chords (8-12 beats) is calm. Leave
+        `volume` out - Benni sets loudness with the board's button. `loop`
+        repeats it for `minutes` (10 when left out, 120 at most), then it ends
+        by itself. `title` is your name for the piece. A new piece replaces
+        the one playing; device_stop_music ends it."""
+        facts, code = keys_call(score, instrument, style, tempo, volume, loop,
+                                minutes, title)
+        if not code:
+            return facts
+        result = _json_out(_device_call(port, [code], timeout=30))
+        if result.get("ok"):
+            result.update(facts)
+            result["note"] = (
+                f"It is playing on the board now, on the {instrument}"
+                + (f", and repeats for {facts['minutes']:g} minutes" if loop else ", once")
+                + ". device_stop_music ends it.")
         return result
 
     @mcp.tool()

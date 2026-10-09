@@ -578,6 +578,209 @@ def harp(score, tempo=60, volume=None, loop=True, minutes=10, title=""):
     return status()
 
 
+# ---- recorded instruments ----------------------------------------------------------
+
+#: Everything above computes its sound. This replays it: a few recorded notes
+#: of a real instrument (cut out of a SoundFont by tools/elecrow_samples.py and
+#: kept in /sd/inst), each stretched to the pitch wanted - what a digital piano
+#: does. STRUCK ones die away after the stroke; the others are held as long as
+#: the chord lasts.
+STRUCK = ("harp", "vibes", "musicbox", "piano")
+KEYS_LOW, KEYS_HIGH = 130.0, 1600.0
+MAX_VOICES = 10
+_inst = None                    # (name, [(root hz, samples, state template)])
+
+
+def instruments():
+    """The recorded instruments on the board: names for keys(instrument=...)."""
+    import os
+    found = []
+    for folder in ("/sd/inst", "/inst"):
+        try:
+            found += [f[:-4] for f in os.listdir(folder) if f.endswith(".bin")]
+        except OSError:
+            pass
+    return sorted(set(found))
+
+
+def _load(name):
+    global _inst
+    if _inst is not None and _inst[0] == name:
+        return _inst[1]
+    import gc
+    import json
+    _inst = None
+    gc.collect()
+    for folder in ("/sd/inst", "/inst"):
+        try:
+            f = open("%s/%s.bin" % (folder, name), "rb")
+            break
+        except OSError:
+            f = None
+    if f is None:
+        raise ValueError("no instrument %r on the board - there is: %s"
+                         % (name, ", ".join(instruments()) or "none"))
+    zones = []
+    with f:
+        head = json.loads(f.readline())
+        for zone in head["zones"]:
+            pcm = bytearray(zone["n"] * 2)
+            f.readinto(pcm)
+            loop = zone.get("loop") or (0, 0)
+            zones.append((zone["hz"], pcm, loop[0], loop[1], zone["n"]))
+    _inst = (name, zones)
+    return zones
+
+
+@micropython.viper
+def _sample_in(out, n: int, src, state):
+    # One recorded note, stretched and added to the slice. state: 0 where in
+    # the recording, 1 the fraction between two samples, 2 how far a step is
+    # (65536 = as recorded), 3 loudness now, 4 loudness at the slice's end
+    # (0..4096), 5/6 the loop, 7 its length, 8 set to 1 when it has run out.
+    o = ptr16(out)
+    s = ptr16(src)
+    st = ptr32(state)
+    pos = int(st[0])
+    frac = int(st[1])
+    inc = int(st[2])
+    g0 = int(st[3])
+    g1 = int(st[4])
+    ls = int(st[5])
+    le = int(st[6])
+    last = int(st[7]) - 1
+    i = 0
+    while i < n:
+        if pos >= last:
+            st[8] = 1
+            break
+        a = int(s[pos])
+        if a >= 32768:
+            a -= 65536
+        b = int(s[pos + 1])
+        if b >= 32768:
+            b -= 65536
+        x = a + (((b - a) * (frac >> 4)) >> 12)
+        y = int(o[i])
+        if y >= 32768:
+            y -= 65536
+        y += (x * (g0 + ((g1 - g0) * i) // n)) >> 12
+        if y > 32767:
+            y = 32767
+        elif y < -32767:
+            y = -32767
+        o[i] = y & 0xFFFF
+        frac += inc
+        pos += frac >> 16
+        frac &= 0xFFFF
+        if le > 0 and pos >= le - 1:
+            pos -= le - ls
+        i += 1
+    st[0] = pos
+    st[1] = frac
+    st[3] = g1
+
+
+def _keys_mixer(steps, zones, struck):
+    """Recorded notes sounding together. `steps` yields (notes to start now as
+    (pitch, loudness 0..255, slices to hold), slices until the next step)."""
+    outs = [bytearray(SLICE * 2) for _ in range(3)]
+    silence = bytes(SLICE * 2)
+    sounding = []                               # [samples, state, slices still held]
+    k = 0
+
+    def one():
+        nonlocal k, sounding
+        out = outs[k]
+        k = (k + 1) % 3
+        out[:] = silence
+        alive = []
+        for voice in sounding:
+            pcm, st = voice[0], voice[1]
+            now = st[3]
+            if voice[2] > 0:                    # held: struck notes die away anyway
+                voice[2] -= 1
+                st[4] = now * 15 // 16 if struck and now else (now or voice[3])
+            else:                               # let go
+                st[4] = now * (5 if struck else 6) // 8 if now > 24 else 0
+            if st[3] == 0 and voice[2] > 0:
+                st[4] = voice[3]                # the first slice: it swells in
+            _sample_in(out, SLICE, pcm, st)
+            if st[8] == 0 and (st[3] > 0 or voice[2] > 0):
+                alive.append(voice)
+        sounding = alive
+        return out
+
+    for notes, slices in steps:
+        for freq, loud, hold in notes:
+            while freq < KEYS_LOW:
+                freq *= 2
+            while freq > KEYS_HIGH:
+                freq /= 2
+            zone = min(zones, key=lambda z: abs(math.log(freq / z[0])))
+            level = loud * 1200 // 255
+            st = array("i", [0, 0, int(freq / zone[0] * 65536), level if struck else 0, 0,
+                             zone[2], zone[3], zone[4], 0])     # a stroke starts at full
+            if len(sounding) >= MAX_VOICES:
+                sounding.pop(0)
+            sounding.append([zone[1], st, max(1, hold), level])
+        for _ in range(slices):
+            yield one()
+    for voice in sounding:
+        voice[2] = 0
+    while sounding:                             # the last notes ring out
+        yield one()
+
+
+def _hold_steps(chords, tempo, loop, until):
+    # every voice of a chord, held for as long as the chord lasts
+    beat = 60.0 / tempo
+    while True:
+        for voices, beats in chords:
+            slices = max(1, int(beats * beat * RATE / SLICE + 0.5))
+            yield [(f, 150 + _rnd(60), slices) for f in voices], slices
+        _now["loops"] += 1
+        if _over(loop, until):
+            return
+
+
+def _broken_steps(chords, tempo, loop, until, hold):
+    for plucked, slices in _harp_steps(chords, tempo, loop, until):
+        yield [(f, gain, hold) for f, gain in plucked], slices
+
+
+def keys(score, instrument="warmpad", style="", tempo=50, volume=None, loop=True,
+         minutes=10, title=""):
+    """Play chords she wrote on a RECORDED instrument - real samples, like a
+    digital piano. `instrument` is one of instruments() (warmpad, halo, choir,
+    strings, harp, vibes, musicbox ...). `score` is chords like pad()'s,
+    "A3+E4+C5:8 F3+C4+A4:8 -:2". `style` is "hold" (all voices of a chord
+    sounding together, one chord melting into the next) or "broken" (the chord
+    as single notes, a different way each time); left out, held instruments
+    are held and struck ones (harp, vibes, musicbox, piano) are broken.
+    `tempo` is beats per minute (20..160). Loudness is the knob (see volume()).
+    Returns status() at once - the piece plays on."""
+    chords = S.parse_chords(score)
+    if not 20 <= tempo <= 160:
+        raise ValueError("tempo is beats per minute, 20 to 160")
+    struck = instrument in STRUCK
+    style = style or ("broken" if struck else "hold")
+    if style not in ("hold", "broken"):
+        raise ValueError('style is "hold" or "broken"')
+    stop()
+    zones = _load(instrument)
+    _level(volume)
+    _now.update({"playing": True, "title": str(title), "loop": bool(loop),
+                 "loops": 0, "notes": len(chords), "error": None})
+    until = _until(minutes)
+    if style == "hold":
+        steps = _hold_steps(chords, tempo, loop, until)
+    else:
+        steps = _broken_steps(chords, tempo, loop, until, 12 if struck else 6)
+    _start(_keys_mixer(steps, zones, struck), RATE)
+    return status()
+
+
 # ---- a bowed string ----------------------------------------------------------------
 
 #: An erhu, as near as this board comes: one bowed string. Its colour is a
