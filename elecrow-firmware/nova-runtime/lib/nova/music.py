@@ -42,11 +42,11 @@ FIRST_VOLUME = 20
 #: A piece may still name a level, 0..LOUDEST as before; it sets the knob.
 QUIET, LOUDEST = 0.06, 0.25
 
-#: A pad is rendered at half the rate (it has no bright edges to lose) in
-#: one-second slices that follow themselves without a seam; chords melt into
-#: each other over PAD_FADE of them.
-PAD_RATE = 8000
-PAD_SLICE = 8000
+#: A pad is rendered in one-second slices that follow themselves without a
+#: seam; chords melt into each other over PAD_FADE of them. At the full rate:
+#: at half of it the speaker added a hiss of its own above every voice.
+PAD_RATE = 16000
+PAD_SLICE = 16000
 PAD_FADE = 3
 MAX_PAD_CHORDS = 6
 #: How a voice is built, as (multiple of its pitch, cycles off per second,
@@ -54,8 +54,7 @@ MAX_PAD_CHORDS = 6
 #: first pad sounded like tinnitus. Overtones give it a body (and let a small
 #: speaker carry notes too low for it), and the copies that sit a cycle off
 #: beat slowly against the rest, so the sound moves while nothing changes.
-PAD_VOICE = ((1, 0, 1.0), (1, 1, 0.6), (2, 0, 0.42), (2, 1, 0.22), (3, 0, 0.2),
-             (3, -1, 0.1), (4, 0, 0.08))
+PAD_VOICE = ((1, 0, 1.0), (1, 1, 0.5), (2, 0, 0.3), (3, 0, 0.1))
 #: A melody note is struck and dies away rather than being held like a beep.
 DECAY = (100, 80, 63, 49, 38, 29, 22)
 
@@ -212,27 +211,27 @@ _TAB = None
 def _table():
     global _TAB
     if _TAB is None:
-        _TAB = array("h", (int(32767 * math.sin(2 * math.pi * i / 1024))
-                           for i in range(1024)))
+        _TAB = array("h", (int(32767 * math.sin(2 * math.pi * i / 4096) + 0.5)
+                           for i in range(4096)))
     return _TAB
 
 
 @micropython.viper
 def _add_sine(buf, n: int, tab, step: int, gain: int):
-    # buf[i] += sine * gain / 32768, the sine read from a 1024-step table with a
+    # buf[i] += sine * gain / 32768, the sine read from a 4096-step table with a
     # 30-bit phase; `step` is the phase a sample advances.
     b = ptr16(buf)
     t = ptr16(tab)
     phase = 0
     i = 0
     while i < n:
-        s = int(t[(phase >> 20) & 1023])
+        s = int(t[(phase >> 18) & 4095])
         if s >= 32768:
             s -= 65536
         v = int(b[i])
         if v >= 32768:
             v -= 65536
-        b[i] = (v + ((s * gain) >> 15)) & 0xFFFF
+        b[i] = (v + ((s * gain + 16384) >> 15)) & 0xFFFF
         phase = (phase + step) & 0x3FFFFFFF
         i += 1
 
@@ -369,7 +368,7 @@ def _chord(voices, amp):
     for f in voices:
         for multiple, off, weight in PAD_VOICE:
             cycles = int(f * multiple * n / PAD_RATE + 0.5) + off
-            if 0 < cycles < n * 9 // 20:            # below what the rate can carry
+            if 0 < cycles * PAD_RATE // n < 5000:   # nothing shrill, nothing the rate folds
                 parts.append((cycles, weight))
     norm = sum(w for _, w in parts) or 1.0
     buf = bytearray(n * 2)
