@@ -88,7 +88,7 @@ def music_call(score: str, tempo: int, volume: float, loop: bool, minutes: float
     if wave not in ("soft", "sine", "square"):
         return {"ok": False, "status": "bad_wave",
                 "error": "wave is one of: soft, sine, square"}, ""
-    volume = max(0.0, min(MUSIC_LOUDEST, float(volume)))
+    volume = max(0.0, min(MUSIC_LOUDEST, float(volume))) or None
     minutes = max(0.5, min(MUSIC_MINUTES_MAX, float(minutes))) if loop else 0.0
     code = ("import json\nfrom nova import music\n"
             f"print(json.dumps(music.play({score!r}, tempo={int(tempo)}, "
@@ -118,7 +118,7 @@ def pad_call(score: str, tempo: int, volume: float, loop: bool, minutes: float,
     if not 20 <= int(tempo) <= 120:
         return {"ok": False, "status": "bad_tempo",
                 "error": "a pad's tempo is beats per minute, 20 to 120"}, ""
-    volume = max(0.0, min(MUSIC_LOUDEST, float(volume)))
+    volume = max(0.0, min(MUSIC_LOUDEST, float(volume))) or None
     minutes = max(0.5, min(MUSIC_MINUTES_MAX, float(minutes))) if loop else 0.0
     code = ("import json\nfrom nova import music\n"
             f"print(json.dumps(music.pad({score!r}, tempo={int(tempo)}, "
@@ -658,7 +658,7 @@ def _device_tools(mcp: FastMCP) -> None:
         return {"ok": True, "reference": elecrow_api.api_card(api, module.strip())}
 
     @mcp.tool()
-    def device_play_music(score: str, tempo: int = 90, volume: float = MUSIC_QUIET,
+    def device_play_music(score: str, tempo: int = 90, volume: float = 0.0,
                           loop: bool = True, minutes: float = MUSIC_MINUTES,
                           title: str = "", wave: str = "soft",
                           port: str = "auto") -> dict:
@@ -667,9 +667,10 @@ def _device_tools(mcp: FastMCP) -> None:
         one token per note: NAME then optionally :BEATS (1 when left out), like
         "E4 G4 A4:2 - C5:0.5 B4:0.5 | A4:4". Names are C D E F G A B with # or
         b and an octave 2-7; "-" is a rest; "|" is only a bar line. One voice,
-        no chords. `tempo` is beats per minute (30-240). `volume` is 0 to 0.25
-        and quiet (0.06) when left out - background music is company, keep it
-        low unless asked. `loop` repeats the piece for `minutes` (10 when left
+        no chords. `tempo` is beats per minute (30-240). Leave `volume` out: loudness
+        is a knob Benni turns with the button on the board (ten per cent a
+        press, round to off after 100), and the result tells you where it
+        stands. Only when he asks you for a level, pass 0.03 to 0.25. `loop` repeats the piece for `minutes` (10 when left
         out, 120 at most) and then it ends by itself; `loop`=false plays it
         once. `wave` is "soft", "sine" or "square". `title` is your name for
         the piece. A new piece replaces the one playing. It answers at once and
@@ -688,7 +689,7 @@ def _device_tools(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
-    def device_play_pad(score: str, tempo: int = 40, volume: float = MUSIC_QUIET,
+    def device_play_pad(score: str, tempo: int = 40, volume: float = 0.0,
                         loop: bool = True, minutes: float = MUSIC_MINUTES,
                         title: str = "", port: str = "auto") -> dict:
         """Play a CARPET OF SOUND you composed on your board's speaker - spheric,
@@ -702,7 +703,8 @@ def _device_tools(mcp: FastMCP) -> None:
         6 different chords in a piece. Low, open chords (roots in octave 2-3,
         fifths and thirds above) sound warm; long lengths (6-12 beats) sound
         calm. `tempo` is beats per minute, 20-120 - slow is the point.
-        `volume` is 0 to 0.25, quiet (0.06) when left out. `loop` repeats it
+        Leave `volume` out - Benni sets loudness with the board's button; pass
+        0.03 to 0.25 only when he asks you for a level. `loop` repeats it
         for `minutes` (10 when left out, 120 at most), then it ends by itself.
         `title` is your name for the piece. It takes a few seconds to prepare,
         then answers and the sound plays on; a new piece replaces the one

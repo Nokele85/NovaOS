@@ -175,6 +175,11 @@ def start():
     net.connect()
     log("boot runtime=%s safe=%s sd=%s net=%s" % (VERSION, safe_mode, sd.status(),
                                                   net.status()["connected"]))
+    try:                               # the button is the volume knob
+        from . import music
+        music.knob()
+    except Exception as e:
+        log("volume knob not wired: %r" % (e,))
     name = s.get("autostart")
     if safe_mode or not name:
         return

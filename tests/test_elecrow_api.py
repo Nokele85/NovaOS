@@ -135,6 +135,12 @@ def test_the_music_tool_refuses_what_the_board_would_and_stays_quiet():
     compile(code, "<music>", "exec")
     # played once, there is no clock to run out
     assert server.music_call("E4", 60, 0.06, False, 10, "", "sine")[0]["minutes"] == 0.0
+    # no level named: the knob on the board is left where he put it
+    facts, code = server.music_call("E4", 60, 0, True, 10, "", "soft")
+    assert facts["volume"] is None and "volume=None" in code
+    assert "volume=None" in server.pad_call("C3+G3", 40, 0, True, 10, "")[1]
+    card = elecrow_api.api_card(API, "music")
+    assert "volume(" in card and "knob(" in card
 
 
 def test_the_reference_shows_her_the_music_module():

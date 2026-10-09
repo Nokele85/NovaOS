@@ -3114,7 +3114,9 @@ allowlist by name, and still audited like any other. The same goes for the music
 that board (`device_play_music`, `device_stop_music`): a melody in a notation the board's own
 reader checks on the host first, played in the background, quiet unless she is asked otherwise,
 capped in volume, and — when it loops — ended by itself after a bounded number of minutes. A carpet
-of sound is the same contract in chords (`device_play_pad`). What she writes for the board is
+of sound is the same contract in chords (`device_play_pad`). Loudness is the owner's: a knob on the
+board (0–100 % in tens, the board's button stepping it and wrapping to off) that every piece is
+played through and that a piece leaves alone unless he asked her for a level. What she writes for the board is
 checked against it before it is sent: an `import` of a module the board does not have **MUST** be
 named as such with what to use instead — she once built a synthesiser around a module that was
 not there, caught the error herself, and concluded the board had no sound.
