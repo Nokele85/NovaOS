@@ -184,3 +184,16 @@ def test_a_module_the_board_does_not_have_is_named_before_it_is_written():
     said = " | ".join(problems)
     assert "no module `audio`" in said and "music.pad" in said
     assert "numpy" in said and "helper" not in said and "struct" not in said
+
+
+def test_plucked_strings_are_a_call_like_the_others():
+    import elecrow_mcp_server as server
+    facts, code = server.harp_call("A3+E4+C5:8 F3+C4+A4:8", 60, 0, True, 5, "Regen")
+    assert facts == {"chords": 2, "volume": None, "minutes": 5.0, "seconds_per_pass": 16.0}
+    assert "music.harp(" in code and "volume=None" in code
+    compile(code, "<harp>", "exec")
+    assert server.harp_call("A3+Q", 60, 0, True, 5, "")[0]["status"] == "bad_score"
+    assert server.harp_call("A3", 500, 0, True, 5, "")[0]["status"] == "bad_tempo"
+    # a melody is plucked too, unless she asks for another wave
+    assert "wave='pluck'" in server.music_call("E4 G4", 80, 0, False, 0, "", "pluck")[1]
+    assert "harp(score" in elecrow_api.api_card(API, "music")

@@ -3,9 +3,11 @@
 #   from nova import music
 #   music.play("E4 G4 A4:2 - C5:0.5 B4:0.5 A4:4", tempo=80, loop=True, minutes=10)
 #   music.pad("A2+E3+C4:8 F2+C3+A3:8 C3+G3+E4:8 G2+D3+B3:8", tempo=40)
+#   music.harp("A3+E4+C5:8 F3+C4+A4:8 C4+G4+E5:8 G3+D4+B4:8", tempo=60)
 #   music.stop()
 #
-# play() is a melody: one voice, each note struck and dying away. pad() is a
+# harp() plays chords as plucked strings, broken into notes a different way
+# each time. play() is a melody: one voice, each note struck and dying away. pad() is a
 # carpet of sound: slow chords of up to four voices, each voice with a body of
 # overtones that beat slowly against each other, one chord melting into the next. Both return at once; the piece
 # plays on until it ends, until stop(), or - when it loops - until `minutes` are
@@ -21,6 +23,7 @@
 # While a piece plays, the speaker is taken: speaker.tone() and play_wav() would
 # fail on a busy I2S. stop() first.
 import math
+import random
 import struct
 import time
 from array import array
@@ -31,7 +34,16 @@ from . import board as B
 from . import score as S
 
 RATE = 16000
-WAVES = ("soft", "sine", "square")
+WAVES = ("pluck", "soft", "sine", "square")
+#: A plucked string is not added up out of sine waves: a burst of noise goes
+#: round a loop as long as the note's period and is smoothed a little each
+#: time (Karplus-Strong). It starts bright and dies away the way a string
+#: does, and no two plucks are the same - which is what the sine voices, all
+#: of them a held whistle, could never be.
+SLICE = 2000                # samples the mixer hands over at a time (125 ms)
+TAIL = 32000                # how long one plucked note rings (2 s)
+STRING_LOW, STRING_HIGH = 196.0, 2000.0     # what the little speaker carries
+MAX_STRINGS = 28
 #: Loudness is a knob on the board, not a property of a piece: 0..100 % in
 #: tens, kept across pieces and power cuts, stepped by the board's button (ten
 #: up per press, and from 100 round to 0 - sound off). Every piece is rendered
@@ -303,6 +315,62 @@ def _scale(src, dst, n: int, num: int):
         i += 1
 
 
+@micropython.viper
+def _ks(buf, n: int, period: int, frac: int, keep: int):
+    # The string itself: every sample is the one a period ago, read between two
+    # neighbours (`frac`/256, which is what tunes it), averaged with the one
+    # before (the smoothing) and `keep`/32768 of that (the dying away).
+    b = ptr16(buf)
+    prev = 0
+    i = period + 1
+    while i < n:
+        d0 = int(b[i - period])
+        if d0 >= 32768:
+            d0 -= 65536
+        d1 = int(b[i - period - 1])
+        if d1 >= 32768:
+            d1 -= 65536
+        x = (d0 * (256 - frac) + d1 * frac) >> 8
+        y = ((x + prev) >> 1) * keep >> 15
+        prev = x
+        b[i] = y & 0xFFFF
+        i += 1
+
+
+@micropython.viper
+def _fade_out(buf, start: int, n: int):
+    b = ptr16(buf)
+    i = 0
+    while i < n:
+        v = int(b[start + i])
+        if v >= 32768:
+            v -= 65536
+        b[start + i] = (v * (n - i) // n) & 0xFFFF
+        i += 1
+
+
+@micropython.viper
+def _mix_in(out, src, off: int, n: int, gain: int):
+    # out += src[off:] * gain / 256, held inside what 16 bits can say
+    o = ptr16(out)
+    s = ptr16(src)
+    i = 0
+    while i < n:
+        x = int(s[off + i])
+        if x >= 32768:
+            x -= 65536
+        y = int(o[i])
+        if y >= 32768:
+            y -= 65536
+        y += (x * gain) >> 8
+        if y > 32767:
+            y = 32767
+        elif y < -32767:
+            y = -32767
+        o[i] = y & 0xFFFF
+        i += 1
+
+
 def _until(minutes):
     return time.ticks_add(time.ticks_ms(), int(minutes * 60000)) if minutes else 0
 
@@ -363,13 +431,152 @@ def _slices(notes, tempo, cache, loop, until):
             return
 
 
+# ---- plucked strings -------------------------------------------------------------
+
+def _rnd(n):
+    return random.getrandbits(16) % n if n > 1 else 0
+
+
+def _fit(freq):
+    # into the range the speaker carries, by octaves
+    while freq < STRING_LOW:
+        freq *= 2
+    while freq > STRING_HIGH:
+        freq /= 2
+    return freq
+
+
+def _string(freq):
+    wave_len = RATE / freq - 0.5
+    period = int(wave_len)
+    frac = int((wave_len - period) * 256)
+    amp = int(32767 * FULL)
+    buf = bytearray(TAIL * 2)
+    prev = 0
+    for i in range(period + 1):                 # the pluck: noise, a little softened
+        v = ((random.getrandbits(16) - 32768) * amp) >> 15
+        v, prev = (v + prev) >> 1, v
+        struct.pack_into("<h", buf, i * 2, v)
+    keep = int(32768 * math.exp(math.log(0.06) / (2.0 * freq)))
+    _ks(buf, TAIL, period, frac, min(32767, keep))
+    _fade_out(buf, TAIL - 2400, 2400)
+    return buf
+
+
+def _mixer(steps):
+    """Strings ringing over each other: `steps` yields (what is plucked now,
+    how many slices until the next step); what is still sounding is added up."""
+    outs = [bytearray(SLICE * 2) for _ in range(3)]     # the speaker may still hold one
+    silence = bytes(SLICE * 2)
+    cache = {}
+    ringing = []
+    k = 0
+
+    def one():
+        nonlocal k, ringing
+        out = outs[k]
+        k = (k + 1) % 3
+        out[:] = silence
+        for voice in ringing:
+            _mix_in(out, voice[0], voice[1], SLICE, voice[2])
+            voice[1] += SLICE
+        ringing = [v for v in ringing if v[1] < TAIL]
+        return out
+
+    for plucked, slices in steps:
+        for freq, gain in plucked:
+            key = int(freq * 10)
+            if key not in cache:
+                if len(cache) >= MAX_STRINGS:
+                    cache.clear()
+                cache[key] = _string(freq)
+            ringing.append([cache[key], 0, gain])
+        for _ in range(slices):
+            yield one()
+    while ringing:                              # let the last notes ring out
+        yield one()
+
+
+def _melody_steps(notes, tempo, loop, until):
+    beat = 60.0 / tempo
+    while True:
+        for freq, beats in notes:
+            slices = max(1, int(beats * beat * RATE / SLICE + 0.5))
+            yield ([(_fit(freq), 200 + _rnd(40))] if freq else []), slices
+        _now["loops"] += 1
+        if _over(loop, until):
+            return
+
+
+def _harp_steps(chords, tempo, loop, until):
+    # Each chord is played as broken notes, half a beat apart, and how it is
+    # broken is thrown anew every time: rising, falling, there and back, or
+    # wandering; some steps stay silent, some notes sparkle an octave up, and
+    # no two are plucked equally hard. The same score never sounds twice alike.
+    beat = 60.0 / tempo
+    step = max(1, int(beat * 0.5 * RATE / SLICE + 0.5))
+    while True:
+        for voices, beats in chords:
+            count = max(1, int(beats * 2 + 0.5))
+            if not voices:
+                yield [], step * count
+                continue
+            notes = sorted(_fit(f) for f in voices)
+            size = len(notes)
+            shape = _rnd(4)
+            pos = 0
+            for i in range(count):
+                plucked = []
+                if i == 0:
+                    plucked.append((notes[0], 230))
+                    if size > 2 and _rnd(3) == 0:
+                        plucked.append((notes[-1], 140))
+                elif _rnd(100) < 78:
+                    if shape == 0:
+                        pos = (pos + 1) % size
+                    elif shape == 1:
+                        pos = (pos - 1) % size
+                    elif shape == 2 and size > 1:
+                        j = i % (2 * size - 2)
+                        pos = j if j < size else 2 * size - 2 - j
+                    elif size > 1:
+                        pos = (pos + 1 + _rnd(size - 1)) % size
+                    freq = notes[pos]
+                    if _rnd(6) == 0 and freq * 2 <= STRING_HIGH:
+                        freq *= 2
+                    plucked.append((freq, 120 + _rnd(110)))
+                yield plucked, step
+        _now["loops"] += 1
+        if _over(loop, until):
+            return
+
+
+def harp(score, tempo=60, volume=None, loop=True, minutes=10, title=""):
+    """Play chords she wrote as plucked strings, broken into single notes that
+    ring over each other - and broken differently every time, so the piece
+    never repeats itself exactly. `score` is chords like pad()'s,
+    "A3+E4+C5:8 F3+C4+A4:8 -:2", lengths in beats; `tempo` is beats per minute
+    (30..160); `loop` repeats it for `minutes` (0 = until stop()). Loudness is
+    the knob (see volume()). Returns status() at once - the piece plays on."""
+    chords = S.parse_chords(score)
+    if not 30 <= tempo <= 160:
+        raise ValueError("a harp's tempo is beats per minute, 30 to 160")
+    stop()
+    _level(volume)
+    _now.update({"playing": True, "title": str(title), "loop": bool(loop),
+                 "loops": 0, "notes": len(chords), "error": None})
+    _start(_mixer(_harp_steps(chords, tempo, loop, _until(minutes))), RATE)
+    return status()
+
+
 def play(score, tempo=90, volume=None, loop=False, minutes=0, title="",
-         wave="soft", background=True):
+         wave="pluck", background=True):
     """Play a melody she wrote. `score` is notes with lengths in beats,
     "E4 G4 A4:2 - C5:0.5"; `tempo` is beats per minute (30..240); `volume` is
     best left out - loudness is the knob (see volume()), and a number here
     (0..0.25) sets that knob; `loop` repeats it, for `minutes`
-    (0 = until stop()); `wave` is "soft", "sine" or "square". Returns status()
+    (0 = until stop()); `wave` is "pluck" (a plucked string, the default),
+    "soft", "sine" or "square". Returns status()
     at once - the piece plays on. `background=False` waits until it has ended."""
     notes = S.parse(score)
     if not 30 <= tempo <= 240:
@@ -378,13 +585,16 @@ def play(score, tempo=90, volume=None, loop=False, minutes=0, title="",
         raise ValueError("wave is one of: " + ", ".join(WAVES))
     stop()
     amp = _level(volume)
-    cache = {}
-    for freq, _ in notes:
-        if freq and freq not in cache:
-            cache[freq] = _cycle(freq, amp, wave)
     _now.update({"playing": True, "title": str(title), "loop": bool(loop),
                  "loops": 0, "notes": len(notes), "error": None})
-    _start(_slices(notes, tempo, cache, loop, _until(minutes)), RATE)
+    if wave == "pluck":
+        _start(_mixer(_melody_steps(notes, tempo, loop, _until(minutes))), RATE)
+    else:
+        cache = {}
+        for freq, _ in notes:
+            if freq and freq not in cache:
+                cache[freq] = _cycle(freq, amp, wave)
+        _start(_slices(notes, tempo, cache, loop, _until(minutes)), RATE)
     if not background:
         while _now["playing"]:
             time.sleep_ms(20)

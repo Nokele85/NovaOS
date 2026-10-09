@@ -241,6 +241,11 @@ HANDS: dict[str, Hand] = {
         "in the background",
         '{"score": "E4 G4 A4:2 - C5:0.5 B4:0.5 A4:4", "tempo": 80, "loop": true, '
         '"minutes": 10, "title": "..."}'),
+    "device_play_harp": Hand(
+        "cheap", "play chords she composed as plucked strings on her board, "
+        "broken into notes a different way each time",
+        '{"score": "A3+E4+C5:8 F3+C4+A4:8 C4+G4+E5:8 G3+D4+B4:8", "tempo": 60, '
+        '"minutes": 10, "title": "..."}'),
     "device_play_pad": Hand(
         "cheap", "play a carpet of sound she composed on her board: slow chords "
         "that swell and fade, music to dream to",
