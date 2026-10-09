@@ -286,3 +286,20 @@ def test_the_air_around_the_music_is_a_call_of_its_own():
     for mix in re.findall(r': "([\w+]+)"', places):
         assert set(mix.split("+")) <= set(server.AMBIENCES), mix
     assert "ambience(scene" in elecrow_api.api_card(API, "music")
+
+
+def test_a_tune_is_played_note_for_note_over_the_chords():
+    import elecrow_mcp_server as server
+    facts, code = server.keys_call("C4+E4+G4:4 F3+A3+C4:4", "strings", "", 60, 0, True, 5, "Lied",
+                                   melody="E4 G4 C5:2 A4 G4 E4:2", lead="musicbox")
+    assert facts["melody_notes"] == 6 and facts["melody_seconds"] == facts["seconds_per_pass"] == 8.0
+    assert "warning" not in facts
+    assert "melody='E4 G4 C5:2 A4 G4 E4:2'" in code and "lead='musicbox'" in code
+    compile(code, "<tune>", "exec")
+    # a tune alone, and one that would drift against its chords
+    alone, code = server.keys_call("", "vibes", "", 60, 0, False, 0, "", melody="C4 D4 E4")
+    assert alone["chords"] == 0 and alone["melody_notes"] == 3 and "music.keys(''" in code
+    drift = server.keys_call("C4+E4:8", "harp", "", 60, 0, True, 5, "", melody="C4 D4 E4")[0]
+    assert "drift apart" in drift["warning"]
+    assert server.keys_call("C4", "harp", "", 60, 0, True, 5, "", melody="C4 Q")[0]["status"] == "bad_melody"
+    assert server.keys_call("C4", "harp", "", 60, 0, True, 5, "", melody="C4", lead="kazoo")[0]["status"] == "bad_instrument"

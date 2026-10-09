@@ -1147,8 +1147,21 @@ def _broken_steps(chords, tempo, loop, until, hold, lead=True):
         yield [(f, gain, hold) for f, gain in plucked], slices
 
 
+def _tune_steps(notes, tempo, loop, until, lead):
+    # a melody, note for note as she wrote it
+    beat = 60.0 / tempo
+    while True:
+        for freq, beats in notes:
+            slices = max(1, int(beats * beat * RATE / SLICE + 0.5))
+            yield ([(freq, 225 + _rnd(30), slices)] if freq else []), slices
+        if lead:
+            _now["loops"] += 1
+        if _over(loop, until):
+            return
+
+
 def keys(score, instrument="warmpad", style="", tempo=50, volume=None, loop=True,
-         minutes=10, title=""):
+         minutes=10, title="", melody="", lead=""):
     """Play chords she wrote on a RECORDED instrument - real samples, like a
     digital piano. `instrument` is one of instruments() (warmpad, halo, choir,
     strings, harp, vibes, musicbox ...), or up to three at once joined by +,
@@ -1159,33 +1172,46 @@ def keys(score, instrument="warmpad", style="", tempo=50, volume=None, loop=True
     as single notes, a different way each time); left out, held instruments
     are held and struck ones (harp, vibes, musicbox, piano) are broken.
     `tempo` is beats per minute (20..160). Loudness is the knob (see volume()).
-    Returns status() at once - the piece plays on."""
-    chords = S.parse_chords(score)
+    `melody` is a tune like play()'s, "E4 G4 A4:2 - C5", played note for note
+    on the instrument `lead` over the chords (the score may then be empty: a
+    tune alone); left out, `lead` is the first struck instrument named, or
+    the musicbox. Returns status() at once - the piece plays on."""
+    tune = S.parse(melody) if str(melody).strip() else []
+    chords = S.parse_chords(score) if str(score).strip() or not tune else []
     if not 20 <= tempo <= 160:
         raise ValueError("tempo is beats per minute, 20 to 160")
     names = [n for n in str(instrument).replace(" ", "").split("+") if n]
     if not 1 <= len(names) <= MAX_LAYERS:
         raise ValueError("one to %d instruments, joined by +" % MAX_LAYERS)
+    lead = str(lead).strip() or next((n for n in names if n in STRUCK), "musicbox")
+    if not chords:
+        names = []                          # a tune alone
     if style not in ("", "hold", "broken"):
         raise ValueError('style is "hold" or "broken"')
     stop()
     for name in list(_inst):
-        if name not in names:
+        if name not in names and not (tune and name == lead):
             del _inst[name]                 # room for the ones this piece uses
     packs = [_load(name) for name in names]
     _level(volume)
     _now.update({"playing": True, "title": str(title), "loop": bool(loop),
-                 "loops": 0, "notes": len(chords), "error": None})
+                 "loops": 0, "notes": len(chords) + len(tune), "error": None})
     until = _until(minutes)
     layers = []
+    if tune:                                # the tune leads; what is under it steps back
+        layers.append([_tune_steps(tune, tempo, loop, until, True), _load(lead),
+                       lead in STRUCK, 1250])
     for n, name in enumerate(names):
         struck = name in STRUCK
         how = style if len(names) == 1 and style else ("broken" if struck else "hold")
+        first = n == 0 and not tune
         if how == "hold":
-            steps = _hold_steps(chords, tempo, loop, until, n == 0)
+            steps = _hold_steps(chords, tempo, loop, until, first)
         else:
-            steps = _broken_steps(chords, tempo, loop, until, 12 if struck else 6, n == 0)
+            steps = _broken_steps(chords, tempo, loop, until, 12 if struck else 6, first)
         share = 1200 if len(names) == 1 else (1000 if struck else 620)
+        if tune:
+            share = share * 9 // 20
         layers.append([steps, packs[n], struck, share])
     _start(_keys_mixer(layers), RATE)
     return status()
