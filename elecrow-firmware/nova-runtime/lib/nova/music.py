@@ -41,9 +41,12 @@ WAVES = ("pluck", "soft", "sine", "square")
 #: does, and no two plucks are the same - which is what the sine voices, all
 #: of them a held whistle, could never be.
 SLICE = 2000                # samples the mixer hands over at a time (125 ms)
-TAIL = 32000                # how long one plucked note rings (2 s)
+TAIL = 64000                # how long one plucked note rings (4 s)
+#: Each pluck is heard again, fainter, a little later and later still - the
+#: room the board does not have. (slices of delay, gain out of 256)
+ECHOES = ((3, 80), (7, 34))
 STRING_LOW, STRING_HIGH = 196.0, 2000.0     # what the little speaker carries
-MAX_STRINGS = 28
+MAX_STRINGS = 14
 #: Loudness is a knob on the board, not a property of a piece: 0..100 % in
 #: tens, kept across pieces and power cuts, stepped by the board's button (ten
 #: up per press, and from 100 round to 0 - sound off). Every piece is rendered
@@ -318,8 +321,9 @@ def _scale(src, dst, n: int, num: int):
 @micropython.viper
 def _ks(buf, n: int, period: int, frac: int, keep: int):
     # The string itself: every sample is the one a period ago, read between two
-    # neighbours (`frac`/256, which is what tunes it), averaged with the one
-    # before (the smoothing) and `keep`/32768 of that (the dying away).
+    # neighbours (`frac`/256, which is what tunes it), leaned a quarter on the
+    # one before (a gentle smoothing: half-and-half made every note a dry
+    # click, an egg slicer) and `keep`/32768 of that (the dying away).
     b = ptr16(buf)
     prev = 0
     i = period + 1
@@ -331,7 +335,7 @@ def _ks(buf, n: int, period: int, frac: int, keep: int):
         if d1 >= 32768:
             d1 -= 65536
         x = (d0 * (256 - frac) + d1 * frac) >> 8
-        y = ((x + prev) >> 1) * keep >> 15
+        y = ((x * 3 + prev) >> 2) * keep >> 15
         prev = x
         b[i] = y & 0xFFFF
         i += 1
@@ -447,19 +451,21 @@ def _fit(freq):
 
 
 def _string(freq):
-    wave_len = RATE / freq - 0.5
+    wave_len = RATE / freq - 0.25
     period = int(wave_len)
     frac = int((wave_len - period) * 256)
     amp = int(32767 * FULL)
     buf = bytearray(TAIL * 2)
     prev = 0
-    for i in range(period + 1):                 # the pluck: noise, a little softened
-        v = ((random.getrandbits(16) - 32768) * amp) >> 15
-        v, prev = (v + prev) >> 1, v
-        struct.pack_into("<h", buf, i * 2, v)
-    keep = int(32768 * math.exp(math.log(0.06) / (2.0 * freq)))
+    soft = 0
+    for i in range(period + 1):                 # the pluck: noise, softened twice -
+        v = ((random.getrandbits(16) - 32768) * amp) >> 15      # a finger, not a nail
+        prev = (v + prev) >> 1
+        soft = (prev + soft) >> 1
+        struct.pack_into("<h", buf, i * 2, soft * 2)
+    keep = int(32768 * math.exp(math.log(0.35) / (4.0 * freq)))
     _ks(buf, TAIL, period, frac, min(32767, keep))
-    _fade_out(buf, TAIL - 2400, 2400)
+    _fade_out(buf, TAIL - 8000, 8000)
     return buf
 
 
@@ -478,7 +484,8 @@ def _mixer(steps):
         k = (k + 1) % 3
         out[:] = silence
         for voice in ringing:
-            _mix_in(out, voice[0], voice[1], SLICE, voice[2])
+            if voice[1] >= 0:                   # an echo waits its turn below zero
+                _mix_in(out, voice[0], voice[1], SLICE, voice[2])
             voice[1] += SLICE
         ringing = [v for v in ringing if v[1] < TAIL]
         return out
@@ -491,6 +498,8 @@ def _mixer(steps):
                     cache.clear()
                 cache[key] = _string(freq)
             ringing.append([cache[key], 0, gain])
+            for wait, share in ECHOES:
+                ringing.append([cache[key], -wait * SLICE, gain * share >> 8])
         for _ in range(slices):
             yield one()
     while ringing:                              # let the last notes ring out
@@ -566,6 +575,148 @@ def harp(score, tempo=60, volume=None, loop=True, minutes=10, title=""):
     _now.update({"playing": True, "title": str(title), "loop": bool(loop),
                  "loops": 0, "notes": len(chords), "error": None})
     _start(_mixer(_harp_steps(chords, tempo, loop, _until(minutes))), RATE)
+    return status()
+
+
+# ---- a bowed string ----------------------------------------------------------------
+
+#: An erhu, as near as this board comes: one bowed string. Its colour is a
+#: fixed mix of overtones, nasal and bright in the middle; what makes it sing
+#: is drawn sample by sample - the bow biting in, the pitch sliding from note
+#: to note instead of jumping, and a vibrato that only sets in once a note is
+#: held, never twice at the same speed or depth.
+ERHU_PARTS = (1.0, 0.8, 0.72, 0.45, 0.5, 0.3, 0.26, 0.16, 0.14, 0.09, 0.07, 0.05)
+ERHU_LOW, ERHU_HIGH = 260.0, 1600.0
+_ERHU = None
+
+
+def _erhu_table():
+    global _ERHU
+    if _ERHU is None:
+        sine = _table()
+        norm = sum(ERHU_PARTS)
+        _ERHU = array("h", bytes(4096))
+        for i in range(2048):
+            v = 0.0
+            for h, weight in enumerate(ERHU_PARTS, 1):
+                v += weight * sine[(i * h * 2) & 4095]
+            _ERHU[i] = int(v / norm)
+    return _ERHU
+
+
+@micropython.viper
+def _bow(out, n: int, tab, state):
+    # state: 0 phase, 1 step, 2 the step it glides to, 3 loudness, 4 the
+    # loudness it swells to, 5 vibrato phase, 6 vibrato depth, 7 vibrato speed,
+    # 8 the depth it grows to
+    o = ptr16(out)
+    t = ptr16(tab)
+    st = ptr32(state)
+    phase = int(st[0])
+    step = int(st[1])
+    goal = int(st[2])
+    amp = int(st[3])
+    want = int(st[4])
+    lfo = int(st[5])
+    depth = int(st[6])
+    speed = int(st[7])
+    deep = int(st[8])
+    i = 0
+    while i < n:
+        step += (goal - step) >> 10
+        amp += (want - amp) >> 9
+        depth += (deep - depth) >> 13
+        lfo = (lfo + speed) & 0xFFFFFF
+        tri = (lfo >> 8) - 32768
+        if tri < 0:
+            tri = 0 - tri
+        tri -= 16384
+        vib = ((((step >> 12) * tri) >> 12) * depth) >> 6
+        phase = (phase + step + vib) & 0x3FFFFFFF
+        s = int(t[(phase >> 19) & 2047])
+        if s >= 32768:
+            s -= 65536
+        o[i] = ((s * amp) >> 15) & 0xFFFF
+        i += 1
+    st[0] = phase
+    st[1] = step
+    st[3] = amp
+    st[5] = lfo
+    st[6] = depth
+
+
+def _erhu_slices(notes, tempo, loop, until):
+    tab = _erhu_table()
+    state = array("i", [0] * 9)
+    state[7] = 5767
+    dry = [bytearray(SLICE * 2) for _ in range(8)]
+    outs = [bytearray(SLICE * 2) for _ in range(3)]
+    made = 0
+    k = 0
+    beat = 60.0 / tempo
+    top = int(32767 * FULL)
+
+    def one():
+        nonlocal made, k
+        line = dry[made % 8]
+        _bow(line, SLICE, tab, state)
+        out = outs[k]
+        k = (k + 1) % 3
+        out[:] = line
+        if made >= 3:                           # the room: itself again, fainter
+            _mix_in(out, dry[(made - 3) % 8], 0, SLICE, 70)
+        if made >= 6:
+            _mix_in(out, dry[(made - 6) % 8], 0, SLICE, 30)
+        made += 1
+        return out
+
+    while True:
+        for freq, beats in notes:
+            slices = max(1, int(beats * beat * RATE / SLICE + 0.5))
+            if not freq:
+                state[4] = 0
+                for _ in range(slices):
+                    yield one()
+                continue
+            while freq < ERHU_LOW:
+                freq *= 2
+            while freq > ERHU_HIGH:
+                freq /= 2
+            goal = int(freq / RATE * (1 << 30))
+            state[2] = goal
+            if state[3] < 600 or _rnd(3) == 0:  # slide up into the note
+                state[1] = goal - goal // (14 + _rnd(10))
+            state[4] = top * (70 + _rnd(31)) // 100
+            state[6] = 0
+            state[7] = 5200 + _rnd(1300)
+            state[8] = 420 + _rnd(380)
+            for j in range(slices):
+                if j == slices - 1 and slices > 2:      # the bow turning
+                    state[4] = state[4] * 6 // 10
+                yield one()
+        _now["loops"] += 1
+        if _over(loop, until):
+            break
+    state[4] = 0
+    for _ in range(8):                          # the last note and its echo die away
+        yield one()
+
+
+def erhu(score, tempo=60, volume=None, loop=False, minutes=0, title=""):
+    """Play a melody she wrote on a bowed string, like an erhu: notes that
+    swell under the bow, slide into each other and tremble when they are held.
+    `score` is a melody like play()'s, "E4:2 G4 A4:3 - C5:2"; long notes (2
+    beats and more) are what this voice is for. `tempo` is beats per minute
+    (30..160); `loop` repeats it for `minutes` (0 = until stop()). Loudness is
+    the knob (see volume()). Returns status() at once - the piece plays on."""
+    notes = S.parse(score)
+    if not 30 <= tempo <= 160:
+        raise ValueError("an erhu's tempo is beats per minute, 30 to 160")
+    stop()
+    _level(volume)
+    _now.update({"playing": True, "title": str(title), "loop": bool(loop),
+                 "loops": 0, "notes": len(notes), "error": None})
+    _start(_erhu_slices(notes, tempo, loop, _until(minutes)), RATE)
     return status()
 
 

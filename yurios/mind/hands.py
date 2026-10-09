@@ -246,6 +246,11 @@ HANDS: dict[str, Hand] = {
         "broken into notes a different way each time",
         '{"score": "A3+E4+C5:8 F3+C4+A4:8 C4+G4+E5:8 G3+D4+B4:8", "tempo": 60, '
         '"minutes": 10, "title": "..."}'),
+    "device_play_erhu": Hand(
+        "cheap", "play a melody she composed on a bowed string on her board, "
+        "like an erhu: sliding, swelling, trembling",
+        '{"score": "E4:2 G4 A4:3 - D5:2 C5 A4:4", "tempo": 60, "minutes": 10, '
+        '"title": "..."}'),
     "device_play_pad": Hand(
         "cheap", "play a carpet of sound she composed on her board: slow chords "
         "that swell and fade, music to dream to",

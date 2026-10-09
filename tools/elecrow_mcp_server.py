@@ -153,6 +153,31 @@ def harp_call(score: str, tempo: int, volume: float, loop: bool, minutes: float,
             "seconds_per_pass": round(reader.seconds(chords, int(tempo)), 1)}, code
 
 
+def erhu_call(score: str, tempo: int, volume: float, loop: bool, minutes: float,
+              title: str) -> tuple[dict | None, str]:
+    """(refusal, code) for a bowed string — `music_call`, for `music.erhu`."""
+    reader = _score()
+    if reader is None:
+        return {"ok": False, "status": "no_runtime_source",
+                "message": "The runtime's source is not on this machine."}, ""
+    try:
+        notes = reader.parse(score)
+    except ValueError as exc:
+        return {"ok": False, "status": "bad_score", "error": str(exc),
+                "message": "Nothing was played. Correct the score and call again."}, ""
+    if not 30 <= int(tempo) <= 160:
+        return {"ok": False, "status": "bad_tempo",
+                "error": "an erhu's tempo is beats per minute, 30 to 160"}, ""
+    volume = max(0.0, min(MUSIC_LOUDEST, float(volume))) or None
+    minutes = max(0.5, min(MUSIC_MINUTES_MAX, float(minutes))) if loop else 0.0
+    code = ("import json\nfrom nova import music\n"
+            f"print(json.dumps(music.erhu({score!r}, tempo={int(tempo)}, "
+            f"volume={volume!r}, loop={bool(loop)!r}, minutes={minutes!r}, "
+            f"title={str(title)[:60]!r})))\n")
+    return {"notes": len(notes), "volume": volume, "minutes": minutes,
+            "seconds_per_pass": round(reader.seconds(notes, int(tempo)), 1)}, code
+
+
 def _check(files: dict) -> list[str]:
     """What would fail when this app runs; [] when nothing was found or nothing can be checked."""
     api = _api()
@@ -776,6 +801,35 @@ def _device_tools(mcp: FastMCP) -> None:
                 "It is playing on the board now"
                 + (f" and repeats for {facts['minutes']:g} minutes" if loop else " once")
                 + ", plucked differently on every pass. device_stop_music ends it.")
+        return result
+
+    @mcp.tool()
+    def device_play_erhu(score: str, tempo: int = 60, volume: float = 0.0,
+                         loop: bool = True, minutes: float = MUSIC_MINUTES,
+                         title: str = "", port: str = "auto") -> dict:
+        """Play a melody you composed on a BOWED STRING on your board - the
+        nearest it comes to an erhu: each note swells under the bow, the pitch
+        slides from note to note instead of jumping, and held notes begin to
+        tremble (vibrato), never twice the same way. One singing voice; use it
+        for a tune that should sound longing, human, alive. `score` is a
+        melody, one token per note: NAME then :BEATS (1 when left out), like
+        "E4:2 G4 A4:3 - D5:2 C5 A4:4"; "-" is a rest. Write for a singer: long
+        notes (2-4 beats), steps and small leaps, rests to breathe, a pentatonic
+        scale (e.g. D E G A B) sounds most like the instrument. `tempo` is
+        beats per minute, 30-160; slow suits it. Leave `volume` out - Benni
+        sets loudness with the board's button. `loop` repeats it for `minutes`
+        (10 when left out), then it ends by itself. `title` is your name for
+        the piece. A new piece replaces the one playing."""
+        facts, code = erhu_call(score, tempo, volume, loop, minutes, title)
+        if not code:
+            return facts
+        result = _json_out(_device_call(port, [code], timeout=20))
+        if result.get("ok"):
+            result.update(facts)
+            result["note"] = (
+                "It is playing on the board now"
+                + (f" and repeats for {facts['minutes']:g} minutes" if loop else " once")
+                + f" (one pass is {facts['seconds_per_pass']} s). device_stop_music ends it.")
         return result
 
     @mcp.tool()

@@ -197,3 +197,13 @@ def test_plucked_strings_are_a_call_like_the_others():
     # a melody is plucked too, unless she asks for another wave
     assert "wave='pluck'" in server.music_call("E4 G4", 80, 0, False, 0, "", "pluck")[1]
     assert "harp(score" in elecrow_api.api_card(API, "music")
+
+
+def test_a_bowed_string_is_a_call_like_the_others():
+    import elecrow_mcp_server as server
+    facts, code = server.erhu_call("E4:2 G4 A4:3 -", 60, 0, True, 5, "Sehnsucht")
+    assert facts == {"notes": 4, "volume": None, "minutes": 5.0, "seconds_per_pass": 7.0}
+    assert "music.erhu(" in code and "title='Sehnsucht'" in code
+    compile(code, "<erhu>", "exec")
+    assert server.erhu_call("E4 X", 60, 0, True, 5, "")[0]["status"] == "bad_score"
+    assert "erhu(score" in elecrow_api.api_card(API, "music")

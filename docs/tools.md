@@ -516,7 +516,7 @@ runtime went on it: a small computer she writes Python for.
 | autonomous | hands |
 |---|---|
 | look | `elecrow_status`, `elecrow_debug`, `elecrow_serial_log`, `device_info`, `device_list_apps`, `device_read_app`, `device_log`, `device_screenshot`, `device_api` |
-| act | `elecrow_serial_command`, `elecrow_build`, `device_write_app`, `device_run_app`, `device_exec`, `device_set_autostart`, `device_play_music`, `device_play_pad`, `device_play_harp`, `device_stop_music` |
+| act | `elecrow_serial_command`, `elecrow_build`, `device_write_app`, `device_run_app`, `device_exec`, `device_set_autostart`, `device_play_music`, `device_play_pad`, `device_play_harp`, `device_play_erhu`, `device_stop_music` |
 | never unasked | `elecrow_flash`, `device_delete_app` |
 
 `device_exec` and `device_set_autostart` moved up on 2026-10-07, by the owner's explicit yes: her
@@ -557,6 +557,7 @@ runs her own Python apps on it — no compile, no flash:
 | `device_api` | everything the board's `nova` library has, with exact call shapes and a short correct example | none — built from the library's source by `tools/elecrow_api.py`, never hand-kept |
 | `device_play_music`, `device_stop_music` | play a melody she composed (`"E4 G4 A4:2 - C5:0.5"`, one voice) on the board's speaker in the background; a loop ends by itself after `minutes` | the score is read by the board's own `nova/score.py` on the PC first and refused in words; volume is quiet by default and capped at 0.25; a loop runs 120 minutes at most |
 | `device_play_harp` | chords she composed as plucked strings (Karplus-Strong), broken into single notes a different way on every pass | as `device_play_music` |
+| `device_play_erhu` | a melody she composed on one bowed string, drawn sample by sample: swelling notes, glides between them, a vibrato that sets in on held notes | as `device_play_music` |
 | `device_play_pad` | a carpet of sound she composed: slow chords (`"A2+E3+C4:8 F2+C3+A3:8"`, up to 4 voices, up to 6 different chords) that swell and fade, each voice with a drifting octave above it | as `device_play_music`: read by `nova/score.py` first, quiet by default, capped, a loop ends by itself |
 | `device_run_app` | run an app ≤ 8 s, return output and traceback; a looping app is stopped with Ctrl-C | none |
 | `device_exec` | one MicroPython snippet ≤ 8 s | none |
