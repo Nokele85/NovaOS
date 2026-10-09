@@ -199,10 +199,13 @@ def keys_call(score: str, instrument: str, style: str, tempo: int, volume: float
     except ValueError as exc:
         return {"ok": False, "status": "bad_score", "error": str(exc),
                 "message": "Nothing was played. Correct the score and call again."}, ""
-    if instrument not in KEYS_INSTRUMENTS:
+    instrument = "+".join(n for n in str(instrument).replace(" ", "").split("+") if n)
+    unknown = [n for n in instrument.split("+") if n not in KEYS_INSTRUMENTS]
+    if unknown or not instrument or instrument.count("+") > 2:
         return {"ok": False, "status": "bad_instrument",
-                "error": f"there is no instrument {instrument!r}; there is: "
-                         + ", ".join(KEYS_INSTRUMENTS)}, ""
+                "error": (f"there is no instrument {unknown[0]!r}" if unknown else
+                          "one to three instruments, joined by +")
+                         + "; there is: " + ", ".join(KEYS_INSTRUMENTS)}, ""
     if style not in ("", "hold", "broken"):
         return {"ok": False, "status": "bad_style",
                 "error": 'style is "hold", "broken", or left out'}, ""
@@ -885,7 +888,10 @@ def _device_tools(mcp: FastMCP) -> None:
         relaxing. `instrument`: "warmpad" (soft warm pad), "halo" (glassy airy
         pad), "choir" (voices singing aah), "strings" (string ensemble) - these
         are held; "harp", "vibes" (vibraphone, long shimmer), "musicbox",
-        "piano" - these are struck. `score` is chords, voices joined by +, then
+        "piano" - these are struck. Several at once: join up to three
+        with +, like "warmpad+harp" or "strings+choir+vibes" - the held ones
+        carry the chords while the struck ones play broken notes over them,
+        which is the richest sound there is. `score` is chords, voices joined by +, then
         :BEATS (4 when left out), like "A3+E4+C5:8 F3+C4+A4:8 C4+G4+E5:8 -:2";
         three or four voices a chord in octaves 3-5, any number of chords.
         `style` is "hold" (the whole chord sounding, melting into the next -

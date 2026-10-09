@@ -588,7 +588,8 @@ def harp(score, tempo=60, volume=None, loop=True, minutes=10, title=""):
 STRUCK = ("harp", "vibes", "musicbox", "piano")
 KEYS_LOW, KEYS_HIGH = 130.0, 1600.0
 MAX_VOICES = 10
-_inst = None                    # (name, [(root hz, samples, state template)])
+MAX_LAYERS = 3
+_inst = {}                      # name -> its zones, for the instruments in use
 
 
 def instruments():
@@ -604,12 +605,10 @@ def instruments():
 
 
 def _load(name):
-    global _inst
-    if _inst is not None and _inst[0] == name:
-        return _inst[1]
+    if name in _inst:
+        return _inst[name]
     import gc
     import json
-    _inst = None
     gc.collect()
     for folder in ("/sd/inst", "/inst"):
         try:
@@ -628,7 +627,7 @@ def _load(name):
             f.readinto(pcm)
             loop = zone.get("loop") or (0, 0)
             zones.append((zone["hz"], pcm, loop[0], loop[1], zone["n"]))
-    _inst = (name, zones)
+    _inst[name] = zones
     return zones
 
 
@@ -681,71 +680,86 @@ def _sample_in(out, n: int, src, state):
     st[3] = g1
 
 
-def _keys_mixer(steps, zones, struck):
-    """Recorded notes sounding together. `steps` yields (notes to start now as
-    (pitch, loudness 0..255, slices to hold), slices until the next step)."""
+def _keys_mixer(layers):
+    """Recorded notes sounding together, of one instrument or of several at
+    once. Each layer is [its steps, its zones, whether it is struck, its share
+    of the loudness]; steps yield (notes to start now as (pitch, loudness
+    0..255, slices to hold), slices until that layer's next step)."""
     outs = [bytearray(SLICE * 2) for _ in range(3)]
     silence = bytes(SLICE * 2)
-    sounding = []                               # [samples, state, slices still held]
+    sounding = []                   # [samples, state, slices still held, level, struck]
+    waits = [0] * len(layers)
+    live = [True] * len(layers)
     k = 0
-
-    def one():
-        nonlocal k, sounding
+    while True:
+        for n, layer in enumerate(layers):
+            if not live[n] or waits[n] > 0:
+                continue
+            try:
+                notes, waits[n] = next(layer[0])
+            except StopIteration:
+                live[n] = False
+                continue
+            zones, struck, share = layer[1], layer[2], layer[3]
+            for freq, loud, hold in notes:
+                while freq < KEYS_LOW:
+                    freq *= 2
+                while freq > KEYS_HIGH:
+                    freq /= 2
+                zone = min(zones, key=lambda z: abs(math.log(freq / z[0])))
+                level = loud * share // 255
+                st = array("i", [0, 0, int(freq / zone[0] * 65536), level if struck else 0, 0,
+                                 zone[2], zone[3], zone[4], 0])     # a stroke starts at full
+                if len(sounding) >= MAX_VOICES:
+                    sounding.pop(0)
+                sounding.append([zone[1], st, max(1, hold), level, struck])
+        if not any(live):
+            for voice in sounding:
+                voice[2] = 0
+            if not sounding:
+                return
+        for n in range(len(waits)):
+            if waits[n] > 0:
+                waits[n] -= 1
         out = outs[k]
         k = (k + 1) % 3
         out[:] = silence
         alive = []
         for voice in sounding:
-            pcm, st = voice[0], voice[1]
+            pcm, st, struck = voice[0], voice[1], voice[4]
             now = st[3]
             if voice[2] > 0:                    # held: struck notes die away anyway
                 voice[2] -= 1
                 st[4] = now * 15 // 16 if struck and now else (now or voice[3])
             else:                               # let go
                 st[4] = now * (5 if struck else 6) // 8 if now > 24 else 0
-            if st[3] == 0 and voice[2] > 0:
-                st[4] = voice[3]                # the first slice: it swells in
             _sample_in(out, SLICE, pcm, st)
             if st[8] == 0 and (st[3] > 0 or voice[2] > 0):
                 alive.append(voice)
         sounding = alive
-        return out
-
-    for notes, slices in steps:
-        for freq, loud, hold in notes:
-            while freq < KEYS_LOW:
-                freq *= 2
-            while freq > KEYS_HIGH:
-                freq /= 2
-            zone = min(zones, key=lambda z: abs(math.log(freq / z[0])))
-            level = loud * 1200 // 255
-            st = array("i", [0, 0, int(freq / zone[0] * 65536), level if struck else 0, 0,
-                             zone[2], zone[3], zone[4], 0])     # a stroke starts at full
-            if len(sounding) >= MAX_VOICES:
-                sounding.pop(0)
-            sounding.append([zone[1], st, max(1, hold), level])
-        for _ in range(slices):
-            yield one()
-    for voice in sounding:
-        voice[2] = 0
-    while sounding:                             # the last notes ring out
-        yield one()
+        yield out
 
 
-def _hold_steps(chords, tempo, loop, until):
+def _hold_steps(chords, tempo, loop, until, lead=True):
     # every voice of a chord, held for as long as the chord lasts
     beat = 60.0 / tempo
     while True:
         for voices, beats in chords:
             slices = max(1, int(beats * beat * RATE / SLICE + 0.5))
             yield [(f, 150 + _rnd(60), slices) for f in voices], slices
-        _now["loops"] += 1
+        if lead:
+            _now["loops"] += 1
         if _over(loop, until):
             return
 
 
-def _broken_steps(chords, tempo, loop, until, hold):
+def _broken_steps(chords, tempo, loop, until, hold, lead=True):
+    counted = _now["loops"]
     for plucked, slices in _harp_steps(chords, tempo, loop, until):
+        if lead:
+            counted = _now["loops"]
+        else:
+            _now["loops"] = counted         # only the first layer counts the passes
         yield [(f, gain, hold) for f, gain in plucked], slices
 
 
@@ -753,7 +767,9 @@ def keys(score, instrument="warmpad", style="", tempo=50, volume=None, loop=True
          minutes=10, title=""):
     """Play chords she wrote on a RECORDED instrument - real samples, like a
     digital piano. `instrument` is one of instruments() (warmpad, halo, choir,
-    strings, harp, vibes, musicbox ...). `score` is chords like pad()'s,
+    strings, harp, vibes, musicbox ...), or up to three at once joined by +,
+    "warmpad+harp": the held ones carry the chords, the struck ones play
+    broken notes over them. `score` is chords like pad()'s,
     "A3+E4+C5:8 F3+C4+A4:8 -:2". `style` is "hold" (all voices of a chord
     sounding together, one chord melting into the next) or "broken" (the chord
     as single notes, a different way each time); left out, held instruments
@@ -763,21 +779,31 @@ def keys(score, instrument="warmpad", style="", tempo=50, volume=None, loop=True
     chords = S.parse_chords(score)
     if not 20 <= tempo <= 160:
         raise ValueError("tempo is beats per minute, 20 to 160")
-    struck = instrument in STRUCK
-    style = style or ("broken" if struck else "hold")
-    if style not in ("hold", "broken"):
+    names = [n for n in str(instrument).replace(" ", "").split("+") if n]
+    if not 1 <= len(names) <= MAX_LAYERS:
+        raise ValueError("one to %d instruments, joined by +" % MAX_LAYERS)
+    if style not in ("", "hold", "broken"):
         raise ValueError('style is "hold" or "broken"')
     stop()
-    zones = _load(instrument)
+    for name in list(_inst):
+        if name not in names:
+            del _inst[name]                 # room for the ones this piece uses
+    packs = [_load(name) for name in names]
     _level(volume)
     _now.update({"playing": True, "title": str(title), "loop": bool(loop),
                  "loops": 0, "notes": len(chords), "error": None})
     until = _until(minutes)
-    if style == "hold":
-        steps = _hold_steps(chords, tempo, loop, until)
-    else:
-        steps = _broken_steps(chords, tempo, loop, until, 12 if struck else 6)
-    _start(_keys_mixer(steps, zones, struck), RATE)
+    layers = []
+    for n, name in enumerate(names):
+        struck = name in STRUCK
+        how = style if len(names) == 1 and style else ("broken" if struck else "hold")
+        if how == "hold":
+            steps = _hold_steps(chords, tempo, loop, until, n == 0)
+        else:
+            steps = _broken_steps(chords, tempo, loop, until, 12 if struck else 6, n == 0)
+        share = 1200 if len(names) == 1 else (1000 if struck else 620)
+        layers.append([steps, packs[n], struck, share])
+    _start(_keys_mixer(layers), RATE)
     return status()
 
 

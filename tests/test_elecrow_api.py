@@ -220,6 +220,12 @@ def test_recorded_instruments_are_a_call_like_the_others():
     bad = server.keys_call("A3", "erhu", "", 60, 0, True, 5, "")[0]
     assert bad["status"] == "bad_instrument" and "warmpad" in bad["error"]
     assert server.keys_call("A3", "harp", "sideways", 60, 0, True, 5, "")[0]["status"] == "bad_style"
+    # several instruments at once, joined by +
+    facts, code = server.keys_call("A3+E4", " warmpad + harp ", "", 50, 0, True, 5, "")
+    assert facts["instrument"] == "warmpad+harp" and "instrument='warmpad+harp'" in code
+    assert server.keys_call("A3", "warmpad+kazoo", "", 50, 0, True, 5, "")[0]["status"] == "bad_instrument"
+    many = server.keys_call("A3", "harp+vibes+choir+halo", "", 50, 0, True, 5, "")[0]
+    assert many["status"] == "bad_instrument"
     assert "keys(score" in elecrow_api.api_card(API, "music")
 
 
