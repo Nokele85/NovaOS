@@ -700,9 +700,9 @@ def _device_tools(mcp: FastMCP) -> None:
         then optionally :BEATS (4 when left out), like
         "A2+E3+C4:8 F2+C3+A3:8 C3+G3+E4:8 -:2". Notes are C D E F G A B with #
         or b and an octave 2-7; "-" is a rest. Up to 4 voices in a chord, up to
-        6 different chords in a piece. Low, open chords (roots in octave 2-3,
-        fifths and thirds above) sound warm; long lengths (6-12 beats) sound
-        calm. `tempo` is beats per minute, 20-120 - slow is the point.
+        6 different chords in a piece. The speaker is small and has no bass: put
+        roots in octave 3, the other voices in octaves 3-5, thirds and fifths
+        spread wide; long lengths (6-12 beats) sound calm. `tempo` is beats per minute, 20-120 - slow is the point.
         Leave `volume` out - Benni sets loudness with the board's button; pass
         0.03 to 0.25 only when he asks you for a level. `loop` repeats it
         for `minutes` (10 when left out, 120 at most), then it ends by itself.

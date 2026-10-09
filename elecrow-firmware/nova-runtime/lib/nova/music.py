@@ -36,7 +36,7 @@ WAVES = ("soft", "sine", "square")
 #: tens, kept across pieces and power cuts, stepped by the board's button (ten
 #: up per press, and from 100 round to 0 - sound off). Every piece is rendered
 #: at FULL, what 100 % means, and turned down on its way to the speaker.
-FULL = 0.4
+FULL = 0.3
 VOLUME_FILE = "/nova_volume"
 FIRST_VOLUME = 20
 #: A piece may still name a level, 0..LOUDEST as before; it sets the knob.
@@ -54,7 +54,16 @@ MAX_PAD_CHORDS = 6
 #: first pad sounded like tinnitus. Overtones give it a body (and let a small
 #: speaker carry notes too low for it), and the copies that sit a cycle off
 #: beat slowly against the rest, so the sound moves while nothing changes.
-PAD_VOICE = ((1, 0, 1.0), (1, 1, 0.5), (2, 0, 0.3), (3, 0, 0.1))
+PAD_VOICE = ((1, 0, 1.0), (2, 0, 0.5), (2, 1, 0.14), (3, 0, 0.26), (4, 0, 0.13),
+             (4, 1, 0.05), (5, 0, 0.06))
+#: Only two upper parts have a copy a cycle off, and a faint one: up there a
+#: hertz is a few cents, a shimmer; on the fundamental it was a wobble that
+#: shook the whole sound.
+#: Below SPEAKER_FLOOR the little speaker does not sing, it shakes: its cone
+#: and the case rattle, and the notes above are smeared by it. Parts under it
+#: are thinned out steeply; the ear puts a low note back from its overtones.
+SPEAKER_FLOOR = 280
+SPEAKER_CEILING = 3600
 #: A melody note is struck and dies away rather than being held like a beep.
 DECAY = (100, 80, 63, 49, 38, 29, 22)
 
@@ -392,7 +401,10 @@ def _chord(voices, amp):
     for f in voices:
         for multiple, off, weight in PAD_VOICE:
             cycles = int(f * multiple * n / PAD_RATE + 0.5) + off
-            if 0 < cycles * PAD_RATE // n < 5000:   # nothing shrill, nothing the rate folds
+            hz = cycles * PAD_RATE // n
+            if 0 < hz < SPEAKER_CEILING:
+                if hz < SPEAKER_FLOOR:
+                    weight = weight * hz * hz / (SPEAKER_FLOOR * SPEAKER_FLOOR)
                 parts.append((cycles, weight))
     norm = sum(w for _, w in parts) or 1.0
     buf = bytearray(n * 2)
