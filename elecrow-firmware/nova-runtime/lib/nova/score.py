@@ -53,3 +53,39 @@ def parse(score):
 def seconds(notes, tempo):
     """How long one pass through the piece takes at `tempo` beats per minute."""
     return sum(beats for _, beats in notes) * 60.0 / tempo
+
+
+# A carpet of sound: chords instead of notes, voices joined by "+".
+#
+#   "A2+E3+C4:8 F2+C3+A3:8 -:2"
+MAX_VOICES = 4
+MAX_CHORDS = 64
+HOW_PAD = "write chords like A2+E3+C4:8 (voices joined by +, then :BEATS) and - for a rest"
+
+
+def parse_chords(score):
+    """The score as a list of (tuple of frequencies, beats); () is a rest.
+    A chord with no length lasts 4 beats."""
+    chords = []
+    for token in str(score).replace("|", " ").replace(",", " ").split():
+        name, _, beats = token.partition(":")
+        try:
+            length = float(beats) if beats else 4.0
+        except ValueError:
+            raise ValueError("%r: the length is a number of beats - %s" % (token, HOW_PAD))
+        if not 0 < length <= 64:
+            raise ValueError("%r: a chord lasts between 0 and 64 beats" % token)
+        if name in _REST:
+            voices = ()
+        else:
+            parts = [p for p in name.split("+") if p]
+            if not parts or len(parts) > MAX_VOICES:
+                raise ValueError("%r: a chord has 1 to %d voices - %s"
+                                 % (token, MAX_VOICES, HOW_PAD))
+            voices = tuple(note_freq(p) for p in parts)
+        chords.append((voices, length))
+    if not chords:
+        raise ValueError("the score is empty - " + HOW_PAD)
+    if len(chords) > MAX_CHORDS:
+        raise ValueError("%d chords; a piece holds %d at most" % (len(chords), MAX_CHORDS))
+    return chords

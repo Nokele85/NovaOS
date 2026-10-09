@@ -98,6 +98,36 @@ def music_call(score: str, tempo: int, volume: float, loop: bool, minutes: float
             "seconds_per_pass": round(reader.seconds(notes, int(tempo)), 1)}, code
 
 
+def pad_call(score: str, tempo: int, volume: float, loop: bool, minutes: float,
+             title: str) -> tuple[dict | None, str]:
+    """(refusal, code) for a carpet of sound — `music_call`, for chords."""
+    reader = _score()
+    if reader is None:
+        return {"ok": False, "status": "no_runtime_source",
+                "message": "The runtime's source is not on this machine."}, ""
+    try:
+        chords = reader.parse_chords(score)
+    except ValueError as exc:
+        return {"ok": False, "status": "bad_score", "error": str(exc),
+                "message": "Nothing was played. Correct the score and call again."}, ""
+    distinct = {voices for voices, _ in chords if voices}
+    if len(distinct) > 6:
+        return {"ok": False, "status": "bad_score",
+                "error": f"{len(distinct)} different chords; a pad holds 6 at most",
+                "message": "Nothing was played. Use fewer different chords."}, ""
+    if not 20 <= int(tempo) <= 120:
+        return {"ok": False, "status": "bad_tempo",
+                "error": "a pad's tempo is beats per minute, 20 to 120"}, ""
+    volume = max(0.0, min(MUSIC_LOUDEST, float(volume)))
+    minutes = max(0.5, min(MUSIC_MINUTES_MAX, float(minutes))) if loop else 0.0
+    code = ("import json\nfrom nova import music\n"
+            f"print(json.dumps(music.pad({score!r}, tempo={int(tempo)}, "
+            f"volume={volume!r}, loop={bool(loop)!r}, minutes={minutes!r}, "
+            f"title={str(title)[:60]!r})))\n")
+    return {"chords": len(chords), "volume": volume, "minutes": minutes,
+            "seconds_per_pass": round(reader.seconds(chords, int(tempo)), 1)}, code
+
+
 def _check(files: dict) -> list[str]:
     """What would fail when this app runs; [] when nothing was found or nothing can be checked."""
     api = _api()
@@ -649,6 +679,39 @@ def _device_tools(mcp: FastMCP) -> None:
         if not code:
             return facts
         result = _json_out(_device_call(port, [code], timeout=12))
+        if result.get("ok"):
+            result.update(facts)
+            result["note"] = (
+                "It is playing on the board now"
+                + (f" and repeats for {facts['minutes']:g} minutes" if loop else " once")
+                + f" (one pass is {facts['seconds_per_pass']} s). device_stop_music ends it.")
+        return result
+
+    @mcp.tool()
+    def device_play_pad(score: str, tempo: int = 40, volume: float = MUSIC_QUIET,
+                        loop: bool = True, minutes: float = MUSIC_MINUTES,
+                        title: str = "", port: str = "auto") -> dict:
+        """Play a CARPET OF SOUND you composed on your board's speaker - spheric,
+        calm, music to dream to: slow chords that swell in and fade out, each
+        voice with a faint shimmering octave above it. Use this, not
+        device_play_music, whenever sound should be wide and floating rather
+        than a tune. `score` is chords, one token each: voices joined by +,
+        then optionally :BEATS (4 when left out), like
+        "A2+E3+C4:8 F2+C3+A3:8 C3+G3+E4:8 -:2". Notes are C D E F G A B with #
+        or b and an octave 2-7; "-" is a rest. Up to 4 voices in a chord, up to
+        6 different chords in a piece. Low, open chords (roots in octave 2-3,
+        fifths and thirds above) sound warm; long lengths (6-12 beats) sound
+        calm. `tempo` is beats per minute, 20-120 - slow is the point.
+        `volume` is 0 to 0.25, quiet (0.06) when left out. `loop` repeats it
+        for `minutes` (10 when left out, 120 at most), then it ends by itself.
+        `title` is your name for the piece. It takes a few seconds to prepare,
+        then answers and the sound plays on; a new piece replaces the one
+        playing; device_stop_music ends it. This is the board's own
+        synthesiser: you do not write an app or a WAV file for it."""
+        facts, code = pad_call(score, tempo, volume, loop, minutes, title)
+        if not code:
+            return facts
+        result = _json_out(_device_call(port, [code], timeout=40))
         if result.get("ok"):
             result.update(facts)
             result["note"] = (

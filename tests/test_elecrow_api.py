@@ -140,3 +140,41 @@ def test_the_music_tool_refuses_what_the_board_would_and_stays_quiet():
 def test_the_reference_shows_her_the_music_module():
     card = elecrow_api.api_card(API, "music")
     assert "play(score" in card and "stop(" in card
+
+
+def test_a_carpet_of_sound_is_read_and_bounded():
+    score = _score()
+    chords = score.parse_chords("A2+E3+C4:8 - F2+C3")
+    assert [len(v) for v, _ in chords] == [3, 0, 2] and [b for _, b in chords] == [8.0, 4.0, 4.0]
+    assert round(chords[0][0][0], 1) == 110.0
+    for bad, why in (("C2+E2+G2+B2+D3", "1 to 4 voices"), ("C2+X", "not a note"), ("", "empty")):
+        try:
+            score.parse_chords(bad)
+        except ValueError as exc:
+            assert why in str(exc), (bad, str(exc))
+        else:
+            raise AssertionError(f"{bad!r} was accepted")
+
+    import elecrow_mcp_server as server
+    facts, code = server.pad_call("A2+E3+C4:8 F2+C3+A3:8", 60, 0.9, True, 5, "Traum")
+    assert facts == {"chords": 2, "volume": 0.25, "minutes": 5.0, "seconds_per_pass": 16.0}
+    assert "music.pad(" in code and "title='Traum'" in code
+    compile(code, "<pad>", "exec")
+    assert server.pad_call("C2+Q", 40, 0.06, True, 10, "")[0]["status"] == "bad_score"
+    many = " ".join(f"{n}2+{n}3" for n in "CDEFGAB")
+    assert "6 at most" in server.pad_call(many, 40, 0.06, True, 10, "")[0]["error"]
+    assert server.pad_call("C2", 10, 0.06, True, 10, "")[0]["status"] == "bad_tempo"
+    assert "pad(score" in elecrow_api.api_card(API, "music")
+
+
+def test_a_module_the_board_does_not_have_is_named_before_it_is_written():
+    """Found live (2026-10-09): `import audio` inside a try, and the conclusion
+    that the firmware had no sound."""
+    problems = elecrow_api.check_app({"main.py": (
+        "import time, math, struct\nfrom machine import I2S\n"
+        "try:\n    import audio\nexcept ImportError:\n    audio = None\n"
+        "import helper\nimport numpy\n"), "helper.py": "X = 1\n"}, API)
+    assert len(problems) == 2, problems
+    said = " | ".join(problems)
+    assert "no module `audio`" in said and "music.pad" in said
+    assert "numpy" in said and "helper" not in said and "struct" not in said

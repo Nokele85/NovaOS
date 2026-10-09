@@ -437,3 +437,38 @@ async def test_the_last_page_closes_the_goal_and_the_desk_names_the_page(cfg, cl
                   verdict="ok", result="", why="")
     loop = SimpleNamespace(cfg=SimpleNamespace(user_name="Sam"))
     assert desk_line(loop, reach) == "started a comic page Der Fährmann — Seite 6"
+
+
+async def test_a_page_drawn_in_conversation_is_written_on_its_goal(cfg, guard, timers,
+                                                                    controller, clock):
+    """SPEC §7.6b: the goal's desk learns what a reply did — when exactly one
+    open task is about a comic."""
+    from types import SimpleNamespace
+
+    from yurios.world.tools.fakes import FakeToolRunner
+
+    from .conftest import ScriptedChat, collect, make_toolbrain
+
+    class SpyLab:
+        def start(self, contract):
+            pass
+
+    call = ('[[draw_comic {"title": "HEIM — Seite 1", "panels": '
+            '[{"picture": "a", "who": []}, {"picture": "b", "who": []}]}]]')
+    one = SimpleNamespace(id="g-comic", kind="task", text="Baue den 3-seitigen Comic")
+    other = SimpleNamespace(id="g-board", kind="task", text="Dream-Pad bauen")
+    for goals, written in (([one, other], True), ([one, one], False), ([other], False)):
+        guard._rates["draw_comic"] = 2
+        guard._buckets["draw_comic"] = {"tokens": 2.0, "at": clock.now()}
+        brain = make_toolbrain(cfg, guard, timers, controller,
+                               ScriptedChat([["Ich zeichne. ", call]]),
+                               runner=FakeToolRunner(), selfies=SpyLab())
+        brain.goals = SimpleNamespace(open_goals=lambda goals=goals: goals)
+        desk = cfg.vault_dir / "workspace" / "goals" / "g-comic.md"
+        if desk.exists():
+            desk.unlink()
+        await collect(brain._stream_with_tools([{"role": "user", "content": "zeichne"}], []))
+        assert desk.exists() is written
+        if written:
+            text = desk.read_text(encoding="utf-8")
+            assert "HEIM — Seite 1" in text and "do not draw it again" in text

@@ -642,6 +642,9 @@ class ToolBrain(BrainAdapter):
                 result = await self._execute(
                     call, turn, outcomes=outcomes, goal_about=goal_about)
             raw.append(f'\n[[{call.tool} → {result}]]\n')
+            if (call.tool == "draw_comic"
+                    and not str(result).startswith(("denied", "error", "Error"))):
+                self._credit_comic(call.args)
             if (call.tool == "draw_comic" and prev_spoken.strip()
                     and not str(result).startswith(("denied", "error", "Error"))):
                 # (not `"started" in result`: the result she is shown is cut to
@@ -978,6 +981,36 @@ class ToolBrain(BrainAdapter):
                 # as one she volunteered (§15.5).
                 data["_proactive"] = not correlate.answering()
                 self.selfies.start(data)
+
+    def _credit_comic(self, args: dict) -> None:
+        """Write a page drawn in conversation onto the one comic goal it belongs to.
+
+        A goal step reads its own desk before it acts, and the desk knew nothing
+        of what a reply had done: three pages asked for and delivered at night
+        were drawn again by their goal the next morning (SPEC §7.6b). Only when
+        exactly one open task is about a comic — a guess between two would write
+        the page onto the wrong one. Never fatal: this is bookkeeping."""
+        try:
+            goals = getattr(self, "goals", None)
+            vault = getattr(self.cfg, "vault_dir", None)
+            if goals is None or not vault or (args or {}).get("goal_id"):
+                return
+            about = [g for g in goals.open_goals()
+                     if getattr(g, "kind", "") == "task" and "comic" in g.text.casefold()]
+            if len(about) != 1:
+                return
+            from datetime import datetime
+            from pathlib import Path
+            title = " ".join(str((args or {}).get("title") or "a comic page").split())
+            desk = Path(vault) / "workspace" / "goals" / f"{about[0].id}.md"
+            desk.parent.mkdir(parents=True, exist_ok=True)
+            with desk.open("a", encoding="utf-8") as f:
+                f.write(f"\n## {datetime.now().isoformat(timespec='seconds')} — in conversation"
+                        f"\n\ndone in conversation, at {self.cfg.user_name}'s asking:\n"
+                        f"- started a comic page {title} — it goes straight to "
+                        f"{self.cfg.user_name}; this page is done, do not draw it again\n")
+        except Exception:  # noqa: BLE001
+            log.warning("could not credit the comic page to its goal", exc_info=True)
 
     def _complete_goal(self, data: dict, *, completed_by: str) -> None:
         """Close one explicitly-linked goal after its synchronous effect lands."""

@@ -45,6 +45,32 @@ NOT_ON_THE_BOARD = {
 
 #: What `nova`'s accessors hand back, so a method called on the result can be
 #: checked. (module, class) — read from the accessors' own bodies.
+#: What `import x` can mean on her board: MicroPython's own modules (and the
+#: u-names they still answer to). Anything else is her own file, `nova`, or a
+#: module that is not there - on 2026-10-09 she wrote a synthesiser around
+#: `import audio`, caught the ImportError herself, and concluded the firmware
+#: had no sound.
+ON_THE_BOARD = frozenset("""
+    array asyncio binascii bluetooth btree builtins cmath collections cryptolib deflate dht
+    errno esp esp32 espnow framebuf gc hashlib heapq io json machine math micropython
+    neopixel network ntptime onewire os platform random re requests select socket ssl
+    struct sys time uctypes vfs websocket zlib _thread _onewire sdcard nova
+    uarray uasyncio ubinascii ucollections uerrno uhashlib uheapq uio ujson uos urandom
+    ure urequests uselect usocket ussl ustruct usys utime uzlib
+""".split())
+#: What she most likely wanted when she reached for one that is not there.
+INSTEAD = {
+    "audio": "sound is `from nova import speaker, music` (music.play / music.pad), "
+             "or the tools device_play_music / device_play_pad",
+    "audioio": "sound is `from nova import speaker, music`",
+    "i2s": "I2S is `from machine import I2S`; for music use `from nova import music`",
+    "wave": "there is no `wave`; `nova.speaker.play_wav(io, path)` plays a 16-bit mono WAV",
+    "numpy": "there is no numpy on a microcontroller; use `math` and plain loops",
+    "threading": "use `_thread`, sparingly - a busy thread makes the board deaf on its cable",
+    "datetime": "use `time.localtime()`",
+    "pathlib": "use `os`",
+}
+
 ACCESSOR_RETURNS = {"display": ("screen", "Display"), "io": ("aw9523", "AW9523")}
 
 
@@ -175,6 +201,12 @@ def check_app(files: dict[str, str], api: dict) -> list[str]:
                     if top in NOT_ON_THE_BOARD and top not in own:
                         problems.append(f"{fname} line {node.lineno}: `import {a.name}` — "
                                         f"{NOT_ON_THE_BOARD[top]}")
+                    elif top not in ON_THE_BOARD and top not in own:
+                        problems.append(
+                            f"{fname} line {node.lineno}: `import {a.name}` — there is no "
+                            f"module `{top}` on the board"
+                            + (f"; {INSTEAD[top]}" if top in INSTEAD else
+                               "; device_api shows what the board has"))
                     if a.name.startswith("nova."):
                         sub = a.name.split(".")[1]
                         if sub not in submodules:
