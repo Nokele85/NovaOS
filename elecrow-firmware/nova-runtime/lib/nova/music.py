@@ -108,6 +108,30 @@ def _press(_pin):
     _pressed = now
     level = volume()
     volume(0 if level >= 100 else level + 10)
+    try:                                # drawn outside the interrupt
+        micropython.schedule(_show_volume, 0)
+    except RuntimeError:
+        pass
+
+
+def _show_volume(_arg=None):
+    # A strip along the bottom of the screen: the level in words and as a bar.
+    # It stays until whatever owns the screen draws again.
+    try:
+        import nova
+
+        from . import screen as SC
+        d = nova.display()
+        top = SC.H - 58
+        d.fb.fill_rect(0, top, SC.W, 58, SC.BLACK)
+        d.fb.hline(0, top, SC.W, SC.WHITE)
+        d.text("Lautst. %d%%" % _vol if _vol else "Ton aus", 8, top + 8, SC.WHITE, 2)
+        d.fb.rect(8, top + 32, SC.W - 16, 16, SC.WHITE)
+        if _vol:
+            d.fb.fill_rect(10, top + 34, (SC.W - 20) * _vol // 100, 12, SC.GREEN)
+        d.show()
+    except Exception:
+        pass
 
 
 def knob():
