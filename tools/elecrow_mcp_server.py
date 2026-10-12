@@ -184,6 +184,7 @@ KEYS_INSTRUMENTS = {
     "choir": "voices singing aah - held", "strings": "a string ensemble - held",
     "harp": "a harp - plucked", "vibes": "a vibraphone - struck, long shimmer",
     "musicbox": "a music box - struck, bright",
+    "piano": "an acoustic piano - struck",
 }
 
 
@@ -205,6 +206,8 @@ def keys_call(score: str, instrument: str, style: str, tempo: int, volume: float
     except ValueError as exc:
         return {"ok": False, "status": "bad_score", "error": str(exc),
                 "message": "Nothing was played. Correct the score and call again."}, ""
+    original_chords = chords
+    chords = reader.fit_accompaniment(chords, tune)
     lead = str(lead).strip().lower()
     if lead and lead not in KEYS_INSTRUMENTS:
         return {"ok": False, "status": "bad_instrument",
@@ -236,11 +239,8 @@ def keys_call(score: str, instrument: str, style: str, tempo: int, volume: float
     if tune:
         facts["melody_notes"] = len(tune)
         facts["melody_seconds"] = round(reader.seconds(tune, int(tempo)), 1)
-        if chords and abs(facts["melody_seconds"] - facts["seconds_per_pass"]) > 0.5:
-            facts["warning"] = (
-                f"the melody lasts {facts['melody_seconds']} s and the chords "
-                f"{facts['seconds_per_pass']} s a pass: they drift apart as they repeat. "
-                "Give both the same number of beats.")
+        if chords != original_chords:
+            facts["accompaniment_adjusted"] = True
     return facts, code
 
 
@@ -932,7 +932,7 @@ def _device_tools(mcp: FastMCP) -> None:
         """Play music you composed on RECORDED instruments on your board -
         real samples, like a digital piano; the best sound it has, use it
         first. `instrument`, held: "warmpad", "halo" (glassy pad), "choir",
-        "strings"; struck: "harp", "vibes", "musicbox". Join up to three with
+        "strings"; struck: "harp", "vibes", "musicbox", "piano". Join up to three with
         +, like "warmpad+harp": held ones carry the chords, struck ones play
         broken notes over them. `score` is the chords, voices joined by +, then
         :BEATS (4 when left out): "A3+E4+C5:8 F3+C4+A4:8 -:2"; three or four
@@ -942,7 +942,8 @@ def _device_tools(mcp: FastMCP) -> None:
         "-" a rest. `lead` is the instrument that plays it (musicbox, vibes,
         harp for a clear tune; choir or strings for a sung one). With a melody
         the score may be empty - the tune alone. Give melody and chords the
-        SAME number of beats, or they drift apart as they repeat. For a song
+        same number of beats for deliberate harmony; otherwise accompaniment
+        is automatically repeated or trimmed to one melody pass. For a song
         that exists, write its melody from memory note by note and say that it
         is from memory. `style`: "hold" or "broken" for a single instrument;
         left out, each gets what suits it. `tempo` is beats per minute, 20-160.

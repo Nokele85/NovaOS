@@ -3119,7 +3119,9 @@ of sound is the same contract in chords (`device_play_pad`). So are plucked stri
 every pass: voices added up from sine waves were, to the owner's ear, a whistle. And so are
 recorded instruments (`device_play_keys`): a few sampled notes per instrument, cut from a
 SoundFont on the PC, replayed at the pitch wanted — what a digital piano does, and the first of
-her board's voices that is not computed. Beside a piece runs the air (`device_ambience`): nature
+her board's voices that is not computed. When a sampled melody has accompaniment, the board
+**MUST** repeat or trim the accompaniment to one melody pass and restart all layers on a shared
+audio-slice boundary, including non-integral length ratios. Beside a piece runs the air (`device_ambience`): nature
 sounds generated on the board, mixed under whatever plays or sounding alone, started and ended on
 their own — a piece ending, or being stopped, **MUST NOT** end them. Loudness is the owner's: a knob on the
 board (0–100 % in tens, the board's button stepping it and wrapping to off) that every piece is

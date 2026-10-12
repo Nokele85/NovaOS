@@ -300,6 +300,7 @@ def test_a_tune_is_played_note_for_note_over_the_chords():
     alone, code = server.keys_call("", "vibes", "", 60, 0, False, 0, "", melody="C4 D4 E4")
     assert alone["chords"] == 0 and alone["melody_notes"] == 3 and "music.keys(''" in code
     drift = server.keys_call("C4+E4:8", "harp", "", 60, 0, True, 5, "", melody="C4 D4 E4")[0]
-    assert "drift apart" in drift["warning"]
+    assert drift["accompaniment_adjusted"] is True
+    assert drift["seconds_per_pass"] == drift["melody_seconds"] == 3.0
     assert server.keys_call("C4", "harp", "", 60, 0, True, 5, "", melody="C4 Q")[0]["status"] == "bad_melody"
     assert server.keys_call("C4", "harp", "", 60, 0, True, 5, "", melody="C4", lead="kazoo")[0]["status"] == "bad_instrument"

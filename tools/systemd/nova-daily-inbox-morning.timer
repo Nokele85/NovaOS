@@ -1,0 +1,11 @@
+[Unit]
+Description=Nova morning reminder, German local time
+
+[Timer]
+OnCalendar=*-*-* 09:00,10,20,30,40,50:00 Europe/Berlin
+Unit=nova-daily-inbox@morning.service
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

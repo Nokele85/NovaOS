@@ -55,6 +55,22 @@ def seconds(notes, tempo):
     return sum(beats for _, beats in notes) * 60.0 / tempo
 
 
+def fit_accompaniment(chords, melody):
+    """SPEC §26.4: repeat/trim chords to exactly one melody pass."""
+    if not chords or not melody:
+        return chords
+    remaining = sum(beats for _, beats in melody)
+    fitted = []
+    index = 0
+    while remaining > 1e-9:
+        voices, beats = chords[index % len(chords)]
+        length = min(beats, remaining)
+        fitted.append((voices, length))
+        remaining -= length
+        index += 1
+    return fitted
+
+
 # A carpet of sound: chords instead of notes, voices joined by "+".
 #
 #   "A2+E3+C4:8 F2+C3+A3:8 -:2"

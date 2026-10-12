@@ -1160,6 +1160,24 @@ def _tune_steps(notes, tempo, loop, until, lead):
             return
 
 
+def _aligned_steps(factory, slices_per_pass, loop, until, lead):
+    # SPEC §26.4: every sampled layer restarts on the same audio-slice boundary.
+    while True:
+        left = slices_per_pass
+        for notes, slices in factory():
+            if left <= 0:
+                break
+            slices = min(slices, left)
+            yield notes, slices
+            left -= slices
+        if left > 0:
+            yield [], left
+        if lead:
+            _now["loops"] += 1
+        if _over(loop, until):
+            return
+
+
 def keys(score, instrument="warmpad", style="", tempo=50, volume=None, loop=True,
          minutes=10, title="", melody="", lead=""):
     """Play chords she wrote on a RECORDED instrument - real samples, like a
@@ -1178,6 +1196,7 @@ def keys(score, instrument="warmpad", style="", tempo=50, volume=None, loop=True
     the musicbox. Returns status() at once - the piece plays on."""
     tune = S.parse(melody) if str(melody).strip() else []
     chords = S.parse_chords(score) if str(score).strip() or not tune else []
+    chords = S.fit_accompaniment(chords, tune)
     if not 20 <= tempo <= 160:
         raise ValueError("tempo is beats per minute, 20 to 160")
     names = [n for n in str(instrument).replace(" ", "").split("+") if n]
@@ -1198,8 +1217,11 @@ def keys(score, instrument="warmpad", style="", tempo=50, volume=None, loop=True
                  "loops": 0, "notes": len(chords) + len(tune), "error": None})
     until = _until(minutes)
     layers = []
+    pass_slices = max(1, int(sum(b for _, b in tune) * 60 / tempo * RATE / SLICE + 0.5))
     if tune:                                # the tune leads; what is under it steps back
-        layers.append([_tune_steps(tune, tempo, loop, until, True), _load(lead),
+        steps = _aligned_steps(lambda: _tune_steps(tune, tempo, False, None, False),
+                               pass_slices, loop, until, True)
+        layers.append([steps, _load(lead),
                        lead in STRUCK, 1250])
     for n, name in enumerate(names):
         struck = name in STRUCK
@@ -1209,6 +1231,13 @@ def keys(score, instrument="warmpad", style="", tempo=50, volume=None, loop=True
             steps = _hold_steps(chords, tempo, loop, until, first)
         else:
             steps = _broken_steps(chords, tempo, loop, until, 12 if struck else 6, first)
+        if tune:
+            if how == "hold":
+                factory = lambda: _hold_steps(chords, tempo, False, None, False)
+            else:
+                hold = 12 if struck else 6
+                factory = lambda hold=hold: _broken_steps(chords, tempo, False, None, hold, False)
+            steps = _aligned_steps(factory, pass_slices, loop, until, False)
         share = 1200 if len(names) == 1 else (1000 if struck else 620)
         if tune:
             share = share * 9 // 20

@@ -1,0 +1,11 @@
+[Unit]
+Description=Benni's agreed daily reminder to Nova (%i)
+After=yurios.service
+
+[Service]
+Type=oneshot
+User=benni
+WorkingDirectory=/home/benni/YuriOS
+Environment=PYTHONPATH=/home/benni/YuriOS
+ExecStart=/home/benni/YuriOS/.venv/bin/python tools/nova_daily_inbox.py %i
+UMask=0077
