@@ -1145,6 +1145,8 @@ def _broken_steps(chords, tempo, loop, until, hold, lead=True):
         else:
             _now["loops"] = counted         # only the first layer counts the passes
         yield [(f, gain, hold) for f, gain in plucked], slices
+    if not lead:
+        _now["loops"] = counted
 
 
 def _tune_steps(notes, tempo, loop, until, lead):
