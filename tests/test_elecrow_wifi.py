@@ -24,7 +24,7 @@ def test_client_frames_are_masked_and_preserve_control_bytes():
     try:
         client.write(b'\r\x03\x01')
         frame = peer.recv(100)
-        assert frame[:2] == b'\x82\x83'
+        assert frame[:2] == b'\x81\x83'
         mask = frame[2:6]
         assert bytes(v ^ mask[i % 4] for i, v in enumerate(frame[6:])) == b'\r\x03\x01'
     finally:

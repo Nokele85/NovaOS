@@ -48,7 +48,8 @@ class WebReplStream:
             self._until(b"Password: ", 4)
             self.write((password + "\r").encode())
             self._until(b"WebREPL connected", 4)
-            self.sock.settimeout(None)
+            # A peer that sends only half a frame must not defeat deadlines.
+            self.sock.settimeout(3)
         except Exception:
             self.close()
             raise OSError("WebREPL connection or authentication failed") from None
@@ -110,7 +111,9 @@ class WebReplStream:
             data.extend(self.read(256))
 
     def write(self, data):
-        self._send(data)
+        # WebREPL reserves binary frames for its file-transfer protocol;
+        # terminal input (including raw-REPL control bytes) uses text frames.
+        self._send(data, 1)
         return len(data)
 
     def reset_input_buffer(self):
