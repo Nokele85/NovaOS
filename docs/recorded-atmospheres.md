@@ -26,6 +26,11 @@ CC0-Lizenz und Prüfsumme stehen im Katalog. Nur nach vollständiger geprüfter
 Diese Daten und PCM-Dateien sind lokale, ignorierte Assets. Code wird wie üblich
 über Git ausgerollt; Firmwarebibliotheken und Assets werden auf das Board übertragen.
 
+Die SoftSPI-SD-Karte benötigt Ladezeit. `TOOL_TIMEOUT_OVERRIDES=device_soundscape=90`
+gibt nur diesem Werkzeug mehr Zeit; andere Werkzeuge behalten ihre bisherigen Fristen.
+Natur-/Stadtdateien sind Feldaufnahmen, Fantasy-/Science-Fiction-Dateien enthalten auch
+gestaltete und synthetische Effekte als gespeicherte Samples, keine Live-Synthese.
+
 Aktuelle Import-/Installationshelfer liegen im lokalen Nova-Arbeitsordner:
 `build-sound-library.py` und `install-sound-library.py`. Der begrenzte
 LAN-Übertragungsdienst verwendet ein einmaliges Token, eine feste Dateiauswahl,

@@ -994,7 +994,7 @@ def _device_tools(mcp: FastMCP) -> None:
         facts, code = elecrow_sound_library.scene_call(_sound_root(), layers, level, minutes, title)
         if not code:
             return facts
-        result = _json_out(_device_call(port, [code], timeout=30))
+        result = _json_out(_device_call(port, [code], timeout=85))
         if result.get("ok"):
             result.update(facts)
         return result

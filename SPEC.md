@@ -827,7 +827,10 @@ to every new subscriber before its first live event. Malformed JSON is logged an
   (exactly the discovered tools; anything else denied), **per-tool rate limits** (token bucket
   on the injected clock), a **per-turn call cap** (`TOOL_MAX_CALLS_PER_TURN`, **16**: how many
   calls one reply — or one step of her own work, §26.2 — may chain, each result back before the
-  next), a **per-call timeout**, and **result truncation**. Catalog tools (`list_notes`, `read_note`,
+  next), a **per-call timeout**, and **result truncation**. An owner-configured exact-name
+  `TOOL_TIMEOUT_OVERRIDES` entry **MAY** replace the default deadline with 1–300 seconds;
+  chat and autonomous calls **MUST** apply the same resolver, and invalid entries **MUST**
+  fall back to the default. Catalog tools (`list_notes`, `read_note`,
   `read_skill`) **MUST** keep a higher bound than the default 600-character fact cap: a listing is
   the result, not a fact to speak to, and cutting `list_notes` mid-JSON is how a diary folder became
   a days-long loop (she never saw `count`). `list_notes` **MUST** put `count` first, drop `mtime`/`dir`

@@ -134,7 +134,7 @@ async def dispatch(loop, tool: str, args: dict, *, goal_id: str = "",
         filing = ((lambda contract: acts.file_from_step(
             loop, contract, goal_id=goal_id)) if tool == FILE_GOAL else None)
         verdict, result = await loop.hands.execute(
-            tool, args, timeout_s=loop.cfg.tool_timeout_s, realise=filing)
+            tool, args, timeout_s=loop.hands.timeout_for(tool), realise=filing)
         # Host-side realisation (§7.5) — the timer actually scheduled, the
         # render actually started. The stamp is what makes the product land in
         # the Vault instead of in the chat (§18, principle 8).

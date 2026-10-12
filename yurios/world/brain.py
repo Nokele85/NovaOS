@@ -44,7 +44,7 @@ from .gallery import Unsent
 from .situation import render_situation
 from .tools.client import (
     ToolRunner, ToolSpec, arg_names_from_specs, build_directive)
-from .tools.guard import Guard, Turn, failure
+from .tools.guard import Guard, Turn, failure, tool_timeout
 from .tools.timers import TimerBoard
 from .tooltags import ToolCall, ToolTagParser, native_to_markers
 
@@ -704,13 +704,15 @@ class ToolBrain(BrainAdapter):
                 outcomes.append({"tool": call.tool, "args": call.args,
                                  "verdict": verdict, "result": result})
             return result
+        timeout = tool_timeout(call.tool, self.cfg.tool_timeout_s,
+                               getattr(self.cfg, "tool_timeout_overrides", ""))
         try:
             text = await asyncio.wait_for(
                 self.runner.call(call.tool, call.args),
-                timeout=self.cfg.tool_timeout_s)
+                timeout=timeout)
         except Exception as e:                     # timeout, tool error, transport
             dt = (self.guard.clock.now() - t0) * 1000
-            why = failure(e, self.cfg.tool_timeout_s)
+            why = failure(e, timeout)
             self.guard.audit(call.tool, call.args, "error", dt, why)
             result = f"error ({why})"
             if outcomes is not None:

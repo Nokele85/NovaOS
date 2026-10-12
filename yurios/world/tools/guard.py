@@ -56,6 +56,21 @@ READ_ONLY = frozenset({"read_note", "list_notes", "count_note_lines",
                        "read_skill"})
 
 
+def tool_timeout(tool: str, default: float, overrides: str = "") -> float:
+    """SPEC §7.3: owner-configured per-tool deadlines, bounded to 1..300 s."""
+    for item in overrides.split(","):
+        name, _, value = item.partition("=")
+        if name.strip() != tool:
+            continue
+        try:
+            seconds = float(value)
+        except ValueError:
+            continue
+        if 1 <= seconds <= 300:
+            return seconds
+    return float(default)
+
+
 def _fingerprint(tool: str, args: dict | None) -> str:
     """What counts as "the same call". Exact, deliberately: `cozy` and `bare`
     are two different photos she may well have meant, so only a byte-identical

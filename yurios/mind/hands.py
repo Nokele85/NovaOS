@@ -53,7 +53,7 @@ from yurios.kernel import correlate
 from yurios.kernel.clock import Clock
 from yurios.models import model_is_local
 from yurios.world.tools.guard import (READ_ONLY, RESULT_LIMITS, Guard, _fingerprint,
-                                      failure)
+                                      failure, tool_timeout)
 from yurios.world.tooltags import native_call, strip_native_calls
 
 from .goals import GOAL_TEXT_MAX
@@ -597,6 +597,10 @@ class Hands:
         longest = max(self._cooldown_s(t) for t in (CHEAP + EXPENSIVE))
         self.ledger = {fp: at for fp, at in self.ledger.items()
                        if now - float(at) < longest}
+
+    def timeout_for(self, tool: str) -> float:
+        return tool_timeout(tool, float(getattr(self.cfg, "tool_timeout_s", 10)),
+                            str(getattr(self.cfg, "tool_timeout_overrides", "")))
 
     def _cooldown_s(self, tool: str) -> float:
         """Per-tool if the override names it, else the class default — and never
