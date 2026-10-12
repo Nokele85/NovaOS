@@ -419,6 +419,7 @@ RELEVANT: dict[str, dict[str, list[str]]] = {
 #: Every other knob is documented there — tests/test_envfile.py holds that — and
 #: this only fills a blank, so a line that gains a comment there wins.
 HELP: dict[str, str] = {
+    "TOOL_TIMEOUT_OVERRIDES": "Exact tool=seconds entries (1–300), comma-separated; other calls use the default timeout",
     "GGUF_REPO": "Hugging Face repo to download a gguf/… model from when its id "
                  "can't name one — blank derives it from the id",
     "SELFIE_LOCAL_MODEL": "path to the .safetensors checkpoint — SDXL (Illustrious "
@@ -794,6 +795,7 @@ PAGES: list[dict] = [
              ("MIND_TOOL_COOLDOWN_EXPENSIVE_S", "Repeat cooldown, expensive hands (s)"),
              ("MIND_TOOL_COOLDOWN_S", "Per-hand cooldown overrides"),
              ("TOOL_TIMEOUT_S", "Call timeout (s)"),
+             ("TOOL_TIMEOUT_OVERRIDES", "Per-tool timeout overrides"),
              ("TIMER_MAX_MINUTES", "Longest timer (minutes)"),
          ]},
          {"title": "Rate limits in conversation — calls per minute", "advanced": True,
