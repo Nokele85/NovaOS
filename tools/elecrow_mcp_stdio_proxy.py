@@ -182,7 +182,8 @@ async def _transcribe_notation(png_b64: str) -> dict:
         "empty and uncertainties must explain it. This is ONLY this page, not the "
         "entire piece. Tempo=80 when not printed, and mark that assumption uncertain.")
     body = {"model": model, "max_tokens": 3500, "temperature": 0,
-            "reasoning_effort": "none", "messages": [{"role": "user", "content": [
+            "reasoning_effort": "none", "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": [
                 {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64," + png_b64}}]}]}
     try:

@@ -50,6 +50,14 @@ def test_voice_selection_does_not_mix_piano_hands():
     assert music.parse_musicxml(raw, voice='2')['melody'] == 'E4:1'
 
 
+def test_explicit_chord_line_selection_is_not_a_guessed_melody():
+    raw = xml(note('C') + note('G', extra='<chord/>') + note('E', extra='<chord/>'))
+    assert music.parse_musicxml(raw, chord_mode='highest')['melody'] == 'G4:1'
+    low = music.parse_musicxml(raw, chord_mode='lowest')
+    assert low['melody'] == 'C4:1'
+    assert low['confirmed'] is False and low['warning']
+
+
 @pytest.mark.parametrize('raw', [
     xml(note(extra='<grace/>')),
     xml(note(extra='<tie type="stop"/>')),

@@ -726,15 +726,18 @@ def _device_tools(mcp: FastMCP) -> None:
                                 png_bytes, rgb565be_to_rgb, upload_code)
 
     @mcp.tool()
-    def device_score_source(url: str, part: str = "", voice: str = "", page: int = 1) -> dict:
+    def device_score_source(url: str, part: str = "", voice: str = "", page: int = 1,
+                            chord_mode: str = "reject") -> dict:
         """Read sheet music from the web: MusicXML/MXL directly, PDF/image via
         the proxy's notation vision. HTML returns notation links to follow.
         Search the web for sheet music first. Multi-part XML lists parts: call
-        again with the melody part/voice. Images/PDF are unverified candidates,
+        again with the melody part/voice. A chordal voice requires explicit
+        chord_mode=highest/lowest to extract its top/bass line; confirm that
+        line is the intended melody. Images/PDF are unverified candidates,
         one page per call; never invent unreadable notes or claim the entire
         song from one page. Returns source_id for provenance when saving."""
         try:
-            return {"ok": True, **elecrow_repertoire.read_source(url, part, voice, page)}
+            return {"ok": True, **elecrow_repertoire.read_source(url, part, voice, page, chord_mode)}
         except Exception as exc:  # malformed/unsupported notation must not become guessed notes
             return {"ok": False, "status": "notation_unavailable", "error": str(exc)[:350],
                     "next": "Use a readable MusicXML export, another part, or a clearer notation source."}

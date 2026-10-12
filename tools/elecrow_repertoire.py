@@ -67,7 +67,7 @@ def validate_melody(melody):
     return ' '.join(canonical), len(tokens), round(beats, 6)
 
 
-def parse_musicxml(raw, part='', voice=''):
+def parse_musicxml(raw, part='', voice='', chord_mode='reject'):
     """Exact written pitch/duration, explicit refusal of unsupported notation."""
     if len(raw) > MAX_BYTES or b'<!ENTITY' in raw.upper():
         raise ValueError('Notation too large or contains entity declarations')
@@ -88,6 +88,8 @@ def parse_musicxml(raw, part='', voice=''):
     voice = voice or (voices[0] if voices else '1')
     if voice not in voices:
         raise ValueError('Unknown voice; available: ' + ', '.join(voices))
+    if chord_mode not in ('reject', 'highest', 'lowest'):
+        raise ValueError('chord_mode is reject, highest or lowest')
     if selected.find('.//transpose') is not None:
         raise ValueError('Transposing instruments require a concert-pitch export')
     if selected.find('.//ending') is not None or selected.find('.//sound[@dacapo]') is not None or selected.find('.//sound[@dalsegno]') is not None:
@@ -129,8 +131,6 @@ def parse_musicxml(raw, part='', voice=''):
                 span = max(span, start + duration)
                 if child.findtext('voice', '1') != voice:
                     continue
-                if chord:
-                    raise ValueError('The selected voice contains chords; select a monophonic melody voice')
                 pitch = child.find('pitch')
                 name = '-'
                 if pitch is not None:
@@ -141,6 +141,21 @@ def parse_musicxml(raw, part='', voice=''):
                 elif child.find('rest') is None:
                     raise ValueError('Unpitched percussion cannot be read as a melody')
                 tied = {t.attrib.get('type') for t in child.findall('tie')}
+                if chord:
+                    if chord_mode == 'reject':
+                        raise ValueError('Voice contains chords: choose a melody voice or explicitly select chord_mode=highest/lowest')
+                    if not events or events[-1][0] != start or events[-1][2] != duration:
+                        raise ValueError('Chord tones have different durations; use a monophonic edition')
+                    def pitch_number(n):
+                        if n == '-':
+                            raise ValueError('A rest cannot be a chord tone')
+                        semi = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}[n[0]]
+                        return (int(n[-1]) + 1) * 12 + semi + (1 if '#' in n else -1 if 'b' in n else 0)
+                    previous = events[-1]
+                    choose = pitch_number(name) > pitch_number(previous[1])
+                    if choose == (chord_mode == 'highest'):
+                        events[-1] = (start, name, duration, tied)
+                    continue
                 events.append((start, name, duration, tied))
         measures.append((events, span))
         index = len(measures) - 1
@@ -197,7 +212,9 @@ def parse_musicxml(raw, part='', voice=''):
     return {'status': 'parsed', 'title': tree.findtext('work/work-title', tree.findtext('movement-title', '')),
             'parts': choices, 'part': selected.attrib['id'], 'voices': voices, 'voice': voice,
             'melody': melody, 'tempo': tempo, 'notes': count, 'beats': beats,
-            'method': 'musicxml', 'confirmed': False}
+            'method': 'musicxml', 'chord_mode': chord_mode, 'confirmed': False,
+            'warning': ('Selected ' + chord_mode + ' note of each chord; confirm it is the intended melody.')
+                       if chord_mode != 'reject' else ''}
 
 
 def _xml_bytes(raw):
@@ -226,7 +243,7 @@ class Links(HTMLParser):
             self.links.append(urllib.parse.urljoin(self.url, link))
 
 
-def read_source(url, part='', voice='', page=1):
+def read_source(url, part='', voice='', page=1, chord_mode='reject'):
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in ('http', 'https') or parsed.username or parsed.password:
         raise ValueError('Use a public HTTP(S) sheet-music URL without credentials')
@@ -239,13 +256,13 @@ def read_source(url, part='', voice='', page=1):
         raise ValueError('Notation source exceeds 8 MB')
     digest = hashlib.sha256(raw).hexdigest()
     # The same file's different parts/pages are distinct notation sources.
-    sid = hashlib.sha256(raw + f'{part}:{voice}:{page}'.encode()).hexdigest()[:20]
+    sid = hashlib.sha256(raw + f'{part}:{voice}:{page}:{chord_mode}'.encode()).hexdigest()[:20]
     location = root() / 'sources'
     location.mkdir(parents=True, exist_ok=True)
     (location / (sid + '.bin')).write_bytes(raw)
     metadata = {'source_id': sid, 'url': resolved, 'sha256': digest, 'bytes': len(raw), 'fetched': int(time.time())}
     if raw.startswith(b'%PDF') or 'image/' in content_type or raw.startswith((b'\x89PNG', b'\xff\xd8')):
-        import fitz
+        import pymupdf as fitz
         document = fitz.open(stream=raw, filetype='pdf' if raw.startswith(b'%PDF') else None)
         if not 1 <= page <= len(document):
             raise ValueError('Page outside the document')
@@ -265,7 +282,7 @@ def read_source(url, part='', voice='', page=1):
         _write(location / (sid + '.json'), metadata)
         return {**metadata, 'status': 'choose_notation_link', 'links': parser.links,
                 'message': 'Follow a sheet-music link with this tool; lyrics/chord labels are not a melody.'}
-    result = {**metadata, **parse_musicxml(_xml_bytes(raw), part, voice)}
+    result = {**metadata, **parse_musicxml(_xml_bytes(raw), part, voice, chord_mode)}
     _write(location / (sid + '.json'), result)
     return result
 
