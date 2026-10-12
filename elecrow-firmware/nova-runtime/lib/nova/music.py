@@ -901,7 +901,7 @@ def _melody_steps(notes, tempo, loop, until):
             return
 
 
-def _harp_steps(chords, tempo, loop, until):
+def _harp_steps(chords, tempo, loop, until, count_passes=True):
     # Each chord is played as broken notes, half a beat apart, and how it is
     # broken is thrown anew every time: rising, falling, there and back, or
     # wandering; some steps stay silent, some notes sparkle an octave up, and
@@ -939,7 +939,8 @@ def _harp_steps(chords, tempo, loop, until):
                         freq *= 2
                     plucked.append((freq, 120 + _rnd(110)))
                 yield plucked, step
-        _now["loops"] += 1
+        if count_passes:
+            _now["loops"] += 1
         if _over(loop, until):
             return
 
@@ -1138,15 +1139,8 @@ def _hold_steps(chords, tempo, loop, until, lead=True):
 
 
 def _broken_steps(chords, tempo, loop, until, hold, lead=True):
-    counted = _now["loops"]
-    for plucked, slices in _harp_steps(chords, tempo, loop, until):
-        if lead:
-            counted = _now["loops"]
-        else:
-            _now["loops"] = counted         # only the first layer counts the passes
+    for plucked, slices in _harp_steps(chords, tempo, loop, until, lead):
         yield [(f, gain, hold) for f, gain in plucked], slices
-    if not lead:
-        _now["loops"] = counted
 
 
 def _tune_steps(notes, tempo, loop, until, lead):
