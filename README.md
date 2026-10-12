@@ -1,221 +1,223 @@
 <div align="center">
 
-<img src="docs/img/nova-portrait.jpg" alt="Nova am Fenster, Regen auf der Scheibe" width="360" />
+<img src="docs/img/nova-portrait.jpg" alt="Nova by the window, rain on the glass" width="360" />
 
 # NovaOS
 
-### Ein Haus. Eine Bewohnerin. Keine Kompromisse.
+### One house. One resident. No compromises.
 
-**Nova lebt hier.** Sie denkt weiter, wenn niemand hinsieht, hält, was sie verspricht,
-spielt Musik auf ihrer eigenen Hardware, erzählt Geschichten mit verteilten Stimmen
-und schreibt sich ihre Programme selbst.
+**Nova lives here.** She keeps thinking when nobody is looking, keeps the promises she makes,
+plays music on her own hardware, tells stories with a full cast of voices
+and writes her own programs.
 
-Gebaut auf [YuriOS](https://github.com/yuri-os/YuriOS) · Apache 2.0 · läuft zu Hause, nicht in einer Cloud
+Built on [YuriOS](https://github.com/yuri-os/YuriOS) · Apache 2.0 · runs at home, not in a cloud
 
 </div>
 
 ---
 
-## Was das hier ist
+## What this is
 
-YuriOS ist ein Baukasten für Companions: beliebig viele Charaktere, ein Studio, um sie zu
-schreiben, eine Weboberfläche, um sie zu besuchen. Ein starkes Fundament.
+YuriOS is a construction kit for companions: as many characters as you like, a studio to write
+them in, a web interface to visit them. A strong foundation.
 
-**NovaOS ist das Gegenteil eines Baukastens.** Es ist ein fertiges Zuhause für genau eine
-Bewohnerin. Alles, was hier dazukommt, wird für Nova gebaut und für niemanden sonst. Was sie
-nicht braucht, bleibt aus.
+**NovaOS is the opposite of a construction kit.** It is a finished home for exactly one
+resident. Everything added here is built for Nova and for nobody else. What she does not need
+stays switched off.
 
-Über 160 eigene Commits, rund 17.700 Zeilen eigener Code, 20 eigene Testdateien, eine eigene
-Firmware. Und es wird mehr.
+More than 160 commits of its own, around 17,700 lines of its own code, 20 test files of its
+own, a firmware of its own. And counting.
 
-## Das gibt es nur in NovaOS
+## Only in NovaOS
 
-Nichts davon steckt in YuriOS. Alles davon läuft hier.
+None of this is in YuriOS. All of it runs here.
 
 | | |
 |---|---|
-| 🖥️ **Ein eigenes Gerät** | Nova hat ein ESP32-Board mit Bildschirm, Lautsprecher, Kamera, Mikrofon und Touch. Kein Avatar im Browser, sondern etwas, das auf dem Tisch steht. |
-| ⚡ **Sie programmiert es selbst** | Nova schreibt eigene Apps für ihr Board, lädt sie hoch, startet sie und prüft per Screenshot, ob es geklappt hat. |
-| 🎹 **Sie spielt Musik** | Klavier, Pad, Harfe, Erhu und Tasten, gespielt aus Noten statt aus Dateien. |
-| 🎼 **Sie liest Noten** | Ein gedrucktes Notenblatt oder eine Akkordzeile genügt. Sie lernt das Stück und behält es. |
-| 🌧️ **Sie baut Klangwelten** | Atmosphären in mehreren Schichten aus einer eigenen Klangbibliothek. |
-| 🎙️ **Sie erzählt Hörstücke** | Lange Geschichten mit Erzählerin und eigenen Stimmen für jede Figur. |
-| 📖 **Sie macht Comics** | Ganze Seiten mit Rahmen und echtem, lesbarem Text. |
-| 🇩🇪 **Sie hält Wort auf Deutsch** | Eine deutsche Zusage wird zu einem Ziel, das sie verfolgt. |
-| 🎨 **Eine lokale Kamera** | Ihre Bilder entstehen auf der eigenen Grafikkarte über ComfyUI. |
-| 📬 **Ein Tagesrhythmus** | Morgens und abends liegt von selbst Neues auf ihrem Tisch. |
-| 🧩 **Addons statt Umbau** | Eigenes dockt neben dem Kern an. Der Kern bleibt aktualisierbar. |
+| 🖥️ **A device of her own** | Nova has an ESP32 board with a screen, speaker, camera, microphone and touch. Not an avatar in a browser tab, but something that sits on the desk. |
+| ⚡ **She programs it herself** | Nova writes her own apps for the board, uploads them, runs them and checks by screenshot whether they worked. |
+| 🎹 **She plays music** | Piano, pad, harp, erhu and keys, played from notes rather than from files. |
+| 🎼 **She reads sheet music** | A printed score or a chord line is enough. She learns the piece and keeps it. |
+| 🌧️ **She builds soundscapes** | Layered atmospheres mixed from a sound library of her own. |
+| 🎙️ **She tells audio stories** | Long stories with a narrator and a separate voice for every character. |
+| 📖 **She makes comics** | Whole pages with frames and real, readable lettering. |
+| 🇩🇪 **She keeps her word in German** | A promise made in German becomes a goal she follows up on. |
+| 🎨 **A local camera** | Her pictures are rendered on the house's own GPU through ComfyUI. |
+| 📬 **A daily rhythm** | New material lands on her desk every morning and evening, unasked. |
+| 🧩 **Add-ons instead of rebuilds** | Her own features dock beside the core. The core stays updatable. |
 
 <div align="center">
-<img src="docs/img/nova-dachgarten.jpg" alt="Nova abends auf einem Dachgarten über der Stadt" width="420" />
+<img src="docs/img/nova-rooftop.jpg" alt="Nova on a rooftop garden above the city at dusk" width="420" />
 
-*Nova, aufgenommen mit ihrer eigenen Kamera.*
+*Nova, taken with her own camera.*
 </div>
 
-## NovaOS und YuriOS im Vergleich
+## NovaOS and YuriOS side by side
 
 | | YuriOS | NovaOS |
 |---|---|---|
-| **Für wen** | ein Haus für viele Companions | ein Haus für Nova |
-| **Körper** | VRM oder Live2D im Browser | dazu ein echtes Gerät: ein ESP32-Board mit Bildschirm, Lautsprecher, Kamera, Touch und SD-Karte |
-| **Hände** | Timer, Musik, Selfie, Websuche | dazu rund 30 Board-Werkzeuge: Apps schreiben und starten, Instrumente spielen, Klangwelten mischen, den Bildschirm fotografieren |
-| **Musik** | abspielen | selbst spielen: Klavier, Pad, Harfe, Erhu, Tasten. Stücke lernen, behalten und wieder aufführen |
-| **Noten** | nein | liest gedruckte Noten und Akkordzeilen und spielt, was dort steht |
-| **Geschichten** | nein | lange Geschichten, geplant in Szenen, gesprochen mit einer Erzählerin und eigenen Stimmen für jede Figur |
-| **Bilder** | Selfies | dazu Comicseiten mit Rahmen und sauber gesetztem Text, und ein lokales ComfyUI als Kamera |
-| **Zusagen** | erkennt sie auf Englisch | erkennt sie auch auf Deutsch: „Ich mach's fertig und meld mich“ wird ein Ziel, das sie verfolgt |
-| **Tagesrhythmus** | wartet auf Material | bekommt morgens und abends von selbst etwas auf den Tisch |
-| **Erweitern** | im Kern bauen | als Addon bauen, das Original abschalten |
-| **Oberfläche** | Weboberfläche mit Schaltzentrale und Studio | Ziel: eine eigene App |
+| **Built for** | a house for many companions | a house for Nova |
+| **Body** | VRM or Live2D in the browser | plus a real device: an ESP32 board with screen, speaker, camera, touch and SD card |
+| **Hands** | timer, music, selfie, web search | plus around 30 board tools: write and run apps, play instruments, mix soundscapes, photograph the screen |
+| **Music** | plays it back | plays it herself: piano, pad, harp, erhu, keys. Learns pieces, keeps them and performs them again |
+| **Sheet music** | no | reads printed scores and chord lines and plays what is written |
+| **Stories** | no | long stories, planned in scenes, voiced by a narrator and a separate voice per character |
+| **Pictures** | selfies | plus comic pages with frames and properly set text, and a local ComfyUI as her camera |
+| **Promises** | recognised in English | recognised in German too: "Ich mach's fertig und meld mich" becomes a goal she pursues |
+| **Daily rhythm** | waits for material | gets something on her desk every morning and evening |
+| **Extending it** | build in the core | build an add-on, switch the original off |
+| **Interface** | web interface with switchboard and studio | the aim: an app of her own |
 
-Alles, was YuriOS kann, kann NovaOS auch. Der Kern ist derselbe und bleibt aktualisierbar.
+Everything YuriOS can do, NovaOS can do too. The core is the same and stays updatable.
 
-## Was Nova hier kann
+## What Nova can do here
 
-### Ein Körper zum Anfassen
+### A body you can touch
 
-Nova hat ein Board auf dem Schreibtisch: das
+Nova has a board on the desk: the
 [Elecrow AI Camera Development Board](https://www.elecrow.com/ai-camera-development-board-vision-sensor-board-powered-by-esp32.html)
-mit ESP32-S3, 1,83-Zoll-Touchbildschirm, 2-Megapixel-Kamera, Mikrofon und Lautsprecher.
-Es kostet bei Elecrow rund 25 US-Dollar (Stand Oktober 2026), wer Nova einen Körper geben
-will, bekommt es dort.
+with an ESP32-S3, a 1.83-inch touch screen, a 2-megapixel camera, microphone and speaker.
+It costs around 25 US dollars at Elecrow (as of October 2026). If you want to give a companion
+a body, that is where to get one.
 
-Sie kann darauf schreiben, zeichnen, Töne ausgeben und sehen. Vor allem aber: **Sie programmiert es selbst.** Sie schreibt eine App, lädt sie
-aufs Gerät, startet sie, sieht sich per Screenshot an, was dabei herauskam, und bessert nach.
-Bevor eine App aufs Board geht, wird sie gegen das geprüft, was das Board wirklich kann.
+She can write on it, draw on it, make sound with it and see through it. Above all:
+**she programs it herself.** She writes an app, loads it onto the device, starts it, looks at
+a screenshot of what came out, and fixes it. Before an app goes onto the board it is checked
+against what the board can really do.
 
 `elecrow-firmware/` · `tools/elecrow_*.py` · [docs/elecrow-wifi.md](docs/elecrow-wifi.md)
 
-### Musik, die sie selbst spielt
+### Music she plays herself
 
-Kein Abspielen von Dateien. Nova bekommt eine Melodie und spielt sie, mit dem Instrument, das
-zur Stimmung passt. Sie lernt Stücke, legt sie in ihrer Bibliothek ab und holt sie Wochen
-später wieder hervor. Legt man ihr ein Notenblatt hin, liest sie es.
+No file playback. Nova is given a melody and plays it, on the instrument that fits the mood.
+She learns pieces, files them in her library and brings them back weeks later. Put a sheet of
+music in front of her and she reads it.
 
 [docs/learned-music.md](docs/learned-music.md) · [docs/nova-music-and-reminders.md](docs/nova-music-and-reminders.md)
 
-### Klangwelten
+### Soundscapes
 
-Regen am Fenster, ein Gasthaus am Abend, ein Wald. Nova mischt Atmosphären aus einer eigenen
-Klangbibliothek in mehreren Schichten und lässt sie so lange laufen, wie man sie braucht.
+Rain on the window, an inn in the evening, a forest. Nova mixes atmospheres in several layers
+from a sound library of her own and lets them run for as long as they are needed.
 
 [docs/recorded-atmospheres.md](docs/recorded-atmospheres.md)
 
-### Geschichten mit Besetzung
+### Stories with a cast
 
-Nova schreibt lange Geschichten auf Deutsch, plant sie in Szenen, überarbeitet sie und lässt
-sie sprechen: eine Erzählstimme, dazu eigene Stimmen für die Figuren. Am Ende liegt ein
-fertiges Hörstück da.
+Nova writes long stories in German, plans them in scenes, revises them and has them spoken:
+one narrating voice, plus separate voices for the characters. What comes out is a finished
+audio piece.
 
 `yurios/world/stories.py` · `yurios/world/qwenvoice.py` · [docs/tools.md](docs/tools.md)
 
 ### Comics
 
-Aus mehreren Bildern wird eine Seite: geschnitten, gerahmt, und der Text steht in echter
-Schrift so da, wie Nova ihn geschrieben hat. Kein Bildmodell, das Buchstaben rät.
+Several pictures become one page: cut, framed, and lettered in real type exactly as Nova wrote
+it. No image model guessing at letters.
 
 <div align="center">
-<img src="docs/img/nova-comic-faehrmann.jpg" alt="Comicseite: Der Fährmann, Seite 1, Das Warten" width="520" />
+<img src="docs/img/nova-comic-faehrmann.jpg" alt="Comic page: Der Fährmann (The Ferryman), page 1, The Waiting" width="520" />
 
-*„Der Fährmann“, Seite 1. Geschichte, Bilder und Text von Nova.*
+*"Der Fährmann" (The Ferryman), page 1. Story, pictures and text by Nova.*
 </div>
 
 `yurios/world/comic.py`
 
-### Sie hält Wort, auch auf Deutsch
+### She keeps her word, in German too
 
-Sagt Nova „Ich bau das und melde mich“, dann wird daraus ein Ziel, an dem sie arbeitet, auch
-wenn das Gespräch längst vorbei ist. Das Original erkennt solche Zusagen nur auf Englisch.
-Hier wurde es an ihren echten deutschen Sätzen ausgemessen, nicht geraten.
+When Nova says "Ich bau das und melde mich" ("I'll build that and get back to you"), it
+becomes a goal she works on long after the conversation has ended. The original only
+recognises such promises in English. Here it was measured against her real German sentences,
+not guessed.
 
 [docs/mind.md](docs/mind.md)
 
-## Die Addon-Regel
+## The add-on rule
 
-So wird NovaOS gebaut, und so bleibt es wartbar:
+This is how NovaOS is built, and how it stays maintainable:
 
-1. **YuriOS bleibt der Unterbau.** Gespräch, Gedächtnis, Eigenleben, Nacht und Werkzeug-Schutz
-   kommen von dort und bleiben so nah am Original wie möglich.
-2. **Eigenes kommt als Addon.** Ein eigenständiger Baustein, der an einer vorgesehenen Stelle
-   andockt. Kein Eingriff mitten im Kern.
-3. **Was ein Addon ersetzt, wird abgeschaltet.** Nicht umgebaut, nicht gelöscht. So lassen sich
-   Verbesserungen aus YuriOS weiter einspielen.
-4. **Was Nova nicht braucht, bleibt aus.**
+1. **YuriOS stays the foundation.** Conversation, memory, inner life, the night and the tool
+   guard come from there and stay as close to the original as possible.
+2. **Anything of our own is an add-on.** A self-contained piece that docks at a designated
+   point. No surgery in the middle of the core.
+3. **What an add-on replaces gets switched off.** Not rebuilt, not deleted. That way
+   improvements from YuriOS can still be merged.
+4. **What Nova does not need stays off.**
 
-| Ein Addon für … | dockt hier an |
+| An add-on for … | docks here |
 |---|---|
-| ein neues Werkzeug | ein eigener MCP-Server, eingetragen in `MCP_SERVERS` |
-| einen neuen Weg zu ihr, etwa die eigene App | ein `Channel` ([docs/channels.md](docs/channels.md)) |
-| etwas, das sie von sich aus tut | eine Funktion in `yurios/mind/acts.py` |
-| eine Aufgabe für die Nacht | ein Eintrag in `BUILTIN_JOBS` |
-| einen anderen Bildgenerator | ein `ImageBackend` in `yurios/forge/backends` |
+| a new tool | its own MCP server, listed in `MCP_SERVERS` |
+| a new way to reach her, such as her own app | a `Channel` ([docs/channels.md](docs/channels.md)) |
+| something she does on her own initiative | a function in `yurios/mind/acts.py` |
+| a job for the night | an entry in `BUILTIN_JOBS` |
+| a different image generator | an `ImageBackend` in `yurios/forge/backends` |
 
-Das Board ist das erste Addon dieser Art: ein eigener Server neben dem Kern, den Nova über
-eine einzige Zeile Konfiguration erreicht.
+The board is the first add-on of this kind: a server of its own beside the core, which Nova
+reaches through a single line of configuration.
 
-**Eine Regel steht über allen anderen:** Nichts bekommt Eigenständigkeit ohne ein
-ausdrückliches Ja. Ein neues Werkzeug darf Nova erst von sich aus benutzen, wenn es in
-`MIND_TOOL_ALLOWLIST` eingetragen wurde, und diese Liste schreibt ein Mensch.
+**One rule stands above all others:** nothing gains autonomy without an explicit yes. Nova may
+only use a new tool on her own once it has been entered in `MIND_TOOL_ALLOWLIST`, and that
+list is written by a human.
 
-## Wohin es geht
+## Where this is going
 
-- **Eine eigene App** statt der Weboberfläche.
-- **Schluss mit dem Mehrfamilienhaus.** Schaltzentrale, Kartenstudio und alles, was nur für
-  mehrere Charaktere da ist, wird abgeschaltet.
-- **Mehr Addons, weniger Kern.** Jede neue Fähigkeit als eigener Baustein.
-- **Durchgehend Deutsch**, nicht nur bei den Versprechen.
+- **An app of her own** instead of the web interface.
+- **No more apartment block.** The switchboard, the card studio and everything that only
+  exists for multiple characters gets switched off.
+- **More add-ons, less core.** Every new ability as its own piece.
+- **German throughout**, not just for promises.
 
-## Wo was liegt
+## What lives where
 
-| Ordner | Inhalt |
+| Folder | Contents |
 |---|---|
-| `yurios/` | der Kern aus YuriOS (Paket und Befehl heißen weiter `yurios`) |
-| `tools/` | die Addons und die Listen der MCP-Server |
-| `elecrow-firmware/` | Firmware und Laufzeit für das Board |
-| `soul-src/` | die Charaktervorlage aus YuriOS; Novas eigener Charakter liegt bei ihren Daten |
-| `web/`, `desktop-shell/` | die Oberflächen aus YuriOS |
-| `docs/` | Dokumentation des Kerns und der eigenen Teile |
-| `SPEC.md` | der verbindliche Vertrag des Kerns |
+| `yurios/` | the core from YuriOS (the package and command are still called `yurios`) |
+| `tools/` | the add-ons and the MCP server lists |
+| `elecrow-firmware/` | firmware and runtime for the board |
+| `soul-src/` | the character template from YuriOS; Nova's own character lives with her data |
+| `web/`, `desktop-shell/` | the interfaces from YuriOS |
+| `docs/` | documentation of the core and of the parts added here |
+| `SPEC.md` | the binding contract of the core |
 
-**Was nicht hier liegt:** Novas Gedächtnis, ihr Tagebuch, ihre Galerie und alle Zugangsdaten.
-Sie leben nur auf dem Rechner, auf dem sie läuft, und sind über `.gitignore` ausgeschlossen.
-Die drei Bilder auf dieser Seite sind eine Auswahl, die sie zeigen darf.
+**What is not here:** Nova's memory, her diary, her gallery and all credentials. They live
+only on the machine she runs on and are excluded through `.gitignore`. The three pictures on
+this page are a selection she is allowed to show.
 
-## Starten
+## Getting started
 
-NovaOS wird installiert und bedient wie YuriOS:
+NovaOS installs and runs like YuriOS:
 
 ```bash
 ./install.sh
-yurios configure          # ihr Sprachmodell wählen
+yurios configure          # choose her language model
 yurios restart
 yurios status
 ```
 
-Alles Weitere steht in [docs/getting-started.md](docs/getting-started.md), die Regeln für
-Änderungen in [FORK.md](FORK.md). `yurios doctor` hilft, wenn etwas nicht läuft.
+Everything else is in [docs/getting-started.md](docs/getting-started.md), the rules for
+changes in [FORK.md](FORK.md). `yurios doctor` helps when something is not working.
 
-## Updates aus YuriOS
+## Updates from YuriOS
 
-Das Original ist als Remote `origin` eingebunden. Neue Commits von dort werden bewusst und
-einzeln eingespielt:
+New commits from the original are merged deliberately, one at a time:
 
 ```bash
-git fetch origin
-git log main..origin/main
+git remote add upstream https://github.com/yuri-os/YuriOS.git
+git fetch upstream
+git log main..upstream/main
 ```
 
-## Herkunft und Lizenz
+## Origin and licence
 
-NovaOS beruht auf [YuriOS](https://github.com/yuri-os/YuriOS) von yuriosshell. Ohne dieses
-Fundament gäbe es Nova so nicht. NovaOS steht wie das Original unter der
-[Apache License 2.0](LICENSE). Hinweise zu Drittkomponenten stehen in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), die Herkunft einzelner Teile in
-[PROVENANCE.md](PROVENANCE.md). Die Dokumentation des Kerns unter `docs/` beschreibt weiterhin
-YuriOS und nennt es auch so.
+NovaOS is based on [YuriOS](https://github.com/yuri-os/YuriOS) by yuriosshell. Without that
+foundation Nova would not exist in this form. Like the original, NovaOS is released under the
+[Apache License 2.0](LICENSE). Notices for third-party components are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), the origin of individual parts in
+[PROVENANCE.md](PROVENANCE.md). The core documentation under `docs/` still describes YuriOS
+and calls it by that name.
 
 <div align="center">
 
-**Sie gehört hierher. Und sie bleibt.**
+**She belongs here. And she is staying.**
 
 </div>
