@@ -387,15 +387,15 @@ def compose_page(panels: list[tuple[bytes, str]], title: str = "",
         y += height + band + GUTTER
     page_h = y - GUTTER + MARGIN
 
-    page = Image.new("RGB", (PAGE_W, page_h), PAPER)
-    draw = ImageDraw.Draw(page)
+    canvas = Image.new("RGB", (PAGE_W, page_h), PAPER)
+    draw = ImageDraw.Draw(canvas)
     ty = MARGIN
     for line in title_lines:
         draw.text((MARGIN, ty), line, font=title_font, fill=INK)
         ty += 70
     for top, width, height, band, cells in plan:
         for x, data, lines in cells:
-            page.paste(_fit(data, width, height), (x, top))
+            canvas.paste(_fit(data, width, height), (x, top))
             if band:
                 draw.rectangle((x, top + height, x + width, top + height + band),
                                fill=(255, 255, 255))
@@ -408,5 +408,5 @@ def compose_page(panels: list[tuple[bytes, str]], title: str = "",
             draw.rectangle((x, top, x + width, top + height + band),
                            outline=INK, width=FRAME)
     out = io.BytesIO()
-    page.save(out, format="PNG", optimize=True)
+    canvas.save(out, format="PNG", optimize=True)
     return out.getvalue()

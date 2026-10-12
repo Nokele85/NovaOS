@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Callable, Literal, get_args
+from typing import Any, Callable, Literal, get_args
 
 import pydantic_core
 from mcp.server.fastmcp import FastMCP
@@ -642,7 +642,7 @@ def build_server(*, max_minutes: float | None = None,
                     raise ValueError(
                         f"panel {n}'s text is {len(text)} characters; a caption "
                         f"is at most {MAX_TEXT} — say less, or split the panel")
-                row = {"picture": str(panel["picture"]).strip(), "text": text}
+                row: dict[str, Any] = {"picture": str(panel["picture"]).strip(), "text": text}
                 who = panel.get("who")
                 if isinstance(who, str):
                     who = [w for w in (x.strip() for x in who.split(",")) if w]

@@ -328,7 +328,7 @@ def test_the_exporter_cannot_see_a_secret():
     one. `exporter.py` — the module that decides what goes *into* the bytes —
     must not be able to reach one at all.
     """
-    source = Path("yurios/characters/exporter.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "yurios/characters/exporter.py").read_text()
     tree = ast.parse(source)
     imported: set[str] = set()
     for node in ast.walk(tree):

@@ -308,8 +308,8 @@ def _table():
 def _add_sine(buf, n: int, tab, step: int, gain: int):
     # buf[i] += sine * gain / 32768, the sine read from a 4096-step table with a
     # 30-bit phase; `step` is the phase a sample advances.
-    b = ptr16(buf)
-    t = ptr16(tab)
+    b = ptr16(buf)  # noqa: F821 - MicroPython Viper builtin
+    t = ptr16(tab)  # noqa: F821 - MicroPython Viper builtin
     phase = 0
     i = 0
     while i < n:
@@ -328,9 +328,9 @@ def _add_sine(buf, n: int, tab, step: int, gain: int):
 def _blend(out, n: int, a, ga0: int, ga1: int, b, gb0: int, gb1: int):
     # out = a * ga + b * gb, each gain (0..256) gliding from its 0 to its 1
     # across the slice - one chord rising out of another with no step to hear.
-    o = ptr16(out)
-    pa = ptr16(a)
-    pb = ptr16(b)
+    o = ptr16(out)  # noqa: F821 - MicroPython Viper builtin
+    pa = ptr16(a)  # noqa: F821 - MicroPython Viper builtin
+    pb = ptr16(b)  # noqa: F821 - MicroPython Viper builtin
     i = 0
     while i < n:
         x = int(pa[i])
@@ -347,8 +347,8 @@ def _blend(out, n: int, a, ga0: int, ga1: int, b, gb0: int, gb1: int):
 
 @micropython.viper
 def _scale(src, dst, n: int, num: int):
-    s = ptr16(src)
-    d = ptr16(dst)
+    s = ptr16(src)  # noqa: F821 - MicroPython Viper builtin
+    d = ptr16(dst)  # noqa: F821 - MicroPython Viper builtin
     i = 0
     while i < n:
         v = int(s[i])
@@ -364,7 +364,7 @@ def _ks(buf, n: int, period: int, frac: int, keep: int):
     # neighbours (`frac`/256, which is what tunes it), leaned a quarter on the
     # one before (a gentle smoothing: half-and-half made every note a dry
     # click, an egg slicer) and `keep`/32768 of that (the dying away).
-    b = ptr16(buf)
+    b = ptr16(buf)  # noqa: F821 - MicroPython Viper builtin
     prev = 0
     i = period + 1
     while i < n:
@@ -383,7 +383,7 @@ def _ks(buf, n: int, period: int, frac: int, keep: int):
 
 @micropython.viper
 def _fade_out(buf, start: int, n: int):
-    b = ptr16(buf)
+    b = ptr16(buf)  # noqa: F821 - MicroPython Viper builtin
     i = 0
     while i < n:
         v = int(b[start + i])
@@ -396,8 +396,8 @@ def _fade_out(buf, start: int, n: int):
 @micropython.viper
 def _mix_in(out, src, off: int, n: int, gain: int):
     # out += src[off:] * gain / 256, held inside what 16 bits can say
-    o = ptr16(out)
-    s = ptr16(src)
+    o = ptr16(out)  # noqa: F821 - MicroPython Viper builtin
+    s = ptr16(src)  # noqa: F821 - MicroPython Viper builtin
     i = 0
     while i < n:
         x = int(s[off + i])
@@ -487,8 +487,8 @@ def ambiences():
 def _amb_noise(out, n: int, state):
     # 0 seed, 1 the smoothed value, 2 smoothing, 3 high (1) or low (0), 4 gain
     # now, 5 gain at the slice's end
-    o = ptr16(out)
-    st = ptr32(state)
+    o = ptr16(out)  # noqa: F821 - MicroPython Viper builtin
+    st = ptr32(state)  # noqa: F821 - MicroPython Viper builtin
     seed = int(st[0])
     lp = int(st[1])
     a = int(st[2])
@@ -522,8 +522,8 @@ def _amb_noise(out, n: int, state):
 def _amb_ticks(out, n: int, state):
     # 0 seed, 1 how loud the last tick still is, 2 chance of a new one, 3 how
     # much of it is kept each sample, 4 gain, 5 the smoothed value, 6 smoothing
-    o = ptr16(out)
-    st = ptr32(state)
+    o = ptr16(out)  # noqa: F821 - MicroPython Viper builtin
+    st = ptr32(state)  # noqa: F821 - MicroPython Viper builtin
     seed = int(st[0])
     env = int(st[1])
     chance = int(st[2])
@@ -559,9 +559,9 @@ def _amb_ticks(out, n: int, state):
 def _amb_chirp(out, n: int, tab, state):
     # 0 phase, 1 step, 2 where in its period, 3 the period, 4 one pulse,
     # 5 how many pulses, 6 gain
-    o = ptr16(out)
-    t = ptr16(tab)
-    st = ptr32(state)
+    o = ptr16(out)  # noqa: F821 - MicroPython Viper builtin
+    t = ptr16(tab)  # noqa: F821 - MicroPython Viper builtin
+    st = ptr32(state)  # noqa: F821 - MicroPython Viper builtin
     phase = int(st[0])
     step = int(st[1])
     at = int(st[2])
@@ -601,9 +601,9 @@ def _amb_ping(out, n: int, tab, state):
     # one note ringing out: 0 phase, 1 step, 2 how the step slides, 3 how loud
     # it still is, 4 how much is kept each sample, 5 gain, 6 samples of its
     # soft beginning left
-    o = ptr16(out)
-    t = ptr16(tab)
-    st = ptr32(state)
+    o = ptr16(out)  # noqa: F821 - MicroPython Viper builtin
+    t = ptr16(tab)  # noqa: F821 - MicroPython Viper builtin
+    st = ptr32(state)  # noqa: F821 - MicroPython Viper builtin
     phase = int(st[0])
     step = int(st[1])
     slide = int(st[2])
@@ -1047,9 +1047,9 @@ def _sample_in(out, n: int, src, state):
     # the recording, 1 the fraction between two samples, 2 how far a step is
     # (65536 = as recorded), 3 loudness now, 4 loudness at the slice's end
     # (0..4096), 5/6 the loop, 7 its length, 8 set to 1 when it has run out.
-    o = ptr16(out)
-    s = ptr16(src)
-    st = ptr32(state)
+    o = ptr16(out)  # noqa: F821 - MicroPython Viper builtin
+    s = ptr16(src)  # noqa: F821 - MicroPython Viper builtin
+    st = ptr32(state)  # noqa: F821 - MicroPython Viper builtin
     pos = int(st[0])
     frac = int(st[1])
     inc = int(st[2])
@@ -1307,9 +1307,9 @@ def _bow(out, n: int, tab, state):
     # state: 0 phase, 1 step, 2 the step it glides to, 3 loudness, 4 the
     # loudness it swells to, 5 vibrato phase, 6 vibrato depth, 7 vibrato speed,
     # 8 the depth it grows to, 9 how slowly the pitch glides, 10 the rosin's noise
-    o = ptr16(out)
-    t = ptr16(tab)
-    st = ptr32(state)
+    o = ptr16(out)  # noqa: F821 - MicroPython Viper builtin
+    t = ptr16(tab)  # noqa: F821 - MicroPython Viper builtin
+    st = ptr32(state)  # noqa: F821 - MicroPython Viper builtin
     phase = int(st[0])
     step = int(st[1])
     goal = int(st[2])
