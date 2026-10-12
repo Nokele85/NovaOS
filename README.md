@@ -242,7 +242,10 @@ Nothing here is promised, and nothing has a date. It is the list of where Nova i
 
 - [ ] **More add-ons, less core.** Every new ability as its own piece.
 - [ ] **An add-on template**, so that a new add-on starts from a working example.
-- [ ] **German throughout**, not just for promises.
+- [ ] **Localisation for more than one language.** Everything her mind reads and writes
+      (promises, goals, prompts, search, voices) should work in any language from one set of
+      language files, instead of English with German patched in.
+- [ ] **German throughout** as the first complete language, not just for promises.
 
 ## What lives where
 
