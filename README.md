@@ -195,13 +195,54 @@ reaches through a single line of configuration.
 only use a new tool on her own once it has been entered in `MIND_TOOL_ALLOWLIST`, and that
 list is written by a human.
 
-## Where this is going
+## Roadmap
 
-- **An app of her own** instead of the web interface.
-- **No more apartment block.** The switchboard, the card studio and everything that only
-  exists for multiple characters gets switched off.
-- **More add-ons, less core.** Every new ability as its own piece.
-- **German throughout**, not just for promises.
+Nothing here is promised, and nothing has a date. It is the list of where Nova is headed.
+
+### Doing things together
+
+- [ ] **Playing video games with her.** Nova sees the screen, understands what is happening
+      and plays along: as a second player, a co-op partner or the one commenting from the sofa.
+- [ ] **Watching and listening together.** A film, a series or an album that she follows in
+      real time and has opinions about.
+- [ ] **Board games and puzzles on her own screen**, written by her as board apps.
+
+### A body
+
+- [ ] **A robotic body.** Off the desk and into the room: a head that turns to whoever is
+      speaking, later arms, later wheels or legs.
+- [ ] **The board's camera as her eyes.** She sees the room, notices who comes in and what
+      is on the table.
+- [ ] **Voice on the board.** Talk to her through the board's own microphone and speaker,
+      with a wake word and without a keyboard.
+- [ ] **A face on the screen** that shows her mood while she listens, thinks and speaks.
+- [ ] **A battery**, so she can come along.
+
+### Reaching out
+
+- [ ] **Better at getting in touch on her own.** She should notice the right moment, have a
+      real reason and pick the right channel, instead of staying silent or writing at the
+      wrong time.
+- [ ] **A sense of the day.** Calendar, weather and routines, so that what she says fits
+      what is actually going on.
+- [ ] **Following up.** If she asked how something went, she remembers to ask again.
+- [ ] **Present on every device.** One Nova on the phone, the desk and the PC, who knows
+      where you are right now.
+
+### The house
+
+- [ ] **An app of her own** instead of the web interface.
+- [ ] **No more apartment block.** The switchboard, the card studio and everything that only
+      exists for multiple characters gets switched off.
+- [ ] **Smart home.** Lights, music and heating as tools she can use.
+- [ ] **A language model that runs at home**, so that nothing at all leaves the house.
+- [ ] **Backups of her memory** that can be restored with one command.
+
+### For builders
+
+- [ ] **More add-ons, less core.** Every new ability as its own piece.
+- [ ] **An add-on template**, so that a new add-on starts from a working example.
+- [ ] **German throughout**, not just for promises.
 
 ## What lives where
 
