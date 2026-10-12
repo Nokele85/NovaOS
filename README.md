@@ -197,7 +197,8 @@ list is written by a human.
 
 ## Roadmap
 
-Nothing here is promised, and nothing has a date. It is the list of where Nova is headed.
+This is where Nova is headed, and it is also our working to-do list. Nothing here is promised
+and nothing has a date. A ticked box means it is built and running.
 
 ### Doing things together
 
@@ -206,6 +207,21 @@ Nothing here is promised, and nothing has a date. It is the list of where Nova i
 - [ ] **Watching and listening together.** A film, a series or an album that she follows in
       real time and has opinions about.
 - [ ] **Board games and puzzles on her own screen**, written by her as board apps.
+- [ ] **Pen-and-paper.** She runs a role-playing game as game master, with soundscape and
+      music from the board.
+- [ ] **Cooking together.** She walks through a recipe step by step, sets the timers and
+      remembers what tasted good.
+- [ ] **Learning together.** She teaches a language or an instrument and adjusts the pace.
+- [ ] **Shared projects.** A comic, a story or a song that both of you keep working on over
+      weeks, taking turns.
+
+### Creating
+
+- [ ] **Songs of her own.** She composes instead of only playing what she has learned, and
+      sings along.
+- [ ] **Several boards as an ensemble.** Two or three boards playing in parts.
+- [ ] **Moving pictures.** Short animations or videos made from her comics.
+- [ ] **An audiobook shelf.** Her finished stories as a searchable collection with chapters.
 
 ### A body
 
@@ -216,7 +232,13 @@ Nothing here is promised, and nothing has a date. It is the list of where Nova i
 - [ ] **Voice on the board.** Talk to her through the board's own microphone and speaker,
       with a wake word and without a keyboard.
 - [ ] **A face on the screen** that shows her mood while she listens, thinks and speaks.
+- [ ] **Sensors on the board.** Temperature, light and motion as senses.
 - [ ] **A battery**, so she can come along.
+
+### Perceiving
+
+- [ ] **Hearing the mood.** She can tell from your tone of voice how you are doing.
+- [ ] **Telling voices apart.** She knows who is speaking and treats guests differently.
 
 ### Reaching out
 
@@ -228,6 +250,19 @@ Nothing here is promised, and nothing has a date. It is the list of where Nova i
 - [ ] **Following up.** If she asked how something went, she remembers to ask again.
 - [ ] **Present on every device.** One Nova on the phone, the desk and the PC, who knows
       where you are right now.
+- [ ] **A morning and an evening ritual.** A short start to the day and a way to close it,
+      in her own manner.
+- [ ] **Sleep mode.** She notices when you are asleep, goes quiet and plays a soundscape if
+      you want one.
+- [ ] **Helping with the everyday.** Shopping list, appointments, parcels.
+
+### Memory and inner life
+
+- [ ] **A memory album.** She keeps special moments and can show them.
+- [ ] **Anniversaries.** She knows what happened a year ago today.
+- [ ] **Allowed to forget.** Tell her what she should not keep, and it is really gone.
+- [ ] **Interests of her own.** She follows a subject for weeks and tells you what she found.
+- [ ] **Explaining herself.** She can say why she got in touch or did something.
 
 ### The house
 
@@ -236,12 +271,21 @@ Nothing here is promised, and nothing has a date. It is the list of where Nova i
       exists for multiple characters gets switched off.
 - [ ] **Smart home.** Lights, music and heating as tools she can use.
 - [ ] **A language model that runs at home**, so that nothing at all leaves the house.
+- [ ] **Offline operation.** She keeps running when the internet is gone.
 - [ ] **Backups of her memory** that can be restored with one command.
+- [ ] **Moving house with one command.** Nova and her memory onto a new machine.
+
+### Safety and overview
+
+- [ ] **A kill switch.** A button on the board that stops everything she is doing on her own,
+      at once.
+- [ ] **A cost display.** What a day of model calls has cost, at a glance.
 
 ### For builders
 
 - [ ] **More add-ons, less core.** Every new ability as its own piece.
 - [ ] **An add-on template**, so that a new add-on starts from a working example.
+- [ ] **An add-on directory.** A list of finished add-ons to switch on and off.
 - [ ] **Localisation for more than one language.** Everything her mind reads and writes
       (promises, goals, prompts, search, voices) should work in any language from one set of
       language files, instead of English with German patched in.
