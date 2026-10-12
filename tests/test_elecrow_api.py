@@ -304,3 +304,28 @@ def test_a_tune_is_played_note_for_note_over_the_chords():
     assert drift["seconds_per_pass"] == drift["melody_seconds"] == 3.0
     assert server.keys_call("C4", "harp", "", 60, 0, True, 5, "", melody="C4 Q")[0]["status"] == "bad_melody"
     assert server.keys_call("C4", "harp", "", 60, 0, True, 5, "", melody="C4", lead="kazoo")[0]["status"] == "bad_instrument"
+
+
+def test_accompaniment_repeats_trims_and_preserves_rests():
+    import elecrow_mcp_server as server
+    reader = server._score()
+    chords = reader.parse_chords("C4:2 -:1")
+    fitted = reader.fit_accompaniment(chords, reader.parse("E4:7"))
+    assert [beats for _, beats in fitted] == [2, 1, 2, 1, 1]
+    assert fitted[1][0] == fitted[3][0] == ()
+    assert reader.fit_accompaniment([], [(440, 4)]) == []
+    assert reader.fit_accompaniment(chords, []) == chords
+
+
+def test_all_sampled_layers_share_exact_slice_boundaries():
+    import ast
+    tree = ast.parse((LIB / "music.py").read_text(encoding="utf-8"))
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == "_aligned_steps")
+    namespace = {"_now": {"loops": 0}, "_over": lambda loop, until: not loop}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "<aligned>", "exec"), namespace)
+    aligned = namespace["_aligned_steps"]
+    for durations in ([3, 3], [4, 4, 4], [1, 1, 1, 1, 1]):
+        factory = lambda durations=durations: iter([([], n) for n in durations])
+        assert sum(n for _, n in aligned(factory, 7, False, None, True)) == 7
+    assert namespace["_now"]["loops"] == 3
