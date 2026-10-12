@@ -243,10 +243,26 @@ git fetch upstream
 git log main..upstream/main
 ```
 
+## Thank you, YuriOS
+
+Before NovaOS there was Rook, a companion system I built myself. Then I found
+[YuriOS](https://github.com/yuri-os/YuriOS), and its companion system turned out to be a
+better foundation than my own: a mind that keeps running, memory that consolidates overnight,
+promises that are kept, tools behind a guard, and a specification that says what all of it
+must do.
+
+So I made a decision. I stopped building on Rook, moved Nova onto YuriOS, and have been
+developing it further for my own use ever since. NovaOS is the result: YuriOS, taken
+personally.
+
+Thank you to yuriosshell and everyone who works on YuriOS. Without your work Nova would not
+exist in this form.
+
+— Benni
+
 ## Origin and licence
 
-NovaOS is based on [YuriOS](https://github.com/yuri-os/YuriOS) by yuriosshell. Without that
-foundation Nova would not exist in this form. Like the original, NovaOS is released under the
+NovaOS is based on [YuriOS](https://github.com/yuri-os/YuriOS) by yuriosshell. Like the original, NovaOS is released under the
 [Apache License 2.0](LICENSE). Notices for third-party components are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), the origin of individual parts in
 [PROVENANCE.md](PROVENANCE.md). The core documentation under `docs/` still describes YuriOS
