@@ -161,6 +161,12 @@ def install_runtime(args) -> None:
                 result = repl.exec(code, timeout=10)
                 if not result["ok"]:
                     raise SystemExit(f"{target}: {redact(result['stderr'])}")
+            # every chunk answered "ok" on 2026-10-12 and __init__.py was still
+            # empty on the board, which then booted without Wi-Fi: count the bytes
+            size = repl.exec(f"import os\nprint(os.stat({target!r})[6])\n", timeout=10)
+            if size["stdout"].strip() != str(len(path.read_bytes())):
+                raise SystemExit(f"{target}: {size['stdout'].strip() or '?'} bytes on the "
+                                 f"board, {len(path.read_bytes())} expected - run it again")
             print("installed", target)
         if SECRETS.is_file():
             for code in upload_code("/nova_secrets.json", SECRETS.read_bytes()):

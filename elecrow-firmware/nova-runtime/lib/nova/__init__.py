@@ -165,8 +165,11 @@ def _splash(lines):
 def _checkin():
     """A timer woke her from deep sleep: join the Wi-Fi with the screen left
     dark and listen for a call. `power` sends her back to sleep if none comes;
-    a call (it pokes) turns this into being awake. No splash, no autostart."""
-    sd.mount()
+    a call (it pokes) turns this into being awake. No splash, no autostart.
+
+    The panel supply stays off, and the SD card hangs on it (measured
+    2026-10-12: mounting here times out). An answered check-in ends in an
+    ordinary boot (power.poke), which brings both back in the right order."""
     from . import net
     up = net.connect()
     if up:

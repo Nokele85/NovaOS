@@ -58,6 +58,7 @@ _busy_hz = None               # the clock she booted with
 _timer = None
 _woke = None                  # None | "timer" | "button" | "touch"
 _checkin = False              # this boot is a check-in nobody has answered yet
+_restart_at = None            # an answered check-in: an ordinary boot follows
 _sleep_at = None              # when a sleep was requested
 _sleep_delay = 0
 _sleep_args = None
@@ -142,10 +143,21 @@ def begin():
 
 def poke():
     """Something happened - a touch, a press, a call from the host. Wakes her
-    from doze and turns a check-in into staying awake."""
-    global _last, _checkin
+    from doze. During a check-in it answers "restarting": she boots properly
+    and is back about ten seconds later."""
+    global _last, _checkin, _restart_at
     _last = _ticks()
-    _checkin = False
+    if _checkin:
+        # Somebody answered the check-in. What it left off - the panel supply,
+        # and with it the SD card and her apps - comes back through an ordinary
+        # boot, a moment from now. Switching the panel on here, with the radio
+        # already running, browns the chip out (measured 2026-10-12: a
+        # power-on reset fifteen seconds into the check-in).
+        _checkin = False
+        _restart_at = _ticks()
+        return "restarting"
+    if _restart_at is not None:
+        return "restarting"
     if _mode != "awake":
         _wake()
     return _mode
@@ -237,6 +249,12 @@ def _step():
     global _mode, _sleep_at, _net_tries, _last
     cfg = config()
     now = _ticks()
+    if _restart_at is not None:
+        if _diff(now, _restart_at) >= 1500:    # the call that woke her has its answer
+            import machine
+            _nova().log("power: check-in answered, booting")
+            machine.reset()
+        return
     if _sleep_at is not None:
         if _diff(now, _sleep_at) >= _sleep_delay:
             _sleep_at = None
@@ -258,16 +276,18 @@ def _step():
         _light(0)
         _radio_nap(True)
         _mode = "doze"
+    _net_tries += 1
+    if _net_tries >= 60 and not busy:
+        # once a minute, in every state: is the Wi-Fi still there? A boot that
+        # found no network used to stay offline until the next power-up.
+        _net_tries = 0
+        try:
+            from nova import net
+            net.ensure()
+        except Exception:
+            pass
     if _mode == "doze":
         _clock(_busy_hz if busy else cfg["idle_mhz"] * 1000000)
-        _net_tries += 1
-        if _net_tries >= 60:  # once a minute: is the Wi-Fi still there?
-            _net_tries = 0
-            try:
-                from nova import net
-                net.ensure()
-            except Exception:
-                pass
         if not busy:
             level = battery()
             if level and level["percent"] <= cfg["low_battery_percent"]:
@@ -395,7 +415,7 @@ def status():
         mhz = machine.freq() // 1000000
     except Exception:
         pass
-    return {"mode": "check-in" if _checkin else _mode,
+    return {"mode": "check-in" if _checkin else "restarting" if _restart_at is not None else _mode,
             "idle_s": _diff(_ticks(), _last) // 1000, "cpu_mhz": mhz,
             "brightness": _bright, "playing": _busy(), "woke": _woke,
             "battery": battery(), "config": config()}

@@ -664,16 +664,10 @@ def _secrets_path() -> Path:
                                    / "elecrow_device.json")))
 
 
-#: Sent ahead of every call: a call is activity. It ends her doze, and it turns
-#: a check-in from deep sleep into staying awake (nova/power.py). A runtime
-#: from before power.py has no such module and the line does nothing.
-POKE = ("try:\n    import nova.power as _p\n    _p.poke()\n"
-        "except Exception:\n    pass\n")
-
-
 def _device_call(port: str, snippets: list[str], timeout: float = 8.0,
                  poke: bool = True) -> dict:
     """Run code snippets in one raw-REPL session; the last one's result wins.
+    The session pokes her first (elecrow_device.POKE) unless `poke` is False.
 
     Every string that comes back passes the Redactor - an app can read the
     board's Wi-Fi secrets, and nothing it prints may leave this machine."""
@@ -693,14 +687,12 @@ def _device_call(port: str, snippets: list[str], timeout: float = 8.0,
         if wifi:
             if not network.get("host") or not network.get("webrepl_password"):
                 raise DeviceError("WLAN control is not configured")
-            session = RawRepl(device, serial_factory=lambda: WebReplStream(
+            session = RawRepl(device, poke=poke, serial_factory=lambda: WebReplStream(
                 network["host"], network["webrepl_password"]))
         else:
-            session = RawRepl(device)
+            session = RawRepl(device, poke=poke)
         with session as repl:
             result: dict = {}
-            if poke:
-                repl.exec(POKE, timeout=3)
             for code in snippets:
                 result = repl.exec(code, timeout=timeout)
                 if not result["ok"] and not result["timed_out"]:
@@ -719,6 +711,10 @@ def _device_call(port: str, snippets: list[str], timeout: float = 8.0,
     return result
 
 
+#: What a knock says: the poke, with its answer printed. "restarting" means it
+#: caught her in a check-in and she is booting properly (nova/power.py).
+KNOCK = ("try:\n    import nova.power as P\n    print(P.poke())\n"
+         "except Exception:\n    print('awake')\n")
 _KNOCK: dict = {"thread": None, "until": 0.0, "woke": None}
 
 
@@ -734,7 +730,7 @@ def _knock(port: str, seconds: float) -> bool:
 
     def run() -> None:
         while time.monotonic() < _KNOCK["until"]:
-            if _device_call(port, ["print('awake')\n"], timeout=4).get("ok"):
+            if _device_call(port, [KNOCK], timeout=4, poke=False).get("ok"):
                 _KNOCK["woke"] = time.time()
                 return
             time.sleep(KNOCK_EVERY_S)
@@ -1279,8 +1275,12 @@ def _device_tools(mcp: FastMCP) -> None:
         its next check-in, so this keeps knocking in the background for up to
         wait_minutes and answers at once; ask device_power to see whether it
         is back."""
-        answer = _device_call(port, ["print('awake')\n"], timeout=4)
+        answer = _device_call(port, [KNOCK], timeout=4, poke=False)
         if answer.get("ok"):
+            if "restarting" in (answer.get("stdout") or ""):
+                return {"ok": True, "status": "waking", "port": answer.get("port"),
+                        "note": "It answered from its sleep and is booting; it is "
+                                "ready in about ten seconds."}
             return {"ok": True, "status": "awake", "port": answer.get("port")}
         from elecrow_device import DeviceError, board_port, reset_pulse
         try:

@@ -111,6 +111,15 @@ def board_port(port: str = "auto") -> str:
     return found[0]
 
 
+#: Sent at the start of a session: a session is activity. It ends her doze
+#: and turns a check-in from deep sleep into staying awake (nova/power.py).
+#: It is not a courtesy: dozing she runs at a third of her clock, and a file
+#: upload at that speed loses bytes (seen 2026-10-12, "incorrect padding").
+#: A runtime from before power.py has no such module and the line does nothing.
+POKE = ("try:\n    import nova.power as _p\n    _p.poke()\n"
+        "except Exception:\n    pass\n")
+
+
 def reset_pulse(port: str, hold_s: float = 0.12) -> None:
     """Reset the board through the CH340's auto-reset circuit: RTS pulls EN
     low, DTR stays released so GPIO0 is high and she boots her program, not the
@@ -138,10 +147,12 @@ class RawRepl:
     she is looking at.
     """
 
-    def __init__(self, port: str, baud: int = 115200, serial_factory=None):
+    def __init__(self, port: str, baud: int = 115200, serial_factory=None,
+                 poke: bool = True):
         self.port = port
         self.baud = baud
         self._factory = serial_factory
+        self._poke = poke
         self.ser = None
 
     def __enter__(self) -> "RawRepl":
@@ -156,6 +167,8 @@ class RawRepl:
             ser.open()
             self.ser = ser
         self.enter()
+        if self._poke:
+            self.exec(POKE, timeout=3)
         return self
 
     def __exit__(self, *exc) -> None:

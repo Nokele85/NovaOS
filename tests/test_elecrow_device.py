@@ -226,7 +226,7 @@ def test_board_output_is_redacted_before_it_leaves(monkeypatch, tmp_path):
     board = FakeBoard(lambda code: ("pw is sesame-4711\r\n", ""))
     real = dev.RawRepl
     monkeypatch.setattr(dev, "RawRepl",
-                        lambda port: real(port, serial_factory=lambda: board))
+                        lambda port, **kw: real(port, serial_factory=lambda: board, **kw))
     out = srv._device_call("auto", ["print(open('/nova_secrets.json').read())"])
     assert "sesame-4711" not in json.dumps(out)
     assert dev.Redactor.MARK in out["stdout"]

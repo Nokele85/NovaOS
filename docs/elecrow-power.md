@@ -4,8 +4,9 @@ How Nova's board saves power, how it sleeps, and how it comes back. The code is
 `elecrow-firmware/nova-runtime/lib/nova/power.py` on the board and three tools in
 `tools/elecrow_mcp_server.py` on the host.
 
-**Status: written and tested off the board, not yet measured on it.** Every current
-and every runtime below is an estimate until a USB meter has been on the cable.
+**Status: running on the board since 12 October 2026.** Dozing, deep sleep, the check-in
+and waking over Wi-Fi were tried on the board itself (see "What was checked"). Every
+current and every runtime below is still an estimate: no meter has been on the cable.
 
 ## What the hardware gives us
 
@@ -32,7 +33,7 @@ So the software can do exactly two things for the battery: draw less, and sleep.
 | State | What happens | Reachable? | Estimated draw |
 |---|---|---|---|
 | **awake** | everything on | yes | 120–160 mA |
-| **doze** | after 30 s without a touch, a press or a call the backlight dims; after 2 min it goes out, the processor drops to 80 MHz and the Wi-Fi radio naps between beacons | yes, a call takes a moment longer | 50–70 mA |
+| **doze** | after 30 s without a touch, a press or a call the backlight dims; after 2 min it goes out, the processor drops from 240 to 80 MHz and the Wi-Fi radio naps between beacons | yes, a call takes a moment longer | 50–70 mA |
 | **sleep** | deep sleep: radio off, panel off | only at a check-in, or by the button | a few mA |
 
 Music keeps the processor at full speed for as long as it plays; the screen may still
@@ -57,10 +58,17 @@ it does at power-up, so there is no separate "reconnect".
 **The check-in** is how she can be woken over the air. Asleep, her radio is off and
 nobody can call her. So every `checkin_min` minutes (5 by default) a timer wakes her
 with the screen left dark. She joins the Wi-Fi and listens for `listen_s` seconds (25).
-If the host calls in that window she stays awake. If nobody calls, she sleeps again.
+If the host calls in that window she answers "restarting" and boots properly, which
+takes about ten seconds. If nobody calls, she sleeps again.
+
+Why a boot and not simply staying up: a check-in leaves the panel supply off, and the SD
+card with her apps hangs on that supply. Switching it on with the radio already running
+browns the chip out (seen on the board: a power-on reset fifteen seconds into the
+check-in). An ordinary boot brings the panel up first and the radio after it.
 
 `device_wake` does the calling: it knocks every three seconds in the background for up
-to six minutes, which is long enough to catch one check-in.
+to six minutes, which is long enough to catch one check-in. With a one-minute check-in
+the board answered 71 to 88 seconds after it was sent to sleep.
 
 A check-in costs roughly half a minute awake out of every five. With the defaults that
 is an average of about 10 mA, so a 310 mAh cell lasts on the order of a day asleep, and
@@ -120,8 +128,9 @@ power.configure(sleep_after_min=15)
 | `device_sleep` | deep sleep; `charging=true` for the charge mode; needs `confirm=true` |
 | `device_wake` | bring her back: a reset over the cable, or knocking over Wi-Fi |
 
-Every other call to the board counts as activity: it ends a doze and turns a check-in
-into staying awake.
+Every other call to the board counts as activity, and every session begins by saying
+so. That is not only a courtesy: dozing, she runs at a third of her clock, and a file
+upload at that speed lost bytes.
 
 ## Installing it
 
@@ -132,11 +141,36 @@ the PC restarted so that it knows the new tools:
 python tools/elecrow_device_admin.py install-runtime --yes
 ```
 
-## What still has to be checked on the board
+The installer counts the bytes of every file on the board afterwards. It did not always:
+once every chunk answered "ok" and `nova/__init__.py` was still empty, and the board then
+booted without Wi-Fi.
+
+## What was checked on the board
+
+On 12 October 2026, on USB power, without a battery attached:
+
+| | Result |
+|---|---|
+| Boot with the new runtime | Wi-Fi up after 7 s, SD card mounted, 240 MHz |
+| Dim, then doze | at the configured seconds; the clock reads 80 MHz in doze |
+| A call over Wi-Fi while dozing | gets through; the call wakes her |
+| Deep sleep | no answer on the cable and none on Wi-Fi |
+| Check-in after one minute | answered a knock over Wi-Fi 71 s after falling asleep |
+| After the answered check-in | ordinary boot, SD card and apps back, Wi-Fi up |
+| From the server, the way Nova calls | `device_power` answers over Wi-Fi |
+
+## What still has to be checked
 
 - the real draw in each state, with a meter;
 - that the button ends deep sleep and she boots her program, not the bootloader;
-- that the panel supply and the PWR lamp really stay off while she sleeps;
-- that a call over Wi-Fi gets through while the radio naps;
-- that a check-in is reached by `device_wake` within its window;
+- that the PWR lamp really stays off while she sleeps;
+- everything above again on the battery, where the supply is weaker than USB;
 - the charge current with this cell.
+
+## When she is not reachable over Wi-Fi
+
+- **Is she asleep?** Then only `device_wake`, the cable or the button brings her back.
+- **Did she boot without a network?** The old runtime tried the Wi-Fi once per boot and
+  stayed offline if that failed. Now she tries again every minute.
+- **Is the supply weak?** A boot that finds neither the SD card nor the network points at
+  power, not at the Wi-Fi.

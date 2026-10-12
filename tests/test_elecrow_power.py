@@ -69,10 +69,13 @@ def rig(monkeypatch, tmp_path):
 
     state = types.SimpleNamespace(now=0, hz=160_000_000, reset=1, wake=0, armed=[],
                                   touch=None, radio=[], log=[], chip=Chip(),
-                                  bus=Bus(), screen=object())
+                                  bus=Bus(), screen=object(), resets=0)
 
     def deepsleep(ms=None):
         raise Slept(ms)
+
+    def reset():
+        state.resets += 1
 
     def freq(hz=None):
         if hz is None:
@@ -100,7 +103,7 @@ def rig(monkeypatch, tmp_path):
     machine = types.SimpleNamespace(
         DEEPSLEEP_RESET=4, TIMER_WAKE=4, EXT0_WAKE=2, EXT1_WAKE=3, Timer=Timer, Pin=Pin,
         reset_cause=lambda: state.reset, wake_reason=lambda: state.wake,
-        freq=freq, deepsleep=deepsleep)
+        freq=freq, deepsleep=deepsleep, reset=reset)
     esp32 = types.SimpleNamespace(
         WAKEUP_ALL_LOW=0,
         wake_on_ext0=lambda pin, level: state.armed.append(("button", pin.n)),
@@ -209,14 +212,18 @@ def test_a_check_in_nobody_answers_goes_back_to_sleep(rig):
     assert rig.state.chip.light is None or rig.state.chip.light == 0
 
 
-def test_a_call_during_the_check_in_keeps_her_awake(rig):
+def test_a_call_during_the_check_in_ends_in_an_ordinary_boot(rig):
     rig.state.reset, rig.state.wake = 4, 4
     rig.power.begin()
     rig.run(10)
-    rig.power.poke()                                # the host's call
-    rig.run(60)                                     # no Slept: she stays
-    assert rig.power.status()["mode"] in ("awake", "dim")
-    assert rig.power.woke() == "timer"
+    assert rig.power.poke() == "restarting"        # the host's call gets its answer
+    assert rig.power.status()["mode"] == "restarting"
+    assert rig.state.chip.panel is True            # the panel is not switched here
+    rig.run(1)
+    assert rig.state.resets == 0                   # ...and has a moment to be read
+    rig.run(1)
+    assert rig.state.resets == 1
+    assert "check-in answered" in rig.state.log[-1]
 
 
 def test_the_button_wake_is_an_ordinary_boot(rig):
@@ -262,14 +269,14 @@ def server(monkeypatch, tmp_path):
     return srv, srv.build_server()
 
 
-def test_every_call_pokes_her_first(monkeypatch, server):
+def test_every_session_pokes_her_first(monkeypatch, server):
     srv, _ = server
     import elecrow_device
-    ran = []
+    made = []
 
     class Repl:
-        def __init__(self, *a, **k):
-            pass
+        def __init__(self, port, poke=True, **k):
+            made.append(poke)
 
         def __enter__(self):
             return self
@@ -278,16 +285,53 @@ def test_every_call_pokes_her_first(monkeypatch, server):
             pass
 
         def exec(self, code, timeout=0):
-            ran.append(code)
             return {"ok": True, "timed_out": False, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(elecrow_device, "RawRepl", Repl)
     monkeypatch.setattr(elecrow_device, "board_port", lambda port: "COM9")
-    srv._device_call("COM9", ["print(1)\n"])
-    assert ran == [srv.POKE, "print(1)\n"]
+    srv._device_call("COM9", ["print(1)" + chr(10)])
+    srv._device_call("COM9", ["print(1)" + chr(10)], poke=False)
+    assert made == [True, False]
+
+
+def test_a_session_sends_the_poke_before_anything_else():
+    import elecrow_device
+    ran = []
+
+    class Board:
+        """The raw REPL, just enough of it: code arrives, ^D runs it."""
+
+        def __init__(self):
+            self.pending, self.code = b"", b""
+
+        def write(self, data):
+            if data == b"\r\x01":
+                self.pending += b"raw REPL; CTRL-B to exit\r\n>"
+            elif data == b"\x04":
+                ran.append(self.code.decode())
+                self.code = b""
+                self.pending += b"OK\x04\x04>"
+            elif data not in (b"\r\x03\x03", b"\x02"):
+                self.code += data
+
+        def read(self, n):
+            out, self.pending = self.pending[:n], self.pending[n:]
+            return out
+
+        def reset_input_buffer(self):
+            self.pending = b""
+
+        def close(self):
+            pass
+
+    board = Board()
+    with elecrow_device.RawRepl("COM9", serial_factory=lambda: board) as repl:
+        repl.exec("print(1)" + chr(10))
+    assert ran == [elecrow_device.POKE, "print(1)" + chr(10)]
     ran.clear()
-    srv._device_call("COM9", ["print(1)\n"], poke=False)
-    assert ran == ["print(1)\n"]
+    with elecrow_device.RawRepl("COM9", serial_factory=lambda: board, poke=False) as repl:
+        repl.exec("print(1)" + chr(10))
+    assert ran == ["print(1)" + chr(10)]
 
 
 def test_looking_at_her_power_does_not_wake_her(monkeypatch, server):
@@ -353,6 +397,14 @@ def test_wake_says_so_when_she_is_already_awake(monkeypatch, server):
     srv, mcp = server
     monkeypatch.setattr(srv, "_device_call", lambda *a, **k: {"ok": True, "port": "COM9"})
     assert mcp._tool_manager.get_tool("device_wake").fn()["status"] == "awake"
+
+
+def test_wake_says_when_it_caught_her_in_a_check_in(monkeypatch, server):
+    srv, mcp = server
+    monkeypatch.setattr(srv, "_device_call",
+                        lambda *a, **k: {"ok": True, "stdout": "restarting\r\n", "port": "wifi"})
+    out = mcp._tool_manager.get_tool("device_wake").fn()
+    assert out["status"] == "waking" and "ten seconds" in out["note"]
 
 
 def test_the_knocker_stops_when_she_answers(monkeypatch, server):
