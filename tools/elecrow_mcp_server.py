@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mcp.server.fastmcp import FastMCP
 
 import elecrow_api  # noqa: E402
+import elecrow_sound_library  # noqa: E402
 
 #: Beside every answer that names the autostart app (see `device_info`).
 AUTOSTART_NOTE = (
@@ -61,6 +62,10 @@ def _score():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _sound_root() -> Path:
+    return Path(os.environ.get("ELECROW_WORKSPACE", str(DEFAULT_ROOT))) / "sound-library"
 
 
 #: Background music is company: quiet when she names no level, never above
@@ -965,9 +970,41 @@ def _device_tools(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool()
+    def device_sound_library(query: str = "", limit: int = 40) -> dict:
+        """Find REAL recorded sounds by meaningful German filenames/tags.
+        query: e.g. 'gespraeche fern', 'stadt', 'wald', 'fantasy', 'regen'.
+        Returns filenames, background/event, duration, description and licence.
+        Search first; use exact returned filenames in device_soundscape.
+        Variants of the same sound can be put in one layer's files list.
+        Names label scene, source, distance and mode. Only installed files are offered."""
+        return elecrow_sound_library.catalogue(_sound_root(), query, limit)
+
+    @mcp.tool()
+    def device_soundscape(layers: list[dict], level: int = 35, minutes: float = 60,
+                          title: str = "Recorded atmosphere", port: str = "auto") -> dict:
+        """Mix REAL recordings from device_sound_library on your board.
+        layers: up to six objects, each {files:[exact filename, optional variants],
+        gain:0..100, gap_min:4, gap_max:15}. Backgrounds crossfade continuously;
+        events play with random variants/gaps/levels. Use only filenames returned
+        by the library; no invented names. Match scene/era: no cars in medieval woods.
+        For distant talk use files marked fern, not clear dialogue. Runs alone or
+        under music independently. Existing ambience is replaced; music continues.
+        Empty layers stops only ambience. level affects all layers, minutes 0.5..480.
+        Do not claim to hear the sound. Music's device_stop_music leaves it running."""
+        facts, code = elecrow_sound_library.scene_call(_sound_root(), layers, level, minutes, title)
+        if not code:
+            return facts
+        result = _json_out(_device_call(port, [code], timeout=30))
+        if result.get("ok"):
+            result.update(facts)
+        return result
+
+    @mcp.tool()
     def device_ambience(scene: str = "rain", level: int = 35, minutes: float = 60,
                         port: str = "auto") -> dict:
-        """The air around the music, on your board's speaker: nature sounds
+        """Legacy SYNTHETIC nature sounds, not recordings. For realistic scenes
+        use device_sound_library and device_soundscape first.
+        The air around the music, on your board's speaker: nature sounds
         that run ON THEIR OWN - with a piece playing over them or with no music
         at all - and are made new every moment, never a loop. `scene` is one
         sound or several mixed with +, like "rain+fire" or "wind+owl+crickets".

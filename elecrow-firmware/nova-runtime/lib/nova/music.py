@@ -668,7 +668,9 @@ def _amb_layers(buf, n, layers):
     tab = _table()
     for layer in layers:
         kind, st = layer[0], layer[1]
-        if kind == 0:
+        if kind == 4:
+            st.render(buf, n, _mix_in)
+        elif kind == 0:
             if layer[2] != layer[3]:            # its loudness drifts to a new mood
                 layer[5] -= n
                 if layer[5] <= 0:
@@ -706,6 +708,29 @@ def _amb_layers(buf, n, layers):
                 st[4] = 32768 - 32768 // ring
                 st[6] = 160
             _amb_ping(buf, n, tab, st)
+
+
+def soundscape(layers, level=35, minutes=60, title="Recorded atmosphere"):
+    """SPEC §26.4: mix recorded PCM backgrounds/events independently of music.
+
+    Each layer has files (catalogue names), mode background/event, gain 0..100,
+    and event gap_min/gap_max in seconds. Background variants crossfade;
+    events have changing variants, gaps and levels. ambience('off') ends it.
+    """
+    global _amb
+    from . import soundscape as recordings
+    adjusted = []
+    for spec in layers:
+        item = dict(spec)
+        item["gain"] = int(item.get("gain", 50)) * max(0, min(100, int(level))) // 100
+        adjusted.append(item)
+    loaded = recordings.load(adjusted)          # validate/load before replacing the scene
+    _fading.clear()
+    if _amb is not None:
+        _fading.append(_amb)
+    _amb = [str(title)[:60], [[4, layer] for layer in loaded], _until(minutes), 0]
+    _open()
+    return status()
 
 
 def ambience(scene="rain", level=35, minutes=0):

@@ -55,6 +55,7 @@ elecrow-firmware/*/.pio/
 elecrow-firmware/backups/
 elecrow-firmware/micropython/
 elecrow-firmware/screenshots/
+elecrow-firmware/sound-library/
 
 # relationship-evolution bench output (USER.md history, GLM traces)
 scripts/relationship_bench/out/

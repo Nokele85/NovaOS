@@ -3123,7 +3123,13 @@ her board's voices that is not computed. When a sampled melody has accompaniment
 **MUST** repeat or trim the accompaniment to one melody pass and restart all layers on a shared
 audio-slice boundary, including non-integral length ratios. Beside a piece runs the air (`device_ambience`): nature
 sounds generated on the board, mixed under whatever plays or sounding alone, started and ended on
-their own — a piece ending, or being stopped, **MUST NOT** end them. Loudness is the owner's: a knob on the
+their own — a piece ending, or being stopped, **MUST NOT** end them. Recorded atmospheres
+(`device_sound_library`, `device_soundscape`) **MUST** expose installed recordings under meaningful
+filenames describing scene/source/distance and background/event. Calls **MUST** validate those
+exact names against the installed catalogue, cap selected PCM memory and refuse unknown names.
+Background variants **MUST** crossfade; events **MUST** vary their timing and may vary level/variant.
+They share the independent ambience channel, retain provenance/licence metadata in the catalogue,
+and **MUST NOT** stop music. Loudness is the owner's: a knob on the
 board (0–100 % in tens, the board's button stepping it and wrapping to off) that every piece is
 played through and that a piece leaves alone unless he asked her for a level. What she writes for the board is
 checked against it before it is sent: an `import` of a module the board does not have **MUST** be

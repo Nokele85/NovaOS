@@ -250,6 +250,14 @@ HANDS: dict[str, Hand] = {
         "cheap", "let nature sounds run on her board - rain, wind, fire, crickets, "
         "birds, waves and more, mixed freely - alone or under her music",
         '{"scene": "rain+fire", "level": 40, "minutes": 60}'),
+    "device_sound_library": Hand(
+        "cheap", "find installed real recordings by meaningful German filenames and tags",
+        '{"query": "gespraeche fern", "limit": 20}'),
+    "device_soundscape": Hand(
+        "cheap", "mix recorded backgrounds and varied events on the board, independently of music; "
+        "search device_sound_library first and use its exact filenames",
+        '{"layers": [{"files": ["exact name from device_sound_library"], "gain": 40, '
+        '"gap_min": 5, "gap_max": 20}], "level": 35, "minutes": 30, "title": "..."}'),
     "device_play_keys": Hand(
         "cheap", "play chords she composed on a recorded instrument on her board "
         "(pads, choir, strings, harp, vibraphone, music box) - the best sound it has",
