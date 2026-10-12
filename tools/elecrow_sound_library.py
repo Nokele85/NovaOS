@@ -18,8 +18,15 @@ def catalogue(root: Path, query: str = "", limit: int = 40) -> dict:
     selected = [e for e in entries if all(w in (
         e["file"] + " " + e.get("description", "") + " " + " ".join(e.get("tags", []))
     ).lower() for w in words)]
-    return {"ok": True, "total": len(entries), "matches": len(selected),
-            "sounds": selected[:max(1, min(100, int(limit)))]}
+    shown = selected[:max(1, min(100, int(limit)))]
+    result = {"ok": True, "total": len(entries), "matches": len(selected),
+              "sounds": shown}
+    # SPEC §7.3: never let the host cut a filename catalogue mid-JSON.
+    while len(json.dumps(result)) > 8000 and shown:
+        shown.pop()
+    result["shown"] = len(shown)
+    result["more"] = len(shown) < len(selected)
+    return result
 
 
 def scene_call(root: Path, layers: list[dict], level: int, minutes: float,

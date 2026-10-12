@@ -37,6 +37,17 @@ def test_uninstalled_prepared_catalogue_is_not_offered(tmp_path):
     assert library.catalogue(tmp_path)["status"] == "no_library"
 
 
+def test_large_library_stays_valid_json_and_reports_more(sounds):
+    root, entries = sounds
+    expanded = [dict(entries[0], file=f"stadt__gespraeche__{n:03d}.pcm",
+                     description="long description " * 40) for n in range(100)]
+    (root / "installed.json").write_text(json.dumps({"sounds": expanded}))
+    result = library.catalogue(root, limit=100)
+    assert result["matches"] == 100 and result["more"]
+    assert len(json.dumps(result)) < 8100
+    assert result["shown"] == len(result["sounds"])
+
+
 def test_scene_variants_memory_and_generated_call(sounds):
     root, entries = sounds
     layers = [{"files": [e["file"] for e in entries[:2]], "gain": 35}]

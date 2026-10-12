@@ -44,6 +44,8 @@ RESULT_LIMITS = {
     # is the first two lines of what she needed.
     "device_api": 16_000,
     "device_write_app": 6_000,
+    "device_sound_library": 16_000,
+    "device_soundscape": 6_000,
 }
 
 #: Hands that only look at her own desk. Reading a note twice changes nothing
