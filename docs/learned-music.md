@@ -12,7 +12,13 @@ instrument player. Existing atmosphere stays independent.
    `chord_mode=highest/lowest` selects a chord line; confirm that it is the
    intended melody. The parser preserves pitch, rests,
    duration, ties and basic repeats. It refuses unsupported notation visibly.
-3. PDF/images are rendered on the workstation (install
+3. PDF/images first use a local Audiveris optical music recognition process,
+   configured on Benniclaw in ignored `secrets/elecrow_notation.json` with
+   `command: ["/absolute/path/to/Audiveris"]`. Its MusicXML output passes the
+   same parser. This runs without a GUI, at most 120 seconds, and its output is
+   cached by source/page. Optical notes still need hearing and confirmation.
+   Without this configuration, images use the proxy's vision model as a fallback.
+   PDF/images are rendered on the workstation (install
    `tools/requirements-elecrow.txt`) and transcribed by the proxy's vision model.
    Read each page separately. Visual transcription is a fallible candidate, not
    proof of correct notes. No model configured means no transcription.
@@ -27,7 +33,7 @@ instrument player. Existing atmosphere stays independent.
 The ignored PC folder `elecrow-firmware/music-library` contains `sources/`,
 `songs/` and `history/`. `ELECROW_REPERTOIRE` can select another directory. Files
 remain across process and board restarts; PC availability is still required.
-The owner enables the four new hands and a `device_score_source=90` timeout
+The owner enables the four new hands and a `device_score_source=180` timeout
 override. Reading notation is not a board call. The source timeout includes PDF
 rendering and the proxy's transcription request; failed fetches are not melodies.
 

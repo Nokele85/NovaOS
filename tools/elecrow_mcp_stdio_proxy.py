@@ -144,8 +144,12 @@ async def _describe(png: bytes) -> str | None:
 
 async def _post_process(data: dict) -> dict:
     notation = data.pop("notation_png_b64", None)
+    document = data.pop("notation_document_b64", None)
     if notation:
-        data["transcription"] = await _transcribe_notation(notation)
+        omr = await _optical_notation(document or notation, data)
+        data["transcription"] = omr or await _transcribe_notation(notation)
+        if omr and omr.get('status') != 'parsed':
+            data['next'] = 'Use another melody part/voice or a clearer notation edition; do not guess missing notes.'
         return data
     png_b64 = data.pop("png_b64", None)
     if not png_b64:
@@ -162,6 +166,59 @@ async def _post_process(data: dict) -> dict:
     if seen:
         data["vision"] = seen
     return data
+
+
+async def _optical_notation(encoded: str, data: dict) -> dict | None:
+    """SPEC §26.7: bounded local Audiveris OMR, never an audio recording."""
+    import elecrow_repertoire as repertoire
+    config = HERE.parent / 'secrets' / 'elecrow_notation.json'
+    try:
+        settings = json.loads(config.read_text(encoding='utf-8'))
+        command = settings['command']
+        if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
+            return None
+    except (OSError, ValueError, KeyError):
+        return None
+    raw = base64.b64decode(encoded)
+    if len(raw) > repertoire.MAX_BYTES:
+        return {'status': 'unavailable', 'reason': 'Notation exceeds OMR input limit', 'confirmed': False}
+    # Generated source ids only; no model-controlled command or output path.
+    sid = str(data.get('source_id', ''))
+    if not re.fullmatch(r'[a-f0-9]{20}', sid):
+        return {'status': 'unavailable', 'reason': 'Invalid source id', 'confirmed': False}
+    page = int(data.get('page', 1))
+    directory = SCREENS.parent / 'elecrow-notation' / f'{sid}-{page}'
+    directory.mkdir(parents=True, exist_ok=True)
+    source = directory / ('source.pdf' if raw.startswith(b'%PDF') else 'source.png')
+    source.write_bytes(raw)
+    scores = list(directory.rglob('*.mxl'))
+    if not scores:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command, '-batch', '-transcribe', '-export', '-output', str(directory),
+                '-sheets', str(page), '--', str(source),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        except OSError:
+            return {'status': 'unavailable', 'reason': 'OMR executable unavailable', 'confirmed': False}
+        try:
+            await asyncio.wait_for(process.wait(), timeout=120)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return {'status': 'unavailable', 'reason': 'OMR exceeded 120 seconds', 'confirmed': False}
+        scores = list(directory.rglob('*.mxl'))
+        if process.returncode or not scores:
+            return {'status': 'unavailable', 'reason': 'OMR could not read this notation', 'confirmed': False}
+    if len(scores) != 1:
+        return {'status': 'unavailable', 'reason': 'OMR produced multiple scores; use separate notation pages', 'confirmed': False}
+    try:
+        result = repertoire.parse_musicxml(repertoire._xml_bytes(scores[0].read_bytes()),
+            data.get('part', ''), data.get('voice', ''), data.get('chord_mode', 'reject'))
+    except (ValueError, OSError) as exc:
+        return {'status': 'unavailable', 'reason': str(exc)[:350], 'confirmed': False}
+    return {**result, 'method': 'audiveris-omr', 'confirmed': False,
+            'page_complete': True, 'uncertainties': ['Optical recognition can misread notes; Benni has not confirmed this version.'],
+            'warning': 'Only this page was recognized. A parsed result is not a confirmed rendition.'}
 
 
 async def _transcribe_notation(png_b64: str) -> dict:

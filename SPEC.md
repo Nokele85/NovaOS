@@ -3255,7 +3255,10 @@ not there, caught the error herself, and concluded the board had no sound.
   A familiar title MUST NOT be used as evidence of its notes. A chord-only score
   MUST NOT be saved as a learned melody. MusicXML reads pitches and durations,
   rests, ties and supported repeats; unsupported notation MUST fail explicitly.
-  PDF/image vision MUST return only an unconfirmed candidate, never verification.
+  PDF/image recognition (bounded local Audiveris OMR, or vision fallback) MUST
+  return only an unconfirmed candidate, never verification. Optical output MUST
+  pass the same notation parser. The OMR command MUST come from the owner's
+  ignored configuration, not a model argument, and MUST be bounded to 120 seconds.
   Each edit MUST check the previous revision and retain its history. Confirmation
   MUST require the owner's approval of that version. Replay MUST load the stored
   melody and tempo rather than regenerate them, and MUST NOT play a downloaded

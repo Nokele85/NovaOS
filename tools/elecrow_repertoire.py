@@ -148,7 +148,7 @@ def parse_musicxml(raw, part='', voice='', chord_mode='reject'):
                     if chord_mode == 'reject':
                         raise ValueError('Voice contains chords: choose a melody voice or explicitly select chord_mode=highest/lowest')
                     if not events or events[-1][0] != start or events[-1][2] != duration:
-                        raise ValueError('Chord tones have different durations; use a monophonic edition')
+                        raise ValueError(f'Chord tones have different durations in measure {measure.get("number")}; use a monophonic edition')
                     def pitch_number(n):
                         if n == '-':
                             raise ValueError('A rest cannot be a chord tone')
@@ -276,6 +276,9 @@ def read_source(url, part='', voice='', page=1, chord_mode='reject'):
         pix = selected.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
         result = {**metadata, 'status': 'visual_notation', 'page': page, 'pages': len(document),
                   'notation_png_b64': base64.b64encode(pix.tobytes('png')).decode(),
+                  'notation_document_b64': base64.b64encode(raw).decode(),
+                  'notation_filetype': 'pdf' if raw.startswith(b'%PDF') else 'image',
+                  'part': part, 'voice': voice, 'chord_mode': chord_mode,
                   'confirmed': False, 'warning': 'Image transcription is a candidate, not verified notes. Read each page separately.'}
         _write(location / (sid + '.json'), metadata)
         return result
