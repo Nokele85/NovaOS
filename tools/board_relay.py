@@ -261,10 +261,11 @@ def load_secrets(path: Path) -> dict:
 
 
 async def run(relay: Relay, host: str, port: int) -> None:
-    # The board answers pings from inside its REPL machinery, and a dozing or
-    # busy board answers late: be patient before calling the line dead.
+    # A board that loses power says no goodbye: only an unanswered ping shows
+    # it, so the relay asks often. The board answers from inside its REPL
+    # machinery, and a dozing one answers late, hence the patience.
     async with serve(relay.handler, host, port, process_request=relay.process_request,
-                     ping_interval=30, ping_timeout=90, max_size=1 << 20):
+                     ping_interval=15, ping_timeout=25, max_size=1 << 20):
         log.info("board relay listening on %s:%s for %s", host, port,
                  ", ".join(sorted(relay.boards)) or "nobody")
         await asyncio.Future()

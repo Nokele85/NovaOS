@@ -366,7 +366,9 @@ def test_a_short_press_does_not_send_her_to_sleep(rig):
 @pytest.fixture
 def server(monkeypatch, tmp_path):
     import elecrow_mcp_server as srv
+    # neither this machine's WLAN setup nor its relay may answer for the test
     monkeypatch.setenv("ELECROW_NETWORK_CONFIG", str(tmp_path / "none.json"))
+    monkeypatch.setenv("ELECROW_LINK_CONFIG", str(tmp_path / "no-link.json"))
     return srv, srv.build_server()
 
 

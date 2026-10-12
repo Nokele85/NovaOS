@@ -401,7 +401,13 @@ def keep(online):
         drop()                    # it died: free the REPL slot
     if not enabled() or not online:
         return False
-    if _last_try is not None and _diff(_ticks(), _last_try) < RETRY_S * 1000:
+    if _last_try is None:
+        # The first call belongs to the boot (nova.start), which says why she
+        # is up. On 2026-10-12 this watch dialled first: the boot then hung up
+        # and dialled again, and a check-in would have lost its wake request
+        # to the call that did not say it was one.
+        return False
+    if _diff(_ticks(), _last_try) < RETRY_S * 1000:
         return False
     return connect() is not None
 

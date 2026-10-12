@@ -147,8 +147,17 @@ def flash_micropython(args) -> None:
 
 
 def _session(port: str):
-    """A raw-REPL session over the cable, or with --port wifi over the board's
-    console on the home network (for a board that is running on its battery)."""
+    """A raw-REPL session over the cable; with --port link through the relay,
+    wherever the board is; with --port wifi over its console on the home
+    network (which refuses callers while the line is up)."""
+    if port == "link":
+        import elecrow_link
+        cfg = elecrow_link.configuration()
+        if not cfg.get("enabled"):
+            raise SystemExit("--port link needs secrets/elecrow_link.json")
+        if not elecrow_link.status(cfg).get("online"):
+            raise SystemExit(elecrow_link.describe(elecrow_link.status(cfg)))
+        return RawRepl("link", serial_factory=lambda: elecrow_link.RelayStream(cfg))
     if port != "wifi":
         return RawRepl(board_port(port))
     from elecrow_wifi import WebReplStream, configuration

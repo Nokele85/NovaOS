@@ -258,6 +258,15 @@ def test_the_lan_console_is_left_alone_when_somebody_is_on_it(relay, board):
     assert board.link.status()["error"] == "console busy"
 
 
+def test_the_watch_never_dials_before_the_boot_has(relay, board):
+    """The boot's call says whether this is a check-in; the watch's does not."""
+    assert board.link.keep(online=True) is False
+    assert elecrow_link.status(relay.cfg)["online"] is False
+    elecrow_link.wake(relay.cfg, minutes=6)
+    assert board.link.keep(online=True) is False            # the request is still there
+    assert board.link.connect({"checkin": True})["stay"] is True
+
+
 def test_the_line_is_redialled_when_it_drops_but_not_in_a_hurry(relay, board):
     link = board.link
     link.connect()

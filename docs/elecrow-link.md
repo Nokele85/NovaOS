@@ -78,9 +78,9 @@ alone: the line waits.
 ## What it costs
 
 - **Power:** an open line keeps the radio associated. In doze the radio still naps
-  between beacons; the relay pings every 30 seconds. Not measured yet.
+  between beacons; the relay pings every 15 seconds. Not measured yet.
 - **Data:** what an app prints while nobody is attached is not sent. An idle line is a
-  ping every 30 seconds.
+  ping every 15 seconds.
 - **Speed:** away from home every byte goes over the mobile network and back. Fine for
   commands; slow for uploading large sound files.
 
@@ -113,13 +113,29 @@ On the PC: `secrets/elecrow_link.json`
 ```
 
 Then install the runtime; the installer writes `/nova_link.json` onto the board. With
-`--port wifi` it does so over the home network, for a board that is running on its
-battery:
+`--port link` it does so through the relay, wherever the board is; with `--port wifi`
+over the console on the home network, which only answers while the line is down:
 
 ```bash
 python tools/elecrow_device_admin.py install-runtime --yes
+python tools/elecrow_device_admin.py --port link install-runtime --yes
 python tools/elecrow_device_admin.py --port wifi install-runtime --yes
 ```
+
+## What was checked on the board
+
+On 12 October 2026, on battery, at home:
+
+| | Result |
+|---|---|
+| Boot | dials the relay on the home network, on the line 7 s after power-up |
+| A call through the relay | answered in 0.6 s |
+| Installing the whole runtime through the relay | every file arrived complete |
+| Forced onto the public address | TLS with the checked certificate; on the line as `public` |
+| A call over the public line | 0.7 s; 3000 bytes back and 1500 bytes up, complete |
+| Back to both addresses | on the line as `lan` again |
+
+Not checked yet: a real hotspot, and how much battery an open line costs.
 
 ## Limits
 
