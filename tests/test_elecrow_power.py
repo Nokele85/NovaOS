@@ -346,6 +346,8 @@ def test_the_button_held_five_seconds_sends_her_to_sleep(rig, monkeypatch):
     rig.run(1)
     assert rig.power._sleep_at is not None          # five: she goes
     assert turned == [40]                           # the volume step is taken back
+    # letting go bounces: that press must not turn the volume again
+    assert rig.power.poke_from_press() is True
     rig.state.button = False                        # he lets go
     with pytest.raises(Slept) as slept:
         rig.run(3)

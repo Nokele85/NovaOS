@@ -66,6 +66,7 @@ _sleep_args = None
 _net_tries = 0
 _gauge = None                 # None = not looked yet, False = none fitted
 _held = 0                     # seconds the button has been down
+_deaf_until = None            # presses are not volume steps until then
 _run = None                   # the runtime log, see runtime()
 _run_ticks = 0
 
@@ -181,8 +182,13 @@ def poke():
 
 
 def poke_from_press():
-    """The button: True when the press woke her from doze (and so should not
-    also turn the volume), False when she was awake already."""
+    """The button: True when the press should not also turn the volume -
+    because it woke her from doze, or because it is the end of the hold that
+    sent her to sleep (a button bounces when it is let go, and on 2026-10-12
+    that bounce turned her volume from 100 round to 0). False otherwise."""
+    if _deaf_until is not None:
+        if _diff(_ticks(), _deaf_until) < 0:
+            return True       # the hold that sent her to sleep, being let go
     was = _mode
     poke()
     return was == "doze"
@@ -385,7 +391,7 @@ def _button_down():
 def _hold():
     """The button held HOLD_S seconds sends her to sleep. The press that began
     the hold also turned the volume one step; that is taken back."""
-    global _held
+    global _held, _deaf_until
     if not _button_down():
         _held = 0
         return False
@@ -393,6 +399,7 @@ def _hold():
     if _held < HOLD_S:
         return False
     _held = 0
+    _deaf_until = _ticks() + 30000    # until she sleeps; a boot clears it
     music = sys.modules.get("nova.music")
     if music is not None:
         try:
