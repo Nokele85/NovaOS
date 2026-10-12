@@ -344,7 +344,7 @@ def _fit(data: bytes, width: int, height: int) -> Image.Image:
     else:
         new = int(w / want)
         img = img.crop((0, (h - new) // 2, w, (h - new) // 2 + new))
-    return img.resize((width, height), Image.LANCZOS)
+    return img.resize((width, height), Image.Resampling.LANCZOS)
 
 
 def compose_page(panels: list[tuple[bytes, str]], title: str = "",
