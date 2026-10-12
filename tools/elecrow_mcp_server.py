@@ -25,6 +25,7 @@ from mcp.server.fastmcp import FastMCP
 
 import elecrow_api  # noqa: E402
 import elecrow_sound_library  # noqa: E402
+import elecrow_repertoire  # noqa: E402
 
 #: Beside every answer that names the autostart app (see `device_info`).
 AUTOSTART_NOTE = (
@@ -651,6 +652,7 @@ def build_server(http_host: str | None = None) -> FastMCP:
 # bounded well below it.
 
 _DEVICE_LOCK = threading.Lock()
+_REPERTOIRE_LOCK = threading.Lock()
 RUN_SECONDS_MAX = 8
 OUTPUT_MAX = 4000
 
@@ -722,6 +724,79 @@ def _device_tools(mcp: FastMCP) -> None:
     from elecrow_device import (MAX_APP_BYTES, MAX_FILE_BYTES, MAX_FILES,
                                 check_app_name, check_file_name, describe_frame,
                                 png_bytes, rgb565be_to_rgb, upload_code)
+
+    @mcp.tool()
+    def device_score_source(url: str, part: str = "", voice: str = "", page: int = 1) -> dict:
+        """Read sheet music from the web: MusicXML/MXL directly, PDF/image via
+        the proxy's notation vision. HTML returns notation links to follow.
+        Search the web for sheet music first. Multi-part XML lists parts: call
+        again with the melody part/voice. Images/PDF are unverified candidates,
+        one page per call; never invent unreadable notes or claim the entire
+        song from one page. Returns source_id for provenance when saving."""
+        try:
+            return {"ok": True, **elecrow_repertoire.read_source(url, part, voice, page)}
+        except Exception as exc:  # malformed/unsupported notation must not become guessed notes
+            return {"ok": False, "status": "notation_unavailable", "error": str(exc)[:350],
+                    "next": "Use a readable MusicXML export, another part, or a clearer notation source."}
+
+    @mcp.tool()
+    def device_music_library(query: str = "", song_id: str = "") -> dict:
+        """Find learned songs, or load exact saved notes, tempo and revision.
+        Use BEFORE recreating a known song. A saved version is replayed, not
+        rewritten from memory. confirmed means Benni approved the rendition."""
+        try:
+            return {"ok": True, **elecrow_repertoire.library(query, song_id)}
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)[:250]}
+
+    @mcp.tool()
+    def device_learn_music(song_id: str, title: str, melody: str, tempo: float = 80,
+                           source_id: str = "", chords: str = "", revision: int = 0,
+                           confirmed: bool = False, correction: str = "") -> dict:
+        """Save exact notation as a persistent playable song, or correct it.
+        melody is REQUIRED: notes and quarter-note beats, e.g. G4:1 C5:2.
+        Never save a guessed familiar tune as learned. Attach source_id from
+        device_score_source when reading web notation. Load a song first and
+        send its revision to edit; earlier versions stay in history. Set
+        confirmed=true ONLY after Benni explicitly approved this version.
+        Corrections reset confirmation unless he approved the corrected version.
+        Saving does NOT start audio. Sources and scores stay on the PC."""
+        facts, code = keys_call(chords, 'piano', '', int(tempo), 0, False, 0,
+                                title, melody, 'piano')
+        if not code:
+            return facts
+        try:
+            with _REPERTOIRE_LOCK:
+                result = elecrow_repertoire.learn(song_id, title, melody, tempo, source_id,
+                                                  chords, revision, confirmed, correction)
+            return {"ok": True, **result}
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "status": "not_saved", "error": str(exc)[:350]}
+
+    @mcp.tool()
+    def device_play_learned(song_id: str, instrument: str = "piano", lead: str = "piano",
+                            loop: bool = False, minutes: float = 10, port: str = "auto") -> dict:
+        """Play exact SAVED melody/tempo using the board's recorded instruments.
+        This does NOT play a MIDI/audio recording and does NOT generate notes.
+        Defaults to the melody alone when the saved chords are empty. Do not
+        call an unconfirmed version correct; it is a practice candidate. Ends
+        after one pass unless loop=true. Existing atmosphere keeps running."""
+        try:
+            row = elecrow_repertoire.library(song_id=song_id)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "status": "not_learned", "error": str(exc)[:250],
+                    "next": "Find notation and learn the melody first; do not guess it."}
+        # Use the real saved tempo (not integer-rounded) on the board.
+        facts, code = keys_call(row['chords'], instrument, '', int(row['tempo']), 0,
+                                loop, minutes, row['title'], row['melody'], lead)
+        if not code:
+            return facts
+        code = code.replace(f"tempo={int(row['tempo'])},", f"tempo={row['tempo']!r},")
+        result = _json_out(_device_call(port, [code], timeout=30))
+        result.update(song_id=row['id'], revision=row['revision'], confirmed=row['confirmed'],
+                      melody_notes=row['notes'], melody_seconds=row['seconds'],
+                      source=row['source'], warning=row['warning'])
+        return result
 
     @mcp.tool()
     def device_info(port: str = "auto") -> dict:
@@ -960,8 +1035,9 @@ def _device_tools(mcp: FastMCP) -> None:
         the score may be empty - the tune alone. Give melody and chords the
         same number of beats for deliberate harmony; otherwise accompaniment
         is automatically repeated or trimmed to one melody pass. For a song
-        that exists, write its melody from memory note by note and say that it
-        is from memory. `style`: "hold" or "broken" for a single instrument;
+        that exists, first load device_music_library; otherwise read notation
+        with device_score_source and save with device_learn_music. Do not guess
+        the tune from memory. `style`: "hold" or "broken" for a single instrument;
         left out, each gets what suits it. `tempo` is beats per minute, 20-160.
         Leave `volume` out - Benni sets it with the board's button. `loop`
         repeats for `minutes` (10 when left out), then it ends by itself.

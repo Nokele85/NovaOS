@@ -259,10 +259,23 @@ HANDS: dict[str, Hand] = {
         '{"layers": [{"files": ["exact name from device_sound_library"], "gain": 40, '
         '"gap_min": 5, "gap_max": 20}], "level": 35, "minutes": 30, "title": "..."}'),
     "device_play_keys": Hand(
-        "cheap", "play chords she composed on a recorded instrument on her board "
+        "cheap", "play a melody and optional chords she composed on recorded instruments "
         "(pads, choir, strings, harp, vibraphone, music box) - the best sound it has",
-        '{"score": "A3+E4+C5:8 F3+C4+A4:8 C4+G4+E5:8 G3+D4+B4:8", "instrument": '
-        '"warmpad", "tempo": 45, "minutes": 10, "title": "..."}'),
+        '{"score": "", "melody": "E4 G4 A4:2 C5", "lead": "piano", "instrument": '
+        '"piano", "tempo": 80, "loop": false, "title": "..."}'),
+    "device_score_source": Hand(
+        "cheap", "read web sheet music (MusicXML, PDF or image); visual notes are candidates",
+        '{"url": "https://.../score.musicxml", "part": "", "page": 1}'),
+    "device_music_library": Hand(
+        "cheap", "find or load exact learned notes; use before guessing a known song",
+        '{"query": "Amazing Grace", "song_id": ""}'),
+    "device_learn_music": Hand(
+        "cheap", "save or correct exact notes with provenance and revision history; confirmation needs Benni",
+        '{"song_id": "amazing-grace", "title": "Amazing Grace", "melody": "G4:1 C5:2", '
+        '"tempo": 80, "source_id": "...", "revision": 0, "confirmed": false}'),
+    "device_play_learned": Hand(
+        "cheap", "play the saved melody using her instrument samples, no new guesses or audio recordings",
+        '{"song_id": "amazing-grace", "instrument": "piano", "lead": "piano", "loop": false}'),
     "device_play_erhu": Hand(
         "cheap", "play a melody she composed on a bowed string on her board, "
         "like an erhu: sliding, swelling, trembling",

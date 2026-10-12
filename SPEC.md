@@ -3248,6 +3248,20 @@ not there, caught the error herself, and concluded the board had no sound.
   over another transport. Firmware flashing remains USB-only. WLAN transport MUST NOT
   imply remote hotspot reachability or encrypted transport.
 
+- §26.7 **Learned notation, played on her instruments.** Owner-enabled Elecrow
+  repertoire tools MAY fetch MusicXML/MXL, PDF or image notation from the web,
+  persist explicit melody, optional accompaniment, tempo and provenance, correct
+  revisions and play the saved notes through the existing instrument samples.
+  A familiar title MUST NOT be used as evidence of its notes. A chord-only score
+  MUST NOT be saved as a learned melody. MusicXML reads pitches and durations,
+  rests, ties and supported repeats; unsupported notation MUST fail explicitly.
+  PDF/image vision MUST return only an unconfirmed candidate, never verification.
+  Each edit MUST check the previous revision and retain its history. Confirmation
+  MUST require the owner's approval of that version. Replay MUST load the stored
+  melody and tempo rather than regenerate them, and MUST NOT play a downloaded
+  recording or MIDI. Source and score stores MUST remain ignored personal state.
+  Existing board limits, deadlines and independent atmosphere behavior remain.
+
 ## §27 — Tests (the hard gate)
 
 `pytest` **MUST** ship and be green from the project root, entirely offline — fakes for STT/TTS/VAD,

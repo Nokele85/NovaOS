@@ -1,0 +1,4 @@
+# Optional workstation tools; YuriOS itself does not import PDF rendering.
+mcp>=1.2,<2
+pyserial>=3.5,<4
+PyMuPDF>=1.26,<2
