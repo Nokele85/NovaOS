@@ -132,6 +132,12 @@ def _press(_pin):
     if time.ticks_diff(now, _pressed) < 250:        # one press, not its bounce
         return
     _pressed = now
+    try:                                # a press also ends a doze
+        from . import power
+        if power.poke_from_press():
+            return                      # ...and that press only woke her
+    except Exception:
+        pass
     level = volume()
     volume(0 if level >= 100 else level + 10)
     try:                                # drawn outside the interrupt

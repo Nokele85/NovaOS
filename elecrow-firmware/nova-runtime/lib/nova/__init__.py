@@ -127,7 +127,17 @@ def info():
     return {"runtime": VERSION, "safe_mode": safe_mode, "safe_reason": safe_reason,
             "autostart": s.get("autostart"), "boot_fails": s.get("boot_fails", 0),
             "sd": sd.status(), "sd_retries": sd.retries(), "io": _io is not None,
-            "display": _display is not None, "net": net.status()}
+            "display": _display is not None, "net": net.status(),
+            "power": _power_brief()}
+
+
+def _power_brief():
+    try:
+        from . import power
+        s = power.status()
+        return {"mode": s["mode"], "woke": s["woke"], "battery": s["battery"]}
+    except Exception:
+        return None
 
 
 def _splash(lines):
@@ -152,8 +162,30 @@ def _splash(lines):
     d.show()
 
 
+def _checkin():
+    """A timer woke her from deep sleep: join the Wi-Fi with the screen left
+    dark and listen for a call. `power` sends her back to sleep if none comes;
+    a call (it pokes) turns this into being awake. No splash, no autostart."""
+    sd.mount()
+    from . import net
+    up = net.connect()
+    if up:
+        try:
+            from . import remote
+            remote.start()
+        except Exception:
+            pass
+    log("check-in net=%s" % up)
+    if not up:                         # no network, nobody can call: back to sleep
+        from . import power
+        power.sleep(delay_s=1)
+
+
 def start():
     global safe_mode, safe_reason, _timer
+    from . import power
+    if power.begin() == "timer":
+        return _checkin()
     io()
     sd.mount()
     from . import apps, net

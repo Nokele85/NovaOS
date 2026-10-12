@@ -220,6 +220,8 @@ def test_board_output_is_redacted_before_it_leaves(monkeypatch, tmp_path):
     secrets = tmp_path / "s.json"
     secrets.write_text(json.dumps({"wifi": [{"ssid": "HomeNet", "password": "sesame-4711"}]}))
     monkeypatch.setenv("ELECROW_DEVICE_SECRETS", str(secrets))
+    # this machine's own WLAN setup must not send the call over the air
+    monkeypatch.setenv("ELECROW_NETWORK_CONFIG", str(tmp_path / "none.json"))
     monkeypatch.setattr(dev, "board_port", lambda port: "COM8")
     board = FakeBoard(lambda code: ("pw is sesame-4711\r\n", ""))
     real = dev.RawRepl

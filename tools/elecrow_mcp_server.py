@@ -654,6 +654,7 @@ def build_server(http_host: str | None = None) -> FastMCP:
 _DEVICE_LOCK = threading.Lock()
 _REPERTOIRE_LOCK = threading.Lock()
 RUN_SECONDS_MAX = 8
+KNOCK_EVERY_S = 3            # a check-in listens ~25 s: several knocks fit
 OUTPUT_MAX = 4000
 
 
@@ -663,7 +664,15 @@ def _secrets_path() -> Path:
                                    / "elecrow_device.json")))
 
 
-def _device_call(port: str, snippets: list[str], timeout: float = 8.0) -> dict:
+#: Sent ahead of every call: a call is activity. It ends her doze, and it turns
+#: a check-in from deep sleep into staying awake (nova/power.py). A runtime
+#: from before power.py has no such module and the line does nothing.
+POKE = ("try:\n    import nova.power as _p\n    _p.poke()\n"
+        "except Exception:\n    pass\n")
+
+
+def _device_call(port: str, snippets: list[str], timeout: float = 8.0,
+                 poke: bool = True) -> dict:
     """Run code snippets in one raw-REPL session; the last one's result wins.
 
     Every string that comes back passes the Redactor - an app can read the
@@ -690,6 +699,8 @@ def _device_call(port: str, snippets: list[str], timeout: float = 8.0) -> dict:
             session = RawRepl(device)
         with session as repl:
             result: dict = {}
+            if poke:
+                repl.exec(POKE, timeout=3)
             for code in snippets:
                 result = repl.exec(code, timeout=timeout)
                 if not result["ok"] and not result["timed_out"]:
@@ -706,6 +717,32 @@ def _device_call(port: str, snippets: list[str], timeout: float = 8.0) -> dict:
         result[key] = text[-OUTPUT_MAX:]
     result["port"] = device
     return result
+
+
+_KNOCK: dict = {"thread": None, "until": 0.0, "woke": None}
+
+
+def _knock(port: str, seconds: float) -> bool:
+    """Keep calling a sleeping board until it answers or the time is up. One
+    knocker at a time; False when one is already at the door."""
+    thread = _KNOCK["thread"]
+    if thread is not None and thread.is_alive():
+        _KNOCK["until"] = max(_KNOCK["until"], time.monotonic() + seconds)
+        return False
+    _KNOCK["until"] = time.monotonic() + seconds
+    _KNOCK["woke"] = None
+
+    def run() -> None:
+        while time.monotonic() < _KNOCK["until"]:
+            if _device_call(port, ["print('awake')\n"], timeout=4).get("ok"):
+                _KNOCK["woke"] = time.time()
+                return
+            time.sleep(KNOCK_EVERY_S)
+
+    thread = threading.Thread(target=run, name="elecrow-knock", daemon=True)
+    _KNOCK["thread"] = thread
+    thread.start()
+    return True
 
 
 def _json_out(result: dict) -> dict:
@@ -1205,6 +1242,68 @@ def _device_tools(mcp: FastMCP) -> None:
         return {"ok": True, "texts": head.get("texts", []), "frames": head.get("frames"),
                 "picture": describe_frame(rgb, w, h), "saved": str(path),
                 "png_b64": _b64.b64encode(png).decode("ascii")}
+
+    @mcp.tool()
+    def device_power(port: str = "auto") -> dict:
+        """How the board is doing on power: awake, dim, doze or a check-in from
+        sleep; why it last woke; its settings; and the battery when a fuel gauge
+        is fitted (the board alone cannot measure it). Looking does not wake it."""
+        code = "import json, nova.power as P\nprint(json.dumps(P.status()))\n"
+        result = _json_out(_device_call(port, [code], poke=False))
+        if result.get("status") in ("serial", "port", "no_runtime"):
+            result["note"] = ("No answer. Asleep, the board answers nothing: "
+                              "device_wake brings it back.")
+        return result
+
+    @mcp.tool()
+    def device_sleep(checkin_minutes: int = 5, charging: bool = False,
+                     confirm: bool = False, port: str = "auto") -> dict:
+        """Put the board into deep sleep to save its battery. It wakes on its
+        button, and every checkin_minutes it listens briefly for device_wake
+        (0 = the button only, and then nobody can wake it from here).
+        charging=true is the same sleep, said on the screen, so the charger can
+        finish. Asleep it plays nothing and shows nothing. Needs confirm=true."""
+        minutes = max(0, min(720, int(checkin_minutes)))
+        if not confirm:
+            return {"ok": False, "status": "confirm",
+                    "error": "this stops whatever the board is doing until it is "
+                             "woken; call again with confirm=true"}
+        call = f"P.charge({minutes})" if charging else f"P.sleep({minutes})"
+        code = f"import json, nova.power as P\nprint(json.dumps({call}))\n"
+        return _json_out(_device_call(port, [code], poke=False))
+
+    @mcp.tool()
+    def device_wake(wait_minutes: int = 6, port: str = "auto") -> dict:
+        """Bring the board back from doze or deep sleep. On the cable this is
+        immediate (a reset). Over Wi-Fi a sleeping board can only be reached at
+        its next check-in, so this keeps knocking in the background for up to
+        wait_minutes and answers at once; ask device_power to see whether it
+        is back."""
+        answer = _device_call(port, ["print('awake')\n"], timeout=4)
+        if answer.get("ok"):
+            return {"ok": True, "status": "awake", "port": answer.get("port")}
+        from elecrow_device import DeviceError, board_port, reset_pulse
+        try:
+            cable = board_port("auto" if port in ("auto", "wifi") else port)
+        except DeviceError:
+            cable = None
+        if cable:
+            try:
+                reset_pulse(cable)
+                return {"ok": True, "status": "reset", "port": cable,
+                        "note": "Reset over the cable; it needs about ten seconds "
+                                "to boot."}
+            except Exception as exc:              # the COM port is busy or gone
+                cable_error = f"{type(exc).__name__}: {exc}"
+        else:
+            cable_error = "no cable"
+        minutes = max(1, min(30, int(wait_minutes)))
+        started = _knock(port, minutes * 60)
+        return {"ok": True, "status": "knocking" if started else "already knocking",
+                "cable": cable_error,
+                "note": f"Knocking for up to {minutes} min. It can only answer at "
+                        "its next check-in; with check-ins off, only its button "
+                        "wakes it."}
 
     @mcp.tool()
     def device_log(lines: int = 40, port: str = "auto") -> dict:

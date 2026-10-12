@@ -111,6 +111,25 @@ def board_port(port: str = "auto") -> str:
     return found[0]
 
 
+def reset_pulse(port: str, hold_s: float = 0.12) -> None:
+    """Reset the board through the CH340's auto-reset circuit: RTS pulls EN
+    low, DTR stays released so GPIO0 is high and she boots her program, not the
+    bootloader. This is how a board in deep sleep is woken over the cable -
+    asleep, she answers nothing on the serial line. It kills whatever runs."""
+    import serial
+    ser = serial.Serial()
+    ser.port, ser.baudrate, ser.timeout = port, 115200, 0.1
+    ser.dtr = False
+    ser.rts = False
+    ser.open()
+    try:
+        ser.rts = True
+        time.sleep(hold_s)
+        ser.rts = False
+    finally:
+        ser.close()
+
+
 class RawRepl:
     """One raw-REPL session: `with RawRepl(port) as repl: repl.exec(code)`.
 

@@ -54,6 +54,36 @@ def connect(timeout_ms=12000):
     return False
 
 
+def power_save(on):
+    """Let the radio nap between beacons (she stays reachable, a call takes a
+    moment longer), or run it flat out. False when this firmware cannot."""
+    if _wlan is None:
+        return False
+    try:
+        _wlan.config(pm=_wlan.PM_POWERSAVE if on else _wlan.PM_PERFORMANCE)
+        return True
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def ensure(timeout_ms=6000):
+    """Join again if the connection was lost; True while she is online."""
+    if _wlan is not None and _wlan.isconnected():
+        return True
+    return connect(timeout_ms)
+
+
+def off():
+    """Radio off, for deep sleep. connect() turns it back on."""
+    if _wlan is None:
+        return
+    try:
+        _wlan.disconnect()
+    except OSError:
+        pass
+    _wlan.active(False)
+
+
 def sync_clock():
     global _synced
     try:
