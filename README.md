@@ -197,99 +197,92 @@ list is written by a human.
 
 ## Roadmap
 
-This is where Nova is headed, and it is also our working to-do list. Nothing here is promised
-and nothing has a date. A ticked box means it is built and running.
+This is where Nova is headed, and it is also our working to-do list, sorted by priority.
+Nothing here is promised and nothing has a date. A ticked box means it is built and running.
 
-### Doing things together
+### 1 · Now
 
-- [ ] **Playing video games with her.** Nova sees the screen, understands what is happening
-      and plays along: as a second player, a co-op partner or the one commenting from the sofa.
-- [ ] **Watching and listening together.** A film, a series or an album that she follows in
-      real time and has opinions about.
-- [ ] **Board games and puzzles on her own screen**, written by her as board apps.
-- [ ] **Pen-and-paper.** She runs a role-playing game as game master, with soundscape and
-      music from the board.
-- [ ] **Cooking together.** She walks through a recipe step by step, sets the timers and
-      remembers what tasted good.
-- [ ] **Learning together.** She teaches a language or an instrument and adjusts the pace.
-- [ ] **Shared projects.** A comic, a story or a song that both of you keep working on over
-      weeks, taking turns.
-
-### Creating
-
-- [ ] **Songs of her own.** She composes instead of only playing what she has learned, and
-      sings along.
-- [ ] **Several boards as an ensemble.** Two or three boards playing in parts.
-- [ ] **Moving pictures.** Short animations or videos made from her comics.
-- [ ] **An audiobook shelf.** Her finished stories as a searchable collection with chapters.
-
-### A body
-
-- [ ] **A robotic body.** Off the desk and into the room: a head that turns to whoever is
-      speaking, later arms, later wheels or legs.
-- [ ] **The board's camera as her eyes.** She sees the room, notices who comes in and what
-      is on the table.
-- [ ] **Voice on the board.** Talk to her through the board's own microphone and speaker,
-      with a wake word and without a keyboard.
-- [ ] **A face on the screen** that shows her mood while she listens, thinks and speaks.
-- [ ] **Sensors on the board.** Temperature, light and motion as senses.
-- [ ] **A battery**, so she can come along.
-
-### Perceiving
-
-- [ ] **Hearing the mood.** She can tell from your tone of voice how you are doing.
-- [ ] **Telling voices apart.** She knows who is speaking and treats guests differently.
-
-### Reaching out
+The foundations everything else stands on, and the things that make her better today.
 
 - [ ] **Better at getting in touch on her own.** She should notice the right moment, have a
       real reason and pick the right channel, instead of staying silent or writing at the
       wrong time.
+- [ ] **Following up.** If she asked how something went, she remembers to ask again.
 - [ ] **A sense of the day.** Calendar, weather and routines, so that what she says fits
       what is actually going on.
-- [ ] **Following up.** If she asked how something went, she remembers to ask again.
-- [ ] **Present on every device.** One Nova on the phone, the desk and the PC, who knows
-      where you are right now.
-- [ ] **A morning and an evening ritual.** A short start to the day and a way to close it,
-      in her own manner.
-- [ ] **Sleep mode.** She notices when you are asleep, goes quiet and plays a soundscape if
-      you want one.
-- [ ] **Helping with the everyday.** Shopping list, appointments, parcels.
-
-### Memory and inner life
-
-- [ ] **A memory album.** She keeps special moments and can show them.
-- [ ] **Anniversaries.** She knows what happened a year ago today.
-- [ ] **Allowed to forget.** Tell her what she should not keep, and it is really gone.
-- [ ] **Interests of her own.** She follows a subject for weeks and tells you what she found.
-- [ ] **Explaining herself.** She can say why she got in touch or did something.
-
-### The house
-
-- [ ] **An app of her own** instead of the web interface.
-- [ ] **No more apartment block.** The switchboard, the card studio and everything that only
-      exists for multiple characters gets switched off.
-- [ ] **Smart home.** Lights, music and heating as tools she can use.
-- [ ] **A language model that runs at home**, so that nothing at all leaves the house.
-- [ ] **Offline operation.** She keeps running when the internet is gone.
-- [ ] **Backups of her memory** that can be restored with one command.
-- [ ] **Moving house with one command.** Nova and her memory onto a new machine.
-
-### Safety and overview
-
 - [ ] **A kill switch.** A button on the board that stops everything she is doing on her own,
-      at once.
+      at once. More autonomy comes after this, not before.
+- [ ] **Backups of her memory** that can be restored with one command.
 - [ ] **A cost display.** What a day of model calls has cost, at a glance.
-
-### For builders
-
-- [ ] **More add-ons, less core.** Every new ability as its own piece.
 - [ ] **An add-on template**, so that a new add-on starts from a working example.
-- [ ] **An add-on directory.** A list of finished add-ons to switch on and off.
+- [ ] **An app of her own** instead of the web interface.
+
+### 2 · Next
+
+What the board and the app make possible once the foundations are in.
+
+- [ ] **Playing video games with her.** Nova sees the screen, understands what is happening
+      and plays along: as a second player, a co-op partner or the one commenting from the sofa.
+- [ ] **Voice on the board.** Talk to her through the board's own microphone and speaker,
+      with a wake word and without a keyboard.
+- [ ] **The board's camera as her eyes.** She sees the room, notices who comes in and what
+      is on the table.
+- [ ] **A face on the screen** that shows her mood while she listens, thinks and speaks.
 - [ ] **Localisation for more than one language.** Everything her mind reads and writes
       (promises, goals, prompts, search, voices) should work in any language from one set of
       language files, instead of English with German patched in.
 - [ ] **German throughout** as the first complete language, not just for promises.
+- [ ] **No more apartment block.** The switchboard, the card studio and everything that only
+      exists for multiple characters gets switched off. Needs her own app first.
+- [ ] **More add-ons, less core.** Every new ability as its own piece.
+- [ ] **A morning and an evening ritual.** A short start to the day and a way to close it,
+      in her own manner.
+- [ ] **Explaining herself.** She can say why she got in touch or did something.
+- [ ] **Allowed to forget.** Tell her what she should not keep, and it is really gone.
+- [ ] **Songs of her own.** She composes instead of only playing what she has learned, and
+      sings along.
+
+### 3 · Later
+
+Good things that wait for the ones above.
+
+- [ ] **Watching and listening together.** A film, a series or an album that she follows in
+      real time and has opinions about.
+- [ ] **Pen-and-paper.** She runs a role-playing game as game master, with soundscape and
+      music from the board.
+- [ ] **Board games and puzzles on her own screen**, written by her as board apps.
+- [ ] **Shared projects.** A comic, a story or a song that both of you keep working on over
+      weeks, taking turns.
+- [ ] **Interests of her own.** She follows a subject for weeks and tells you what she found.
+- [ ] **A memory album.** She keeps special moments and can show them.
+- [ ] **Anniversaries.** She knows what happened a year ago today.
+- [ ] **Present on every device.** One Nova on the phone, the desk and the PC, who knows
+      where you are right now.
+- [ ] **Hearing the mood.** She can tell from your tone of voice how you are doing.
+- [ ] **Telling voices apart.** She knows who is speaking and treats guests differently.
+- [ ] **Sleep mode.** She notices when you are asleep, goes quiet and plays a soundscape if
+      you want one.
+- [ ] **Smart home.** Lights, music and heating as tools she can use.
+- [ ] **Helping with the everyday.** Shopping list, appointments, parcels.
+- [ ] **Cooking together.** She walks through a recipe step by step, sets the timers and
+      remembers what tasted good.
+- [ ] **Learning together.** She teaches a language or an instrument and adjusts the pace.
+- [ ] **An audiobook shelf.** Her finished stories as a searchable collection with chapters.
+- [ ] **Sensors on the board.** Temperature, light and motion as senses.
+- [ ] **An add-on directory.** A list of finished add-ons to switch on and off.
+- [ ] **Moving house with one command.** Nova and her memory onto a new machine.
+
+### 4 · Big builds
+
+Projects of their own, each one larger than everything above it.
+
+- [ ] **A robotic body.** Off the desk and into the room: a head that turns to whoever is
+      speaking, later arms, later wheels or legs. Builds on her voice and her eyes.
+- [ ] **A language model that runs at home**, so that nothing at all leaves the house.
+- [ ] **Offline operation.** She keeps running when the internet is gone.
+- [ ] **Several boards as an ensemble.** Two or three boards playing in parts.
+- [ ] **Moving pictures.** Short animations or videos made from her comics.
+- [ ] **A battery**, so she can come along.
 
 ## What lives where
 
