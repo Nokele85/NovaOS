@@ -135,7 +135,7 @@ ausdrückliches Ja. Ein neues Werkzeug darf Nova erst von sich aus benutzen, wen
 | `yurios/` | der Kern aus YuriOS (Paket und Befehl heißen weiter `yurios`) |
 | `tools/` | die Addons und die Listen der MCP-Server |
 | `elecrow-firmware/` | Firmware und Laufzeit für das Board |
-| `soul-src/` | die Vorlage für Novas Charakter |
+| `soul-src/` | die Charaktervorlage aus YuriOS; Novas eigener Charakter liegt bei ihren Daten |
 | `web/`, `desktop-shell/` | die Oberflächen aus YuriOS |
 | `docs/` | Dokumentation des Kerns und der eigenen Teile |
 | `SPEC.md` | der verbindliche Vertrag des Kerns |
