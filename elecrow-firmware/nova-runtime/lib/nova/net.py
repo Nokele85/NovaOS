@@ -95,6 +95,10 @@ def sync_clock():
     return _synced
 
 
+def online():
+    return bool(_wlan and _wlan.isconnected())
+
+
 def status():
     up = bool(_wlan and _wlan.isconnected())
     out = {"configured": len(_networks()), "connected": up,

@@ -146,13 +146,36 @@ def flash_micropython(args) -> None:
     print("flashed; next: install-runtime --yes")
 
 
+def _session(port: str):
+    """A raw-REPL session over the cable, or with --port wifi over the board's
+    console on the home network (for a board that is running on its battery)."""
+    if port != "wifi":
+        return RawRepl(board_port(port))
+    from elecrow_wifi import WebReplStream, configuration
+    network = configuration()
+    if not network.get("host") or not network.get("webrepl_password"):
+        raise SystemExit("--port wifi needs secrets/elecrow_network.json")
+    return RawRepl("wifi", serial_factory=lambda: WebReplStream(
+        network["host"], network["webrepl_password"]))
+
+
+def _link_for_board() -> dict | None:
+    """What the board needs to dial the relay, from secrets/elecrow_link.json:
+    its own secret and the addresses. The board server's token stays here."""
+    import elecrow_link
+    cfg = elecrow_link.configuration()
+    if not (cfg.get("enabled") and cfg.get("board_secret") and cfg.get("urls")):
+        return None
+    return {"enabled": True, "id": cfg.get("board_id", "nova"),
+            "secret": cfg["board_secret"], "urls": list(cfg["urls"])}
+
+
 def install_runtime(args) -> None:
     if not args.yes:
         raise SystemExit("this replaces the board's start-up code; add --yes")
     files = sorted(p for p in RUNTIME.rglob("*.py"))
-    port = board_port(args.port)
     redact = Redactor.from_file(SECRETS)
-    with RawRepl(port) as repl:
+    with _session(args.port) as repl:
         repl.exec("import os\nfor d in ('/lib', '/lib/nova', '/apps'):\n"
                   "    try:\n        os.mkdir(d)\n    except OSError:\n        pass\n")
         for path in files:
@@ -174,6 +197,11 @@ def install_runtime(args) -> None:
             print("installed /nova_secrets.json (values not shown)")
         else:
             print("no secrets/elecrow_device.json - run import-secrets for Wi-Fi")
+        link = _link_for_board()
+        if link:
+            for code in upload_code("/nova_link.json", json.dumps(link).encode("utf-8")):
+                repl.exec(code, timeout=10)
+            print("installed /nova_link.json (values not shown)")
         # drop what an earlier runtime left behind (a renamed module that still
         # imports is worse than a missing one - `nova.display` was both a
         # module and an accessor once, and the module won)

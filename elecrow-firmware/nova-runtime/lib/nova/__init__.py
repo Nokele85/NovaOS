@@ -128,7 +128,15 @@ def info():
             "autostart": s.get("autostart"), "boot_fails": s.get("boot_fails", 0),
             "sd": sd.status(), "sd_retries": sd.retries(), "io": _io is not None,
             "display": _display is not None, "net": net.status(),
-            "power": _power_brief()}
+            "power": _power_brief(), "link": _link_brief()}
+
+
+def _link_brief():
+    try:
+        from . import link
+        return link.status()
+    except Exception:
+        return None
 
 
 def _power_brief():
@@ -169,18 +177,42 @@ def _checkin():
 
     The screen is not started here. resume() brings up the rest once somebody
     answers; with `panel_off_in_sleep` set, an ordinary boot does (power.poke)."""
-    from . import net
+    from . import net, power
     up = net.connect()
-    if up:
-        try:
-            from . import remote
-            remote.start()
-        except Exception:
-            pass
-    log("check-in net=%s" % up)
     if not up:                         # no network, nobody can call: back to sleep
-        from . import power
+        log("check-in net=False")
         power.sleep(delay_s=1)
+        return
+    try:
+        from . import remote
+        remote.start()
+    except Exception:
+        pass
+    # With a line out she does not have to wait and listen: she calls the
+    # relay, and its first answer says whether anybody asked for her.
+    answer = _dial({"checkin": True})
+    log("check-in net=True link=%s" % (None if answer is None else
+                                       ("stay" if answer.get("stay") else "sleep")))
+    if answer is None:
+        return                         # no relay: listen for a call, as before
+    if answer.get("stay"):
+        power.poke()
+    else:
+        power.sleep(delay_s=1)
+
+
+def _dial(hello):
+    """Open her line out, if one is set up; the relay's answer, or None."""
+    try:
+        from . import link, power
+        if not link.enabled():
+            return None
+        said = {"woke": power.woke(), "battery": power.battery(), "mode": "awake"}
+        said.update(hello)
+        return link.connect(said)
+    except Exception as e:
+        log("link failed: %r" % (e,))
+        return None
 
 
 def resume():
@@ -229,6 +261,9 @@ def start():
         remote.start()
     except Exception:
         log("WLAN console unavailable; USB remains available")
+    # after the LAN console, never before: starting that console clears the
+    # REPL's second seat, which is where the line hangs
+    _dial({})
     log("boot runtime=%s safe=%s sd=%s net=%s" % (VERSION, safe_mode, sd.status(),
                                                   net.status()["connected"]))
     try:                               # the button is the volume knob

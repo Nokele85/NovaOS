@@ -671,20 +671,37 @@ def _device_call(port: str, snippets: list[str], timeout: float = 8.0,
 
     Every string that comes back passes the Redactor - an app can read the
     board's Wi-Fi secrets, and nothing it prints may leave this machine."""
+    import elecrow_link
     from elecrow_device import DeviceError, RawRepl, Redactor, board_port
     from elecrow_wifi import WebReplStream, configuration
     redact = Redactor.from_file(_secrets_path())
     network = configuration()
     redact.values += [network["webrepl_password"]] if network.get("webrepl_password") else []
-    wifi = port == "wifi" or (port == "auto" and network.get("enabled"))
+    # Three ways to the board, in this order: her line out through the relay
+    # (wherever she is), the console on the home network, the cable.
+    link = elecrow_link.configuration()
+    redact.values += [v for v in (link.get("host_token"), link.get("board_secret")) if v]
+    seen: dict | None = None
+    via_link = False
+    if link.get("enabled") and port in ("auto", "link"):
+        seen = elecrow_link.status(link)
+        via_link = bool(seen.get("online"))
+        if port == "link" and not via_link:
+            return _away(seen)
+    wifi = not via_link and (port == "wifi" or (port == "auto" and network.get("enabled")))
     try:
-        device = "wifi:" + str(network.get("host", "")) if wifi else board_port(port)
+        device = ("link" if via_link else
+                  "wifi:" + str(network.get("host", "")) if wifi else board_port(port))
     except DeviceError as exc:
-        return {"ok": False, "status": "port", "error": str(exc)}
+        return _away(seen) if seen is not None else {
+            "ok": False, "status": "port", "error": str(exc)}
     if not _DEVICE_LOCK.acquire(timeout=5):
         return {"ok": False, "status": "busy", "error": "the board is in use by another call"}
     try:
-        if wifi:
+        if via_link:
+            session = RawRepl(device, poke=poke,
+                              serial_factory=lambda: elecrow_link.RelayStream(link))
+        elif wifi:
             if not network.get("host") or not network.get("webrepl_password"):
                 raise DeviceError("WLAN control is not configured")
             session = RawRepl(device, poke=poke, serial_factory=lambda: WebReplStream(
@@ -700,6 +717,8 @@ def _device_call(port: str, snippets: list[str], timeout: float = 8.0,
     except DeviceError as exc:
         return {"ok": False, "status": "no_runtime", "port": device, "error": redact(str(exc))}
     except Exception as exc:                  # a busy or vanished COM port
+        if seen is not None and not via_link:
+            return _away(seen)                # the relay knows why she is silent
         return {"ok": False, "status": "serial", "port": device,
                 "error": redact(f"{type(exc).__name__}: {exc}")}
     finally:
@@ -709,6 +728,17 @@ def _device_call(port: str, snippets: list[str], timeout: float = 8.0,
         result[key] = text[-OUTPUT_MAX:]
     result["port"] = device
     return result
+
+
+def _away(seen: dict) -> dict:
+    """The answer when the board cannot be reached and the relay knows why:
+    asleep until its next check-in, or simply gone."""
+    import elecrow_link
+    return {"ok": False, "status": "asleep" if seen.get("asleep") else "offline",
+            "port": "link", "error": elecrow_link.describe(seen),
+            "next_checkin_s": seen.get("next_checkin_s"),
+            "hint": "device_wake asks it to stay up at its next check-in."
+                    if seen.get("asleep") and seen.get("next_checkin_s") is not None else ""}
 
 
 #: What a knock says: the poke, with its answer printed. "restarting" means it
@@ -1255,6 +1285,12 @@ def _device_tools(mcp: FastMCP) -> None:
         if result.get("status") in ("serial", "port", "no_runtime"):
             result["note"] = ("No answer. Asleep, the board answers nothing: "
                               "device_wake brings it back.")
+        import elecrow_link
+        link = elecrow_link.configuration()
+        if link.get("enabled"):
+            seen = elecrow_link.status(link)
+            result["line"] = {"where": elecrow_link.describe(seen),
+                              "via": seen.get("via"), "wake_pending": seen.get("wake_pending")}
         return result
 
     @mcp.tool()
@@ -1288,6 +1324,24 @@ def _device_tools(mcp: FastMCP) -> None:
                         "note": "It answered from its sleep and is booting; it is "
                                 "ready in about ten seconds."}
             return {"ok": True, "status": "awake", "port": answer.get("port")}
+        import elecrow_link
+        link = elecrow_link.configuration()
+        minutes = max(1, min(30, int(wait_minutes)))
+        if link.get("enabled") and port in ("auto", "link"):
+            # With a line out there is nothing to knock on: the relay tells the
+            # board to stay up when it next calls in, wherever it is.
+            seen = elecrow_link.wake(link, minutes)
+            if seen.get("relay") != "unreachable":
+                due = seen.get("next_checkin_s")
+                if seen.get("online"):
+                    return {"ok": True, "status": "awake", "port": "link"}
+                if seen.get("asleep") and due is None:
+                    return {"ok": False, "status": "asleep", "port": "link",
+                            "error": elecrow_link.describe(seen)}
+                return {"ok": True, "status": "asked", "port": "link",
+                        "next_checkin_s": due,
+                        "note": elecrow_link.describe(seen) + f" It was asked to stay up "
+                                f"when it does; the request holds for {minutes} min."}
         from elecrow_device import DeviceError, board_port, reset_pulse
         try:
             cable = board_port("auto" if port in ("auto", "wifi") else port)

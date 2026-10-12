@@ -1,0 +1,16 @@
+[Unit]
+Description=Nova board relay: where her board calls in from wherever it is
+Documentation=docs/elecrow-link.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=benni
+WorkingDirectory=/home/benni/YuriOS
+ExecStart=/home/benni/YuriOS/.venv/bin/python tools/board_relay.py --host 0.0.0.0 --port 8770 --secrets /home/benni/YuriOS/secrets/board_relay.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

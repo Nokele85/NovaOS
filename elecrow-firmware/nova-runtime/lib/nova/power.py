@@ -243,6 +243,26 @@ def _wake():
     _nova().io()              # after a check-in the panel supply is still off
     _light(_bright)
     _mode = "awake"
+    _line_tell()
+
+
+def _line_keep():
+    """Keep her line out up: redial when it dropped (nova/link.py paces it).
+    Not while she plays - dialling takes seconds and the music would stumble."""
+    try:
+        from nova import link, net
+        if link.enabled():
+            link.keep(net.online())
+    except Exception:
+        pass
+
+
+def _line_tell():
+    try:
+        from nova import link
+        link.tell({"mode": _mode, "battery": battery()})
+    except Exception:
+        pass
 
 
 def _touched():
@@ -441,6 +461,7 @@ def _step():
         _light(0)
         _radio_nap(True)
         _mode = "doze"
+        _line_tell()
     _net_tries += 1
     if _net_tries >= 60 and not busy:
         # once a minute, in every state: is the Wi-Fi still there? A boot that
@@ -451,6 +472,8 @@ def _step():
             net.ensure()
         except Exception:
             pass
+    if not busy:
+        _line_keep()
     if _mode == "doze":
         _clock(_busy_hz if busy else cfg["idle_mhz"] * 1000000)
         if not busy:
@@ -541,6 +564,11 @@ def _go(checkin_min, why):
                 chip._bit(B.AW_POWER, False)
         except Exception:
             pass
+    try:                      # tell the relay she is going, and when she is back
+        from nova import link
+        link.bye("sleep", int(checkin_min or 0))
+    except Exception:
+        pass
     try:
         from nova import net
         net.off()
