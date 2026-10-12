@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 
 import httpx
 import pytest
@@ -184,7 +185,11 @@ def test_something_that_is_not_an_image_is_refused_in_words(tmp_path):
 def test_the_shelf_keeps_only_the_newest(tmp_path):
     shelf = Uploads(tmp_path, max_px=32, keep=2)
     first = shelf.save(png())
-    shelf.save(png())
+    # Specify chronology rather than relying on the filesystem clock resolving
+    # three tiny writes. Equal mtimes made this fail intermittently in the gate.
+    os.utime(first.path, (1, 1))
+    second = shelf.save(png())
+    os.utime(second.path, (2, 2))
     shelf.save(png())
     assert len(list(tmp_path.iterdir())) == 2
     assert shelf.get(first.id) is None                  # pruned, and honest about it
