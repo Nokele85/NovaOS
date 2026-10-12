@@ -37,6 +37,14 @@ def test_uninstalled_prepared_catalogue_is_not_offered(tmp_path):
     assert library.catalogue(tmp_path)["status"] == "no_library"
 
 
+def test_scene_search_finds_components_instead_of_claiming_they_do_not_exist(sounds):
+    result = library.catalogue(sounds[0], "gespraeche hund")
+    assert result["match_mode"] == "related" and result["matches"] == 3
+    assert "No single sound" in result["note"]
+    result = library.catalogue(sounds[0], "conversations distant")
+    assert result["match_mode"] == "exact" and result["matches"] == 2
+
+
 def test_large_library_stays_valid_json_and_reports_more(sounds):
     root, entries = sounds
     expanded = [dict(entries[0], file=f"stadt__gespraeche__{n:03d}.pcm",

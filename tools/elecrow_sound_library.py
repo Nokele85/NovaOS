@@ -15,12 +15,30 @@ def catalogue(root: Path, query: str = "", limit: int = 40) -> dict:
         return {"ok": False, "status": "no_library", "sounds": []}
     entries = json.loads(path.read_text(encoding="utf-8"))["sounds"]
     words = query.lower().replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").split()
-    selected = [e for e in entries if all(w in (
-        e["file"] + " " + e.get("description", "") + " " + " ".join(e.get("tags", []))
-    ).lower() for w in words)]
+    aliases = {"ferne": "fern", "fernen": "fern", "distant": "fern",
+               "gespraech": "gespraeche", "gespraechen": "gespraeche",
+               "conversations": "gespraeche", "voices": "gespraeche",
+               "tavern": "gasthaus", "fireplace": "kamin", "forest": "wald",
+               "city": "stadt", "scifi": "sciencefiction", "sci-fi": "sciencefiction",
+               "schritte": "schritt", "footsteps": "schritt", "rain": "regen"}
+    words = list(dict.fromkeys(aliases.get(w, w) for w in words))
+    scores = []
+    for entry in entries:
+        text = (entry["file"] + " " + entry.get("description", "") + " "
+                + " ".join(entry.get("tags", []))).lower()
+        scores.append((sum(w in text for w in words), entry))
+    selected = [e for score, e in scores if score == len(words)]
+    mode = "exact"
+    if words and not selected:
+        # A scene names several independent sounds, not one impossible compound file.
+        selected = [e for score, e in sorted(scores, key=lambda row: -row[0]) if score]
+        mode = "related"
     shown = selected[:max(1, min(100, int(limit)))]
     result = {"ok": True, "total": len(entries), "matches": len(selected),
-              "sounds": shown}
+              "sounds": shown, "match_mode": mode}
+    if mode == "related":
+        result["note"] = ("No single sound matches all words. These are related scene components, "
+                          "ranked by matching words; choose suitable files or search one component.")
     # SPEC §7.3: never let the host cut a filename catalogue mid-JSON.
     while len(json.dumps(result)) > 8000 and shown:
         shown.pop()
