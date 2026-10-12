@@ -1,0 +1,18 @@
+[Unit]
+Description=Nova board server: her tools for the board, next to her
+Documentation=docs/elecrow-link.md
+After=network-online.target nova-board-relay.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=benni
+WorkingDirectory=/home/benni/YuriOS
+Environment=ELECROW_WORKSPACE=/home/benni/YuriOS/elecrow-firmware
+# The token is read from its file at start, so it is in no unit and no log.
+ExecStart=/bin/sh -c 'ELECROW_MCP_TOKEN="$(cat /home/benni/YuriOS/secrets/elecrow_mcp_token)" exec /home/benni/nova-board-venv/bin/python tools/elecrow_mcp_server.py --http --host 127.0.0.1 --port 8769'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

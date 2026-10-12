@@ -219,8 +219,6 @@ The foundations everything else stands on, and the things that make her better t
 - [ ] **A cost display.** What a day of model calls has cost, at a glance.
 - [ ] **An add-on template**, so that a new add-on starts from a working example.
 - [ ] **An app of her own** instead of the web interface.
-- [ ] **The board server on the always-on host.** Today it runs on the PC, so with the PC
-      off she cannot reach her board, wherever it is.
 - [ ] **Measure the battery.** How long one charge lasts awake, dozing and asleep, and
       what an open line costs.
 
@@ -301,6 +299,8 @@ Projects of their own, each one larger than everything above it.
       wherever Nova is.
 - [x] **Reachable away from home.** On a phone's hotspot the board dials out to a relay
       and keeps the line open, so every tool works as it does at home.
+- [x] **The board server on the always-on host.** Her tools for the board run next to
+      her; the PC can be off.
 - [x] **A runtime log.** Since the board cannot measure its battery, it counts the
       minutes it ran in each state.
 

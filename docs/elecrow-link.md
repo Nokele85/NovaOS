@@ -19,8 +19,12 @@ does over the cable: apps, music, screenshots, sleep.
 
 ```
 Nova ── board server ── relay ══ line the board opened ══ board
-        (PC)            (always-on host)                   (anywhere)
+        └──── all on the always-on host ────┘              (anywhere)
 ```
+
+The board server runs next to her as `nova-board-server.service`, in an environment of
+its own, with the sound library and her learned music beside it. The PC is not part of
+the path: it can be off.
 
 The board knows two addresses for the relay and tries them in order:
 
@@ -104,7 +108,11 @@ handle /board/link {
 
 with a second forward in the reverse tunnel (`-R 127.0.0.1:8767:127.0.0.1:8770`).
 
-On the PC: `secrets/elecrow_link.json`
+On the always-on host, for the board server: `secrets/elecrow_link.json` with `enabled`,
+`relay` (`http://127.0.0.1:8770`), `board_id` and `host_token`, and the service
+`tools/systemd/nova-board-server.service` (port 8769, local only).
+
+On the PC, for installing: `secrets/elecrow_link.json`
 
 ```json
 {"enabled": true, "relay": "http://<always-on host>:8770", "board_id": "nova",
@@ -139,8 +147,12 @@ Not checked yet: a real hotspot, and how much battery an open line costs.
 
 ## Limits
 
-- **The board server still runs on the PC.** With the PC off, Nova cannot reach the
-  board, wherever it is. Moving the board server to the always-on host removes that.
+- **The cable stays at the PC.** Flashing firmware and installing over USB are done
+  there, with `tools/elecrow_device_admin.py`. Over the line the installer works from
+  the PC too (`--port link`).
+- **New sounds and learned music live on the always-on host.** Its copies under
+  `elecrow-firmware/sound-library` and `music-library` are the ones in use; a library
+  built on the PC has to be copied over.
 - **The board needs a Wi-Fi it knows.** It joins the networks in its own list, nothing
   else. A hotspot has to be in that list.
 - **No Wi-Fi, no line.** The board has no mobile radio of its own.
