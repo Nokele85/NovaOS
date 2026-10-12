@@ -1,10 +1,9 @@
 # FORK.md — how this installation is built
 
-**Every agent reads this before touching anything.** `AGENTS.md` points here in its first lines;
-Claude Code reaches it through `CLAUDE.md`'s `@AGENTS.md` import, Codex and the other CLIs through
-`AGENTS.md` directly. It binds all of them equally, and it is this fork's file: `AGENTS.md`,
-`SPEC.md` and `docs/` stay as close to upstream as they can be, so that an upstream change merges
-instead of colliding.
+**Read this before touching anything.** `AGENTS.md` points here in its first lines. It binds
+everyone who changes this repository, and it is this fork's file: `AGENTS.md`, `SPEC.md` and
+`docs/` stay as close to upstream as they can be, so that an upstream change merges instead of
+colliding.
 
 This installation is a fork of **[yuri-os/YuriOS](https://github.com/yuri-os/YuriOS)**, which is a working
 system and stays the pattern for everything added here. The owner's standing instruction, in his
