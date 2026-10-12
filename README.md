@@ -132,6 +132,42 @@ not guessed.
 
 [docs/mind.md](docs/mind.md)
 
+## Models
+
+### What Nova runs on
+
+| Job | Model | Where it runs |
+|---|---|---|
+| **Her voice in conversation** | DeepSeek (`openai/deepseek-flash`) | DeepSeek's API |
+| **Inner life, memory work, the night** | the same model | DeepSeek's API |
+| **Memory vectors** | `BAAI/bge-m3`, multilingual | locally, in-process |
+| **Her camera** | a Krea 2 checkpoint in ComfyUI, with the Qwen3-VL 4B text encoder | locally, on the house GPU |
+| **Story voices** | Qwen3-TTS, one narrator and a cast | locally, on the house GPU |
+| **Reading sheet music** | Audiveris | locally |
+| **Web search** | a self-hosted SearXNG | locally |
+| **Her body on screen** | a Live2D rig | in the desktop window |
+
+Only the language model leaves the house. Memory, pictures, voices and search stay on her own
+machines.
+
+### What is supported
+
+The model id's prefix picks the provider, so switching is a one-line change.
+
+| Part | Options |
+|---|---|
+| **Language model** | LM Studio · Ollama · a GGUF file directly through llama.cpp · OpenRouter · OpenAI · Anthropic · any OpenAI-compatible server (vLLM, llama.cpp server, LocalAI, DeepSeek and others) |
+| **Roles** | `CHAT_MODEL` for her replies and `UTILITY_MODEL` for everything behind the scenes. They can be the same model or two different ones. |
+| **Embeddings** | sentence-transformers in-process · LM Studio · Ollama. Always local. |
+| **Pictures** | ComfyUI · Krea 2 · SDXL through diffusers · a hosted model through OpenRouter |
+| **Seeing pictures** | any multimodal language model. Whether she can see is asked of the provider at start-up. |
+| **Speech to text** | faster-whisper |
+| **Text to speech** | Kokoro on CPU · Qwen3-TTS · GPT-SoVITS |
+| **Body** | VRM · Live2D |
+
+A fresh install selects no model at all. `yurios configure` walks through the choice; details
+are in [docs/models.md](docs/models.md).
+
 ## The add-on rule
 
 This is how NovaOS is built, and how it stays maintainable:
