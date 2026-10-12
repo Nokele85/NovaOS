@@ -232,9 +232,13 @@ async def test_a_skill_she_reads_comes_back_to_her_whole(cfg, seeded_vault):
     utility = rig.mind.brain.state.utility
 
     await work(rig)
-    returned = [m["content"] for call in utility.calls for m in call
-                if m.get("role") == "user"
-                and str(m.get("content", "")).startswith("((read_skill returned:")]
+    # A compact follow-up (§22.4) carries the newest result at the end of one
+    # user message; the full resend carries it as a message of its own. Either
+    # way it has to be whole.
+    marker = "((read_skill returned:"
+    returned = [str(m["content"])[str(m["content"]).index(marker):]
+                for call in utility.calls for m in call
+                if m.get("role") == "user" and marker in str(m.get("content", ""))]
     assert returned, "the read never came back to her"
     assert 'device_set_autostart(name=\\"warm_pad\\"' in returned[0]
     assert "…(cut)" not in returned[0]
