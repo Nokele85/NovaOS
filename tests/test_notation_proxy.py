@@ -50,3 +50,26 @@ async def test_cached_optical_notes_are_parsed_and_stay_unconfirmed(proxy):
 
 async def test_no_optical_configuration_means_fallback_not_fake_notes(proxy):
     assert await proxy._optical_notation('', {}) is None
+
+
+async def test_cancelling_notation_read_stops_the_optical_process(proxy, monkeypatch):
+    config = proxy.HERE.parent / 'secrets/elecrow_notation.json'
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({'command': ['/owner-configured/omr']}))
+    class Process:
+        killed = False
+        async def wait(self):
+            if not self.killed:
+                raise proxy.asyncio.CancelledError()
+            return 0
+        def kill(self):
+            self.killed = True
+    process = Process()
+    async def launch(*args, **kwargs):
+        assert args[0] == '/owner-configured/omr'
+        return process
+    monkeypatch.setattr(proxy.asyncio, 'create_subprocess_exec', launch)
+    with pytest.raises(proxy.asyncio.CancelledError):
+        await proxy._optical_notation(base64.b64encode(b'%PDF-test').decode(),
+            {'source_id': 'b' * 20, 'page': 1})
+    assert process.killed

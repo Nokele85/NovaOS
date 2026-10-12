@@ -223,6 +223,8 @@ def parse_musicxml(raw, part='', voice='', chord_mode='reject'):
 def _xml_bytes(raw):
     if raw.startswith(b'PK'):
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            if archive.getinfo('META-INF/container.xml').file_size > 64 * 1024:
+                raise ValueError('MusicXML container metadata too large')
             container = archive.read('META-INF/container.xml')
             tree = ET.fromstring(container)
             entry = next(e for e in tree.iter() if e.tag.endswith('rootfile'))
@@ -247,6 +249,8 @@ class Links(HTMLParser):
 
 
 def read_source(url, part='', voice='', page=1, chord_mode='reject'):
+    if len(url) > 2048:
+        raise ValueError('Notation URL exceeds 2048 characters')
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in ('http', 'https') or parsed.username or parsed.password:
         raise ValueError('Use a public HTTP(S) sheet-music URL without credentials')

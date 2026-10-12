@@ -1,5 +1,8 @@
 # Tools — her hands
 
+For learned sheet music on the Elecrow board, see [the notation repertoire](learned-music.md):
+read web notation, save exact notes with revisions, and replay them on recorded instruments.
+
 Her hands are reached over a real **MCP** connection: an in-repo MCP server
 (`yurios/world/tools/server.py`, FastMCP over stdio) that the brain connects to as a genuine MCP
 client, discovering the calls with `list_tools` rather than hardcoding them. There are nineteen

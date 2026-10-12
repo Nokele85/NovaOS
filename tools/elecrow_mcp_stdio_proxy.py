@@ -206,6 +206,10 @@ async def _optical_notation(encoded: str, data: dict) -> dict | None:
             process.kill()
             await process.wait()
             return {'status': 'unavailable', 'reason': 'OMR exceeded 120 seconds', 'confirmed': False}
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
         scores = list(directory.rglob('*.mxl'))
         if process.returncode or not scores:
             return {'status': 'unavailable', 'reason': 'OMR could not read this notation', 'confirmed': False}
