@@ -7,7 +7,8 @@ def test_reminders_have_stable_distinct_names_and_no_goal_instruction():
     assert morning != evening
     assert reminder("morning", "2026-10-12") == (morning, text)
     assert "Guten Morgen" in text and "Guten Abend" in other
-    assert "kein neues oder wiederkehrendes Ziel" in text
+    assert "einmaligen reach_out-Auftrag" in text
+    assert "kein wiederkehrendes Ziel" in text
 
 
 def test_successful_upload_is_not_repeated_and_failure_is_retryable(monkeypatch, tmp_path):

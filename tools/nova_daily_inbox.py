@@ -21,7 +21,8 @@ def reminder(slot: str, day: str) -> tuple[str, str]:
         "bereits begrüßt hast, vermeide eine zweite Begrüßung. Schau auf eure letzte "
         "Unterhaltung und deinen tatsächlichen Stand. Melde dich über deinen normalen "
         "reach_out-Weg; behaupte keine Arbeit, die du nicht gemacht hast. "
-        "Du musst dafür kein neues oder wiederkehrendes Ziel anlegen.\n"
+        "Lege dafuer bei Bedarf genau einen einmaligen reach_out-Auftrag an, "
+        "wie dein Posteingang es vorsieht. Lege kein wiederkehrendes Ziel an.\n"
     )
 
 
