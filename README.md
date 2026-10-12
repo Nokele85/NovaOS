@@ -35,6 +35,7 @@ None of this is in YuriOS. All of it runs here.
 | | |
 |---|---|
 | 🖥️ **A device of her own** | Nova has an ESP32 board with a screen, speaker, camera, microphone and touch. Not an avatar in a browser tab, but something that sits on the desk. |
+| 🔋 **It comes along** | The board runs on a battery, sleeps when nobody needs it and can be woken again. Away from home it dials out by itself, so Nova reaches it on a phone's hotspot as she does on the desk. |
 | ⚡ **She programs it herself** | Nova writes her own apps for the board, uploads them, runs them and checks by screenshot whether they worked. |
 | 🎹 **She plays music** | Piano, pad, harp, erhu and keys, played from notes rather than from files. |
 | 🎼 **She reads sheet music** | A printed score or a chord line is enough. She learns the piece and keeps it. |
@@ -86,7 +87,8 @@ She can write on it, draw on it, make sound with it and see through it. Above al
 a screenshot of what came out, and fixes it. Before an app goes onto the board it is checked
 against what the board can really do.
 
-`elecrow-firmware/` · `tools/elecrow_*.py` · [docs/elecrow-wifi.md](docs/elecrow-wifi.md)
+`elecrow-firmware/` · `tools/elecrow_*.py` · [docs/elecrow-wifi.md](docs/elecrow-wifi.md) ·
+[on a battery](docs/elecrow-power.md) · [away from home](docs/elecrow-link.md)
 
 ### Music she plays herself
 
@@ -217,6 +219,10 @@ The foundations everything else stands on, and the things that make her better t
 - [ ] **A cost display.** What a day of model calls has cost, at a glance.
 - [ ] **An add-on template**, so that a new add-on starts from a working example.
 - [ ] **An app of her own** instead of the web interface.
+- [ ] **The board server on the always-on host.** Today it runs on the PC, so with the PC
+      off she cannot reach her board, wherever it is.
+- [ ] **Measure the battery.** How long one charge lasts awake, dozing and asleep, and
+      what an open line costs.
 
 ### 2 · Next
 
@@ -283,7 +289,20 @@ Projects of their own, each one larger than everything above it.
 - [ ] **Offline operation.** She keeps running when the internet is gone.
 - [ ] **Several boards as an ensemble.** Two or three boards playing in parts.
 - [ ] **Moving pictures.** Short animations or videos made from her comics.
-- [ ] **A battery**, so she can come along.
+- [ ] **A fuel gauge for the battery.** The board cannot measure its cell; a small
+      gauge chip on the I2C pads would let her know how much is left.
+
+### Done
+
+- [x] **A battery.** The board runs on a lithium cell and charges over USB-C.
+- [x] **Doze and deep sleep.** Unused, the screen dims and goes out, the processor slows
+      down and the radio naps. Deep sleep on request, or with the button held five seconds.
+- [x] **Waking her board.** By its button, over the cable, or at its next check-in from
+      wherever Nova is.
+- [x] **Reachable away from home.** On a phone's hotspot the board dials out to a relay
+      and keeps the line open, so every tool works as it does at home.
+- [x] **A runtime log.** Since the board cannot measure its battery, it counts the
+      minutes it ran in each state.
 
 ## What lives where
 
