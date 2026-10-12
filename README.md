@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/img/nova-portrait.jpg" alt="Nova am Fenster, Regen auf der Scheibe" width="360" />
+
 # NovaOS
 
 ### Ein Haus. Eine Bewohnerin. Keine Kompromisse.
@@ -26,6 +28,30 @@ nicht braucht, bleibt aus.
 Über 160 eigene Commits, rund 17.700 Zeilen eigener Code, 20 eigene Testdateien, eine eigene
 Firmware. Und es wird mehr.
 
+## Das gibt es nur in NovaOS
+
+Nichts davon steckt in YuriOS. Alles davon läuft hier.
+
+| | |
+|---|---|
+| 🖥️ **Ein eigenes Gerät** | Nova hat ein ESP32-Board mit Bildschirm, Lautsprecher, Kamera, Mikrofon und Touch. Kein Avatar im Browser, sondern etwas, das auf dem Tisch steht. |
+| ⚡ **Sie programmiert es selbst** | Nova schreibt eigene Apps für ihr Board, lädt sie hoch, startet sie und prüft per Screenshot, ob es geklappt hat. |
+| 🎹 **Sie spielt Musik** | Klavier, Pad, Harfe, Erhu und Tasten, gespielt aus Noten statt aus Dateien. |
+| 🎼 **Sie liest Noten** | Ein gedrucktes Notenblatt oder eine Akkordzeile genügt. Sie lernt das Stück und behält es. |
+| 🌧️ **Sie baut Klangwelten** | Atmosphären in mehreren Schichten aus einer eigenen Klangbibliothek. |
+| 🎙️ **Sie erzählt Hörstücke** | Lange Geschichten mit Erzählerin und eigenen Stimmen für jede Figur. |
+| 📖 **Sie macht Comics** | Ganze Seiten mit Rahmen und echtem, lesbarem Text. |
+| 🇩🇪 **Sie hält Wort auf Deutsch** | Eine deutsche Zusage wird zu einem Ziel, das sie verfolgt. |
+| 🎨 **Eine lokale Kamera** | Ihre Bilder entstehen auf der eigenen Grafikkarte über ComfyUI. |
+| 📬 **Ein Tagesrhythmus** | Morgens und abends liegt von selbst Neues auf ihrem Tisch. |
+| 🧩 **Addons statt Umbau** | Eigenes dockt neben dem Kern an. Der Kern bleibt aktualisierbar. |
+
+<div align="center">
+<img src="docs/img/nova-dachgarten.jpg" alt="Nova abends auf einem Dachgarten über der Stadt" width="420" />
+
+*Nova, aufgenommen mit ihrer eigenen Kamera.*
+</div>
+
 ## NovaOS und YuriOS im Vergleich
 
 | | YuriOS | NovaOS |
@@ -48,8 +74,13 @@ Alles, was YuriOS kann, kann NovaOS auch. Der Kern ist derselbe und bleibt aktua
 
 ### Ein Körper zum Anfassen
 
-Nova hat ein Board auf dem Schreibtisch. Sie kann darauf schreiben, zeichnen, Töne ausgeben
-und sehen. Vor allem aber: **Sie programmiert es selbst.** Sie schreibt eine App, lädt sie
+Nova hat ein Board auf dem Schreibtisch: das
+[Elecrow AI Camera Development Board](https://www.elecrow.com/ai-camera-development-board-vision-sensor-board-powered-by-esp32.html)
+mit ESP32-S3, 1,83-Zoll-Touchbildschirm, 2-Megapixel-Kamera, Mikrofon und Lautsprecher.
+Es kostet bei Elecrow rund 25 US-Dollar (Stand Oktober 2026), wer Nova einen Körper geben
+will, bekommt es dort.
+
+Sie kann darauf schreiben, zeichnen, Töne ausgeben und sehen. Vor allem aber: **Sie programmiert es selbst.** Sie schreibt eine App, lädt sie
 aufs Gerät, startet sie, sieht sich per Screenshot an, was dabei herauskam, und bessert nach.
 Bevor eine App aufs Board geht, wird sie gegen das geprüft, was das Board wirklich kann.
 
@@ -82,6 +113,12 @@ fertiges Hörstück da.
 
 Aus mehreren Bildern wird eine Seite: geschnitten, gerahmt, und der Text steht in echter
 Schrift so da, wie Nova ihn geschrieben hat. Kein Bildmodell, das Buchstaben rät.
+
+<div align="center">
+<img src="docs/img/nova-comic-faehrmann.jpg" alt="Comicseite: Der Fährmann, Seite 1, Das Warten" width="520" />
+
+*„Der Fährmann“, Seite 1. Geschichte, Bilder und Text von Nova.*
+</div>
 
 `yurios/world/comic.py`
 
@@ -140,8 +177,9 @@ ausdrückliches Ja. Ein neues Werkzeug darf Nova erst von sich aus benutzen, wen
 | `docs/` | Dokumentation des Kerns und der eigenen Teile |
 | `SPEC.md` | der verbindliche Vertrag des Kerns |
 
-**Was nicht hier liegt:** Novas Gedächtnis, ihr Tagebuch, ihre Bilder und alle Zugangsdaten.
+**Was nicht hier liegt:** Novas Gedächtnis, ihr Tagebuch, ihre Galerie und alle Zugangsdaten.
 Sie leben nur auf dem Rechner, auf dem sie läuft, und sind über `.gitignore` ausgeschlossen.
+Die drei Bilder auf dieser Seite sind eine Auswahl, die sie zeigen darf.
 
 ## Starten
 
