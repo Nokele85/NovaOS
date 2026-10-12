@@ -117,6 +117,7 @@ def rig(monkeypatch, tmp_path):
     nova = types.SimpleNamespace(
         board=pins, net=net, io=lambda: state.chip, i2c=lambda: state.bus,
         display_if_ready=lambda: state.screen, log=state.log.append,
+        resume=lambda: state.log.append("resumed"),
         touch=lambda: types.SimpleNamespace(read=lambda: state.touch))
     for name, module in (("machine", machine), ("esp32", esp32), ("nova", nova),
                          ("nova.net", net)):
@@ -187,8 +188,18 @@ def test_with_sleep_after_set_she_goes_and_arms_the_button(rig):
     assert slept.value.ms == 5 * 60000
     assert rig.state.armed == [("button", 0)]
     chip = rig.state.chip
-    assert chip.light == 0 and chip.muted is True and chip.panel is False
+    assert chip.light == 0 and chip.muted is True
+    assert chip.panel is True                       # the supply stays on by default
     assert rig.state.radio[-1] == "off"
+
+
+def test_the_panel_supply_is_cut_only_when_asked(rig):
+    rig.power.begin()
+    rig.power.configure(panel_off_in_sleep=True)
+    rig.power.sleep(5, delay_s=1)
+    with pytest.raises(Slept):
+        rig.run(2)
+    assert rig.state.chip.panel is False
 
 
 def test_an_asked_sleep_answers_first(rig):
@@ -221,13 +232,25 @@ def test_a_check_in_nobody_answers_goes_back_to_sleep(rig):
     assert rig.state.chip.light is None or rig.state.chip.light == 0
 
 
-def test_a_call_during_the_check_in_ends_in_an_ordinary_boot(rig):
+def test_a_call_during_the_check_in_keeps_her_awake(rig):
+    rig.state.reset, rig.state.wake = 4, 4
+    rig.power.begin()
+    rig.run(10)
+    assert rig.power.poke() == "awake"             # the host's call
+    assert rig.state.log == ["resumed"]            # card and button come up
+    rig.run(60)                                    # no Slept: she stays
+    assert rig.state.resets == 0 and rig.power.woke() == "timer"
+    rig.power.poke()
+    assert rig.state.log == ["resumed"]            # ...once, not on every call
+
+
+def test_with_the_panel_cut_an_answered_check_in_boots_her_instead(rig):
+    rig.power.configure(panel_off_in_sleep=True)
     rig.state.reset, rig.state.wake = 4, 4
     rig.power.begin()
     rig.run(10)
     assert rig.power.poke() == "restarting"        # the host's call gets its answer
     assert rig.power.status()["mode"] == "restarting"
-    assert rig.state.chip.panel is True            # the panel is not switched here
     rig.run(1)
     assert rig.state.resets == 0                   # ...and has a moment to be read
     rig.run(1)

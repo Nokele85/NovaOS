@@ -167,9 +167,8 @@ def _checkin():
     dark and listen for a call. `power` sends her back to sleep if none comes;
     a call (it pokes) turns this into being awake. No splash, no autostart.
 
-    The panel supply stays off, and the SD card hangs on it (measured
-    2026-10-12: mounting here times out). An answered check-in ends in an
-    ordinary boot (power.poke), which brings both back in the right order."""
+    The screen is not started here. resume() brings up the rest once somebody
+    answers; with `panel_off_in_sleep` set, an ordinary boot does (power.poke)."""
     from . import net
     up = net.connect()
     if up:
@@ -182,6 +181,23 @@ def _checkin():
     if not up:                         # no network, nobody can call: back to sleep
         from . import power
         power.sleep(delay_s=1)
+
+
+def resume():
+    """A check-in somebody answered: the port expander, the SD card and the
+    button, as an ordinary boot has them. The screen stays off until asked
+    for, and the autostart app does not run - whoever called has something to
+    say. Only for a sleep that left the panel supply on."""
+    io()
+    sd.mount()
+    from . import apps
+    apps.ensure_root()
+    try:
+        from . import music
+        music.knob()
+    except Exception:
+        pass
+    log("resumed from check-in sd=%s" % sd.status())
 
 
 def start():

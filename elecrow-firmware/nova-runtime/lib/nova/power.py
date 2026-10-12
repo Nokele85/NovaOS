@@ -36,7 +36,8 @@ DEFAULTS = {
     "sleep_after_min": 0,     # deep sleep after this much doze; 0 = never
     "checkin_min": 5,         # in deep sleep, wake this often to listen; 0 = never
     "listen_s": 25,           # how long one check-in listens for a call
-    "touch_wakes": False,     # keep the panel powered so a touch ends deep sleep
+    "touch_wakes": False,     # also let a touch end deep sleep
+    "panel_off_in_sleep": False,  # cut the panel supply while asleep (see _go)
     "low_battery_percent": 5,     # with a fuel gauge fitted: sleep below this
 }
 GAUGE_ADDR = 0x36             # MAX17048 on the shared I2C bus, if one is fitted
@@ -159,14 +160,19 @@ def poke():
     global _last, _checkin, _restart_at
     _last = _ticks()
     if _checkin:
-        # Somebody answered the check-in. What it left off - the panel supply,
-        # and with it the SD card and her apps - comes back through an ordinary
-        # boot, a moment from now. Switching the panel on here, with the radio
-        # already running, browns the chip out (measured 2026-10-12: a
-        # power-on reset fifteen seconds into the check-in).
+        # Somebody answered the check-in: bring up what it left off.
         _checkin = False
-        _restart_at = _ticks()
-        return "restarting"
+        if config()["panel_off_in_sleep"]:
+            # The panel supply is off, and the SD card hangs on it. Switching
+            # it on here, with the radio already running, browns the chip out
+            # (measured 2026-10-12: a power-on reset fifteen seconds into the
+            # check-in), so it comes back through an ordinary boot instead.
+            _restart_at = _ticks()
+            return "restarting"
+        try:
+            _nova().resume()
+        except Exception as e:
+            _nova().log("power: resume failed: %r" % (e,))
     if _restart_at is not None:
         return "restarting"
     if _mode != "awake":
@@ -512,6 +518,12 @@ def _go(checkin_min, why):
         except Exception:
             pass
     B = nova.board
+    d = nova.display_if_ready()
+    if d is not None:
+        try:
+            d._cmd(0x10)      # the panel's own sleep: its supply stays on
+        except Exception:
+            pass
     chip = nova.io()
     if chip is not None:
         try:
@@ -519,9 +531,13 @@ def _go(checkin_min, why):
             chip.flash(False)
             chip.rgb(0, 0, 0)
             chip.backlight(0)
-            if not cfg["touch_wakes"]:
-                # the AW9523 keeps its outputs through the ESP32's sleep, so
-                # the panel supply (and the red PWR lamp on it) stays off
+            if cfg["panel_off_in_sleep"] and not cfg["touch_wakes"]:
+                # The AW9523 keeps its outputs through the ESP32's sleep, so
+                # the panel supply would stay off. It is left ON by default:
+                # every boot that had to switch it on and then start the radio
+                # browned out once (2026-10-12, on the button and on a
+                # check-in), while boots that found it on never did. The PWR
+                # lamp is not on this supply and burns either way.
                 chip._bit(B.AW_POWER, False)
         except Exception:
             pass

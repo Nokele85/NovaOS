@@ -34,7 +34,7 @@ So the software can do exactly two things for the battery: draw less, and sleep.
 |---|---|---|---|
 | **awake** | everything on | yes | 120–160 mA |
 | **doze** | after 30 s without a touch, a press or a call the backlight dims; after 2 min it goes out, the processor drops from 240 to 80 MHz and the Wi-Fi radio naps between beacons | yes, a call takes a moment longer | 50–70 mA |
-| **sleep** | deep sleep: radio off, panel off | only at a check-in, or by the button | a few mA |
+| **sleep** | deep sleep: radio off, screen asleep and dark | only at a check-in, or by the button | a few mA |
 
 Music keeps the processor at full speed for as long as it plays; the screen may still
 go dark underneath it. Nothing sends her into deep sleep on its own unless
@@ -58,13 +58,15 @@ it does at power-up, so there is no separate "reconnect".
 **The check-in** is how she can be woken over the air. Asleep, her radio is off and
 nobody can call her. So every `checkin_min` minutes (5 by default) a timer wakes her
 with the screen left dark. She joins the Wi-Fi and listens for `listen_s` seconds (25).
-If the host calls in that window she answers "restarting" and boots properly, which
-takes about ten seconds. If nobody calls, she sleeps again.
+If the host calls in that window she stays awake: the SD card and the button come up,
+the screen when something asks for it. If nobody calls, she sleeps again.
 
-Why a boot and not simply staying up: a check-in leaves the panel supply off, and the SD
-card with her apps hangs on that supply. Switching it on with the radio already running
-browns the chip out (seen on the board: a power-on reset fifteen seconds into the
-check-in). An ordinary boot brings the panel up first and the radio after it.
+**The panel supply stays on while she sleeps.** It feeds the screen and the SD card.
+Cutting it saves a little, but every boot that then had to switch it on and start the
+radio browned out once: a power-on reset on the button, and one fifteen seconds into a
+check-in. Boots that found the supply on never did. `panel_off_in_sleep` cuts it anyway;
+an answered check-in then ends in an ordinary boot instead of staying up. The red PWR
+lamp is not on this supply: it burns through her sleep and cannot be switched off.
 
 `device_wake` does the calling: it knocks every three seconds in the background for up
 to six minutes, which is long enough to catch one check-in. With a one-minute check-in
@@ -129,7 +131,8 @@ not drained flat.
 | `sleep_after_min` | 0 | minutes of doze until deep sleep; 0 = never on her own |
 | `checkin_min` | 5 | minutes between check-ins while asleep; 0 = the button only |
 | `listen_s` | 25 | how long one check-in listens |
-| `touch_wakes` | false | keep the panel powered so a touch ends deep sleep |
+| `touch_wakes` | false | also let a touch end deep sleep |
+| `panel_off_in_sleep` | false | cut the supply of screen and SD card while asleep; see above |
 | `low_battery_percent` | 5 | with a fuel gauge: sleep below this |
 
 ## On the board
@@ -181,14 +184,14 @@ On 12 October 2026, on USB power, without a battery attached:
 | A call over Wi-Fi while dozing | gets through; the call wakes her |
 | Deep sleep | no answer on the cable and none on Wi-Fi |
 | Check-in after one minute | answered a knock over Wi-Fi 71 s after falling asleep |
-| After the answered check-in | ordinary boot, SD card and apps back, Wi-Fi up |
+| After the answered check-in | SD card and apps back, Wi-Fi up |
+| The button held five seconds | the screen says so; she sleeps when it is let go |
+| The button, while she sleeps | wakes her into an ordinary boot, in one go |
 | From the server, the way Nova calls | `device_power` answers over Wi-Fi |
 
 ## What still has to be checked
 
 - the real draw in each state, with a meter;
-- that the button ends deep sleep and she boots her program, not the bootloader;
-- that the PWR lamp really stays off while she sleeps;
 - everything above again on the battery, where the supply is weaker than USB;
 - the charge current with this cell.
 
