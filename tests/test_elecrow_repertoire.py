@@ -58,6 +58,13 @@ def test_explicit_chord_line_selection_is_not_a_guessed_melody():
     assert low['confirmed'] is False and low['warning']
 
 
+def test_implicit_chord_voice_follows_its_leading_note():
+    bass_chord = '<note><chord/><pitch><step>G</step><octave>3</octave></pitch><duration>2</duration></note>'
+    raw = xml(note('C', voice='1') + '<backup><duration>2</duration></backup>' +
+              note('E', voice='2') + bass_chord)
+    assert music.parse_musicxml(raw, voice='1')['melody'] == 'C4:1'
+
+
 @pytest.mark.parametrize('raw', [
     xml(note(extra='<grace/>')),
     xml(note(extra='<tie type="stop"/>')),

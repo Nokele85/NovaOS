@@ -106,6 +106,7 @@ def parse_musicxml(raw, part='', voice='', chord_mode='reject'):
         events = []
         cursor = Fraction(0)
         previous_start = Fraction(0)
+        previous_voice = '1'
         span = Fraction(0)
         for child in measure:
             if child.tag == 'attributes' and child.find('divisions') is not None:
@@ -124,12 +125,14 @@ def parse_musicxml(raw, part='', voice='', chord_mode='reject'):
                 if duration <= 0:
                     raise ValueError('Missing note duration')
                 chord = child.find('chord') is not None
+                note_voice = child.findtext('voice') or (previous_voice if chord else '1')
                 start = previous_start if chord else cursor
                 if not chord:
+                    previous_voice = note_voice
                     previous_start = cursor
                     cursor += duration
                 span = max(span, start + duration)
-                if child.findtext('voice', '1') != voice:
+                if note_voice != voice:
                     continue
                 pitch = child.find('pitch')
                 name = '-'

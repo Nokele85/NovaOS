@@ -8,7 +8,9 @@ instrument player. Existing atmosphere stays independent.
 1. Search the web for sheet music with the existing search tools.
 2. `device_score_source(url)` follows a direct MusicXML/MXL, PDF or image URL;
    HTML returns notation links. Multipart MusicXML requires selecting a part,
-   and `voice` selects its melody voice. The parser preserves pitch, rests,
+   and `voice` selects its melody voice. For chordal voices, explicit
+   `chord_mode=highest/lowest` selects a chord line; confirm that it is the
+   intended melody. The parser preserves pitch, rests,
    duration, ties and basic repeats. It refuses unsupported notation visibly.
 3. PDF/images are rendered on the workstation (install
    `tools/requirements-elecrow.txt`) and transcribed by the proxy's vision model.
