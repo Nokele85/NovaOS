@@ -113,3 +113,20 @@ def test_event_waits_between_repetitions():
     for _ in range(24):
         layer.render(bytearray(4000), 2000, lambda *args: calls.append(1))
     assert 1 < len(calls) < 12             # no continuous repeated bark
+
+
+def test_sample_loading_yields_for_audio_and_rejects_truncated_files(monkeypatch):
+    import gc
+    import io
+    from types import SimpleNamespace
+    module = runtime()
+    sleeps = []
+    monkeypatch.setattr(gc, "mem_free", lambda: 10_000_000, raising=False)
+    module.os = SimpleNamespace(stat=lambda path: (0, 0, 0, 0, 0, 0, 5000))
+    module.time = SimpleNamespace(sleep_ms=lambda ms: sleeps.append(ms))
+    module.open = lambda path, mode: io.BytesIO(b"\x00\x01" * 2500)
+    layers = module.load([{"files": ["wald.pcm"], "mode": "background", "gain": 40}])
+    assert len(layers[0].current) == 5000 and len(sleeps) == 5
+    module.open = lambda path, mode: io.BytesIO(b"\x00\x01")
+    with pytest.raises(ValueError, match="ended before"):
+        module.load([{"files": ["wald.pcm"], "mode": "background"}])

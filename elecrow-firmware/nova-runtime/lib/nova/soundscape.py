@@ -1,6 +1,7 @@
 # Recorded ambience for the existing speaker mixer. SPEC §26.4.
 import os
 import random
+import time
 
 RATE = 16000
 MAX_BYTES = 3500000
@@ -84,5 +85,15 @@ def load(specs):
     samples = {}
     for name in names:
         with open("/sd/sounds/" + name, "rb") as f:
-            samples[name] = bytearray(f.read())
+            pcm = bytearray(sizes[name])
+            view = memoryview(pcm)
+            pos = 0
+            while pos < len(pcm):
+                # SPEC §26.4: SoftSPI must yield to the I2S feeder during loading.
+                count = f.readinto(view[pos:min(pos + 1024, len(pcm))])
+                if not count:
+                    raise ValueError("recording ended before its declared size")
+                pos += count
+                time.sleep_ms(1)
+            samples[name] = pcm
     return [Layer(s, samples) for s in specs]
