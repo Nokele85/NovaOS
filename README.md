@@ -44,7 +44,7 @@ None of this is in YuriOS. All of it runs here.
 | 🇩🇪 **She keeps her word in German** | A promise made in German becomes a goal she follows up on. |
 | 🎨 **A local camera** | Her pictures are rendered on the house's own GPU through ComfyUI. |
 | 📬 **A daily rhythm** | New material lands on her desk every morning and evening, unasked. |
-| 🧩 **Add-ons instead of rebuilds** | Her own features dock beside the core. The core stays updatable. |
+| 🧩 **Add-ons instead of rebuilds** | Her own features dock beside the core instead of being cut into it. |
 
 <div align="center">
 <img src="docs/img/nova-rooftop.jpg" alt="Nova on a rooftop garden above the city at dusk" width="420" />
@@ -68,7 +68,8 @@ None of this is in YuriOS. All of it runs here.
 | **Extending it** | build in the core | build an add-on, switch the original off |
 | **Interface** | web interface with switchboard and studio | the aim: an app of her own |
 
-Everything YuriOS can do, NovaOS can do too. The core is the same and stays updatable.
+Everything YuriOS could do when the two parted ways, NovaOS can do too. From here on NovaOS
+goes its own way.
 
 ## What Nova can do here
 
@@ -176,8 +177,8 @@ This is how NovaOS is built, and how it stays maintainable:
    guard come from there and stay as close to the original as possible.
 2. **Anything of our own is an add-on.** A self-contained piece that docks at a designated
    point. No surgery in the middle of the core.
-3. **What an add-on replaces gets switched off.** Not rebuilt, not deleted. That way
-   improvements from YuriOS can still be merged.
+3. **What an add-on replaces gets switched off.** Not rebuilt, not deleted. The core stays
+   readable next to the original, so ideas from YuriOS are still easy to compare and adopt.
 4. **What Nova does not need stays off.**
 
 | An add-on for … | docks here |
@@ -314,14 +315,18 @@ yurios status
 Everything else is in [docs/getting-started.md](docs/getting-started.md), the rules for
 changes in [FORK.md](FORK.md). `yurios doctor` helps when something is not working.
 
-## Updates from YuriOS
+## NovaOS and new YuriOS releases
 
-New commits from the original are merged deliberately, one at a time:
+NovaOS took its last direct merge from YuriOS on 12 October 2026 (upstream commit `cd4d1f1`).
+From that point the two develop separately.
+
+YuriOS is still watched. When something new appears there, we look at it and decide whether to
+rebuild it here in NovaOS's own way. Nothing is merged automatically any more.
 
 ```bash
 git remote add upstream https://github.com/yuri-os/YuriOS.git
 git fetch upstream
-git log main..upstream/main
+git log cd4d1f1..upstream/main      # what YuriOS has done since
 ```
 
 ## Thank you, YuriOS
