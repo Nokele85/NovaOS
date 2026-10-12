@@ -16,7 +16,8 @@ on USB: a lost reply can mean the board already performed the action.
 
 WebREPL is password authenticated but not encrypted. Use it on a trusted LAN,
 never publish port 8266. The PC must reach the board address. An iPhone hotspot
-does not automatically provide access from the home network. A changed DHCP
+does not provide access from the home network: away from home the board dials
+out instead, see [elecrow-link.md](elecrow-link.md). A changed DHCP
 address requires updating `host` (a router DHCP reservation is recommended).
 
 Power can come from a suitable independent supply; PC software still hosts the
