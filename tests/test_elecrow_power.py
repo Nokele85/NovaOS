@@ -69,7 +69,8 @@ def rig(monkeypatch, tmp_path):
 
     state = types.SimpleNamespace(now=0, hz=160_000_000, reset=1, wake=0, armed=[],
                                   touch=None, radio=[], log=[], chip=Chip(),
-                                  bus=Bus(), screen=object(), resets=0)
+                                  bus=Bus(), screen=object(), resets=0,
+                                  button=False, wall=1000)
 
     def deepsleep(ms=None):
         raise Slept(ms)
@@ -100,6 +101,9 @@ def rig(monkeypatch, tmp_path):
         def __init__(self, n, *a):
             self.n = n
 
+        def value(self):
+            return 0 if (self.n == 0 and state.button) else 1
+
     machine = types.SimpleNamespace(
         DEEPSLEEP_RESET=4, TIMER_WAKE=4, EXT0_WAKE=2, EXT1_WAKE=3, Timer=Timer, Pin=Pin,
         reset_cause=lambda: state.reset, wake_reason=lambda: state.wake,
@@ -121,11 +125,16 @@ def rig(monkeypatch, tmp_path):
     monkeypatch.delitem(sys.modules, "nova.cam", raising=False)
     monkeypatch.setattr(power, "_ticks", lambda: state.now)
     monkeypatch.setattr(power, "CONFIG", str(tmp_path / "nova_power.json"))
+    monkeypatch.setattr(power, "RUNLOG", str(tmp_path / "nova_runtime.json"))
+    # the board's wall clock: it keeps going through deep sleep
+    monkeypatch.setattr(power.time, "time", lambda: state.wall)
+    monkeypatch.setattr(power.time, "sleep", lambda s: None)
 
     def run(seconds):
         """Let that many seconds pass, one tick each."""
         for _ in range(seconds):
             state.now += 1000
+            state.wall += 1
             power._step()
 
     return types.SimpleNamespace(power=power, state=state, run=run)
@@ -258,6 +267,75 @@ def test_a_fuel_gauge_is_read_and_a_low_battery_puts_her_to_sleep(rig):
         rig.run(130)
     assert slept.value.ms is None                   # empty: no check-ins either
     assert "battery at 4 %" in rig.state.log[-1]
+
+
+def test_the_runtime_log_counts_seconds_by_state(rig):
+    rig.power.begin()
+    rig.run(200)                                    # 30 awake, 90 dim, 80 dozing
+    now = rig.power.runtime()["current"]
+    assert (now["awake_min"], now["dim_min"], now["doze_min"]) == (0.5, 1.5, 1.3)
+    assert now["total_min"] == 3.3 and now["sleeps"] == 0
+
+
+def test_a_run_goes_on_through_deep_sleep_and_counts_the_time_asleep(rig):
+    power, state = rig.power, rig.state
+    power.begin()
+    rig.run(60)
+    power.sleep(5, delay_s=1)
+    with pytest.raises(Slept):
+        rig.run(3)
+    state.wall += 300                               # five minutes asleep
+    state.reset, state.wake = 4, 4                  # ...and the timer ends them
+    power.begin()
+    now = power.runtime()["current"]
+    assert now["sleep_min"] == 5.0 and now["sleeps"] == 1 and now["checkins"] == 1
+    assert now["awake_min"] >= 0.5 and power.runtime()["previous"] == []
+
+
+def test_losing_power_ends_a_run_and_keeps_it(rig):
+    power, state = rig.power, rig.state
+    power.begin()
+    rig.run(240)                                    # written out once a minute
+    state.reset, state.wake = 1, 0                  # the battery died; plugged in again
+    power.begin()
+    log = power.runtime()
+    assert log["current"]["total_min"] == 0.0
+    assert log["previous"][0]["total_min"] == 4.0
+
+
+def test_the_runtime_log_can_be_started_afresh(rig):
+    rig.power.begin()
+    rig.run(120)
+    assert rig.power.runtime_reset() == rig.power.runtime()
+    assert rig.power.runtime()["current"]["total_min"] == 0.0
+
+
+def test_the_button_held_five_seconds_sends_her_to_sleep(rig, monkeypatch):
+    turned = []
+    monkeypatch.setitem(sys.modules, "nova.music", types.SimpleNamespace(
+        _now={"playing": False}, _amb=None, _before=40,
+        volume=lambda v=None: turned.append(v), stop=lambda: None,
+        ambience=lambda scene: None))
+    rig.power.begin()
+    rig.state.button = True
+    rig.run(4)
+    assert rig.power._sleep_at is None              # four seconds: still a press
+    rig.run(1)
+    assert rig.power._sleep_at is not None          # five: she goes
+    assert turned == [40]                           # the volume step is taken back
+    rig.state.button = False                        # he lets go
+    with pytest.raises(Slept) as slept:
+        rig.run(3)
+    assert slept.value.ms == 5 * 60000
+
+
+def test_a_short_press_does_not_send_her_to_sleep(rig):
+    rig.power.begin()
+    rig.state.button = True
+    rig.run(3)
+    rig.state.button = False
+    rig.run(10)
+    assert rig.power._sleep_at is None
 
 
 # --- the host ---------------------------------------------------------------

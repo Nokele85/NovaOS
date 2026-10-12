@@ -64,6 +64,13 @@ _sleep_delay = 0
 _sleep_args = None
 _net_tries = 0
 _gauge = None                 # None = not looked yet, False = none fitted
+_held = 0                     # seconds the button has been down
+_run = None                   # the runtime log, see runtime()
+_run_ticks = 0
+
+RUNLOG = "/nova_runtime.json"     # on the flash: the SD card is off while she sleeps
+HOLD_S = 5                    # the button held this long sends her to sleep
+RUN_KEYS = ("awake_s", "dim_s", "doze_s", "checkin_s", "sleep_s")
 
 
 def _nova():
@@ -131,6 +138,10 @@ def begin():
     _woke = _read_wake()
     _checkin = _woke == "timer"
     _last = _ticks()
+    try:
+        _run_begin()
+    except Exception as e:
+        _nova().log("power: no runtime log: %r" % (e,))
     try:
         import machine
         _busy_hz = machine.freq()
@@ -235,6 +246,151 @@ def _touched():
         return False
 
 
+# --- the runtime log ---------------------------------------------------------
+#
+# The board cannot measure its battery, so the only way to learn how long one
+# lasts is to run it empty and read afterwards how long that took. One "run" is
+# the time between two power-ups: seconds spent awake, dimmed, dozing, in
+# check-ins and asleep. Deep sleep does not end a run; losing power does.
+
+def _run_load():
+    try:
+        with open(RUNLOG) as f:
+            data = json.load(f)
+        if isinstance(data.get("current"), dict) and isinstance(data.get("previous"), list):
+            return data
+    except (OSError, ValueError):
+        pass
+    return {"current": None, "previous": []}
+
+
+def _run_save():
+    if _run is None:
+        return
+    try:
+        with open(RUNLOG, "w") as f:
+            json.dump(_run, f)
+    except OSError:
+        pass
+
+
+def _run_begin():
+    global _run
+    data = _run_load()
+    cur = data["current"]
+    now = time.time()
+    if _woke is not None and cur:
+        # back from deep sleep: the same run. The clock kept going, so the time
+        # asleep is simply what is missing.
+        if cur.get("slept_at") is not None:
+            cur["sleep_s"] += max(0, now - cur["slept_at"])
+            cur["slept_at"] = None
+        cur["checkins" if _woke == "timer" else "wakes"] += 1
+    else:
+        if cur:
+            data["previous"] = [cur] + data["previous"][:3]
+        cur = {"started": now, "last": now, "slept_at": None,
+               "sleeps": 0, "checkins": 0, "wakes": 0}
+        for key in RUN_KEYS:
+            cur[key] = 0
+        data["current"] = cur
+    _run = data
+    _run_save()
+
+
+def _run_count():
+    """One second into the state she is in; written out once a minute."""
+    global _run_ticks
+    if _run is None:
+        return
+    cur = _run["current"]
+    key = "checkin_s" if (_checkin or _restart_at is not None) else _mode + "_s"
+    cur[key] += 1
+    cur["last"] = time.time()
+    _run_ticks += 1
+    if _run_ticks >= 60:
+        _run_ticks = 0
+        _run_save()
+
+
+def _run_view(run):
+    total = sum(run[key] for key in RUN_KEYS)
+    out = {"total_min": round(total / 60, 1)}
+    for key in RUN_KEYS:
+        out[key[:-2] + "_min"] = round(run[key] / 60, 1)
+    out["sleeps"] = run["sleeps"]
+    out["checkins"] = run["checkins"]
+    return out
+
+
+def runtime():
+    """How long she has been running since power came on, split by state, and
+    the runs before this one. Run a battery empty, plug her in again, and the
+    first entry under "previous" is how long that battery lasted."""
+    if _run is None:
+        return {"current": None, "previous": []}
+    return {"current": _run_view(_run["current"]),
+            "previous": [_run_view(r) for r in _run["previous"]]}
+
+
+def runtime_reset():
+    """Forget the earlier runs and start counting this one from now."""
+    global _run
+    cur = {"started": time.time(), "last": time.time(), "slept_at": None,
+           "sleeps": 0, "checkins": 0, "wakes": 0}
+    for key in RUN_KEYS:
+        cur[key] = 0
+    _run = {"current": cur, "previous": []}
+    _run_save()
+    return runtime()
+
+
+# --- the button, held --------------------------------------------------------
+
+def _button_down():
+    try:
+        import machine
+        # no mode given: this reads the pin the volume knob already owns
+        return machine.Pin(_nova().board.BUTTON).value() == 0
+    except Exception:
+        return False
+
+
+def _hold():
+    """The button held HOLD_S seconds sends her to sleep. The press that began
+    the hold also turned the volume one step; that is taken back."""
+    global _held
+    if not _button_down():
+        _held = 0
+        return False
+    _held += 1
+    if _held < HOLD_S:
+        return False
+    _held = 0
+    music = sys.modules.get("nova.music")
+    if music is not None:
+        try:
+            if music._before is not None:
+                music.volume(music._before)
+        except Exception:
+            pass
+    nova = _nova()
+    d = nova.display_if_ready()
+    if d is not None:
+        try:
+            from nova.screen import WHITE, rgb
+            _light(_bright)
+            d.fill(rgb(6, 4, 16))
+            d.text("Schlaf", 8, 100, WHITE, scale=3)
+            d.text("Taste loslassen", 8, 140, WHITE)
+            d.text("Taste weckt wieder", 8, 156, WHITE)
+            d.show()
+        except Exception:
+            pass
+    sleep(delay_s=2)
+    return True
+
+
 def _tick(_t=None):
     try:
         _step()
@@ -249,6 +405,7 @@ def _step():
     global _mode, _sleep_at, _net_tries, _last
     cfg = config()
     now = _ticks()
+    _run_count()
     if _restart_at is not None:
         if _diff(now, _restart_at) >= 1500:    # the call that woke her has its answer
             import machine
@@ -259,6 +416,8 @@ def _step():
         if _diff(now, _sleep_at) >= _sleep_delay:
             _sleep_at = None
             _go(*_sleep_args)
+        return
+    if _hold():
         return
     if _mode != "awake" and _touched():
         poke()
@@ -381,6 +540,15 @@ def _go(checkin_min, why):
                                level=esp32.WAKEUP_ALL_LOW)
     except Exception as e:
         nova.log("power: button wake not armed: %r" % (e,))
+    # a finger still on the button would wake her the instant she slept
+    for _ in range(200):
+        if not _button_down():
+            break
+        time.sleep(0.05)
+    if _run is not None:
+        _run["current"]["sleeps"] += 1
+        _run["current"]["slept_at"] = time.time()
+        _run_save()
     if checkin_min:
         machine.deepsleep(int(checkin_min) * 60000)
     else:
@@ -418,4 +586,4 @@ def status():
     return {"mode": "check-in" if _checkin else "restarting" if _restart_at is not None else _mode,
             "idle_s": _diff(_ticks(), _last) // 1000, "cpu_mhz": mhz,
             "brightness": _bright, "playing": _busy(), "woke": _woke,
-            "battery": battery(), "config": config()}
+            "battery": battery(), "runtime": runtime(), "config": config()}

@@ -87,6 +87,7 @@ _now = {"playing": False, "title": "", "loop": False, "loops": 0, "notes": 0,
 _vol = None
 _btn = None
 _pressed = 0
+_before = None                  # the volume before the last press
 _mix = None
 _turn = 0
 _stop = False
@@ -138,7 +139,9 @@ def _press(_pin):
             return                      # ...and that press only woke her
     except Exception:
         pass
+    global _before
     level = volume()
+    _before = level                     # a held button takes this step back
     volume(0 if level >= 100 else level + 10)
     try:                                # drawn outside the interrupt
         micropython.schedule(_show_volume, 0)

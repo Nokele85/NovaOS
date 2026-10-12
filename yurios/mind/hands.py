@@ -296,6 +296,21 @@ HANDS: dict[str, Hand] = {
         "cheap", "choose which of her apps the board starts by itself at "
         "power-up",
         '{"name": "clock", "confirm": true}'),
+    # The owner's yes of 2026-10-12, for all three ("einfach machen"): how her
+    # board is doing on its battery, putting it to sleep, and waking it again.
+    # Asleep the board plays and shows nothing until it is woken, so the sleep
+    # asks for confirm=true like the autostart does.
+    "device_power": Hand(
+        "cheap", "see how her board is doing on power: awake, dozing or asleep, "
+        "and how long it has run",
+        '{}'),
+    "device_sleep": Hand(
+        "cheap", "put her board into deep sleep to save its battery, or so it "
+        "can charge",
+        '{"checkin_minutes": 5, "confirm": true}'),
+    "device_wake": Hand(
+        "cheap", "wake her board from doze or deep sleep",
+        '{"wait_minutes": 6}'),
 }
 
 #: How much of one result goes back to her in a step of her own work. The tool

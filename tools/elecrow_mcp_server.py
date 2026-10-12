@@ -1240,11 +1240,17 @@ def _device_tools(mcp: FastMCP) -> None:
                 "png_b64": _b64.b64encode(png).decode("ascii")}
 
     @mcp.tool()
-    def device_power(port: str = "auto") -> dict:
+    def device_power(reset_runtime: bool = False, port: str = "auto") -> dict:
         """How the board is doing on power: awake, dim, doze or a check-in from
-        sleep; why it last woke; its settings; and the battery when a fuel gauge
-        is fitted (the board alone cannot measure it). Looking does not wake it."""
-        code = "import json, nova.power as P\nprint(json.dumps(P.status()))\n"
+        sleep; why it last woke; its settings; and `runtime`: minutes it has run
+        since power came on, by state, and the runs before (after a battery ran
+        empty, the first entry under previous is how long it lasted). The board
+        cannot measure its battery; `battery` is null unless a fuel gauge is
+        fitted. reset_runtime=true starts the count afresh. Looking does not
+        wake it."""
+        code = ("import json, nova.power as P\n"
+                + ("P.runtime_reset()\n" if reset_runtime else "")
+                + "print(json.dumps(P.status()))\n")
         result = _json_out(_device_call(port, [code], poke=False))
         if result.get("status") in ("serial", "port", "no_runtime"):
             result["note"] = ("No answer. Asleep, the board answers nothing: "

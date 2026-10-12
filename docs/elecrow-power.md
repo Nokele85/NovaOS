@@ -74,6 +74,30 @@ A check-in costs roughly half a minute awake out of every five. With the default
 is an average of about 10 mA, so a 310 mAh cell lasts on the order of a day asleep, and
 a 2000 mAh cell about a week. Longer intervals last longer and answer later.
 
+## The button
+
+One button does three things:
+
+| Press | What it does |
+|---|---|
+| short | turns the volume one step |
+| short, while she dozes | wakes her, and leaves the volume alone |
+| held for 5 seconds | sends her to sleep; the screen says so, and she sleeps once the button is let go |
+| while she sleeps | wakes her |
+
+That is the AI button (BOOT on the board). RESET restarts her from any state.
+
+## How long a battery lasts: the runtime log
+
+The board cannot measure its battery, so the way to find out is to run one empty and
+read afterwards how long that took. `power.runtime()` keeps the count: minutes awake,
+dimmed, dozing, in check-ins and asleep since power came on. Deep sleep does not end a
+run; losing power does. After a battery has run empty and she is plugged in again, the
+first entry under `previous` is how long it lasted. The log is written to the flash
+once a minute, so the last minute before the end can be missing.
+
+`power.runtime_reset()` starts the count afresh, for a clean test.
+
 ## Charging
 
 Because the board cannot see the charger, `charge()` is simply a sleep with a note on
@@ -112,7 +136,8 @@ not drained flat.
 
 ```python
 from nova import power
-power.status()             # mode, idle seconds, clock, why she woke, battery
+power.status()             # mode, idle seconds, clock, why she woke, battery, runtime
+power.runtime()            # minutes by state, this run and the ones before
 power.brightness(60)       # the backlight while awake
 power.sleep()              # deep sleep with check-ins
 power.sleep(0)             # deep sleep, the button only
@@ -124,7 +149,7 @@ power.configure(sleep_after_min=15)
 
 | Tool | What it does |
 |---|---|
-| `device_power` | her power state; looking does not wake her |
+| `device_power` | her power state and the runtime log; `reset_runtime=true` starts the log afresh; looking does not wake her |
 | `device_sleep` | deep sleep; `charging=true` for the charge mode; needs `confirm=true` |
 | `device_wake` | bring her back: a reset over the cable, or knocking over Wi-Fi |
 
