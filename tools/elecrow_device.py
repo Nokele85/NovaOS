@@ -82,6 +82,7 @@ class Redactor:
         except (OSError, ValueError):
             return cls()
         values = []
+        values += [data.get("webrepl_password", "")]
         for net in data.get("wifi", []):
             values += [net.get("ssid", ""), net.get("password", "")]
         return cls(values)

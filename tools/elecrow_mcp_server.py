@@ -667,15 +667,26 @@ def _device_call(port: str, snippets: list[str], timeout: float = 8.0) -> dict:
     Every string that comes back passes the Redactor - an app can read the
     board's Wi-Fi secrets, and nothing it prints may leave this machine."""
     from elecrow_device import DeviceError, RawRepl, Redactor, board_port
+    from elecrow_wifi import WebReplStream, configuration
     redact = Redactor.from_file(_secrets_path())
+    network = configuration()
+    redact.values += [network["webrepl_password"]] if network.get("webrepl_password") else []
+    wifi = port == "wifi" or (port == "auto" and network.get("enabled"))
     try:
-        device = board_port(port)
+        device = "wifi:" + str(network.get("host", "")) if wifi else board_port(port)
     except DeviceError as exc:
         return {"ok": False, "status": "port", "error": str(exc)}
     if not _DEVICE_LOCK.acquire(timeout=5):
         return {"ok": False, "status": "busy", "error": "the board is in use by another call"}
     try:
-        with RawRepl(device) as repl:
+        if wifi:
+            if not network.get("host") or not network.get("webrepl_password"):
+                raise DeviceError("WLAN control is not configured")
+            session = RawRepl(device, serial_factory=lambda: WebReplStream(
+                network["host"], network["webrepl_password"]))
+        else:
+            session = RawRepl(device)
+        with session as repl:
             result: dict = {}
             for code in snippets:
                 result = repl.exec(code, timeout=timeout)

@@ -173,6 +173,11 @@ def start():
              "apps: " + apps.root(),
              "sd: " + sd.status()])
     net.connect()
+    try:
+        from . import remote
+        remote.start()
+    except Exception:
+        log("WLAN console unavailable; USB remains available")
     log("boot runtime=%s safe=%s sd=%s net=%s" % (VERSION, safe_mode, sd.status(),
                                                   net.status()["connected"]))
     try:                               # the button is the volume knob

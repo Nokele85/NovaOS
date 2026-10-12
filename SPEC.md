@@ -3241,6 +3241,13 @@ not there, caught the error herself, and concluded the board had no sound.
   only turns off is a fuse, and because off is invisible (§26.1) a grant that silently failed would
   leave nothing in the trace to say why she never reached for anything again.
 
+- §26.6 **Owner-enabled board WLAN transport.** Existing Elecrow `device_*` tools MAY
+  use password-authenticated MicroPython WebREPL on a trusted reachable LAN in place of
+  USB. This MUST preserve tool limits, confirmations, redaction and raw-REPL deadlines.
+  Credentials MUST remain in ignored owner stores. A failed action MUST NOT be replayed
+  over another transport. Firmware flashing remains USB-only. WLAN transport MUST NOT
+  imply remote hotspot reachability or encrypted transport.
+
 ## §27 — Tests (the hard gate)
 
 `pytest` **MUST** ship and be green from the project root, entirely offline — fakes for STT/TTS/VAD,
