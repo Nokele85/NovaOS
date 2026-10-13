@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "notebook": {
+      "command": "/path/to/python-with-mcp",
+      "args": ["/path/to/NovaOS/tools/addon_template/server.py"],
+      "env": {
+        "ADDON_DATA": "/path/outside/the/repository/notebook"
+      },
+      "rate": 6
+    }
+  }
+}
