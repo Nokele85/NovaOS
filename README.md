@@ -244,8 +244,11 @@ What the board and the app make possible once the foundations are in.
       in her own manner.
 - [ ] **Explaining herself.** She can say why she got in touch or did something.
 - [ ] **Allowed to forget.** Tell her what she should not keep, and it is really gone.
-- [ ] **Songs of her own.** She composes instead of only playing what she has learned, and
-      sings along.
+- [ ] **Songs of her own.** She composes instead of only playing what she has learned.
+- [ ] **She sings.** Her speaking voice cannot hold a note, so a singing model sings her
+      melody and her words and a voice conversion trained on her own voice turns it into
+      hers; the board plays the recording. First a small trial: one verse, in English and
+      in German, to hear whether the quality is good enough.
 
 ### 3 · Later
 
