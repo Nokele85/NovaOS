@@ -245,6 +245,10 @@ class Config(VoiceConfig):
     mind_act_threshold: float = 0.4             # gate 1: salience-to-act (§18.1)
     mind_interrupt_threshold: float = 0.6       # gate 2: salience-to-interrupt (§18.2)
     mind_max_interrupts_per_day: int = 3        # the hard daily cap (§18.2)
+    # Seconds after the user's last message during which he counts as awake:
+    # quiet hours do not hold her back, and what he asked for is delivered now
+    # rather than at 09:00 (§18.2). 0 = quiet hours always hold.
+    mind_awake_window_s: int = 1800
     mind_consider_cooldown_s: float = 3600.0    # min gap between re-chewing one goal
     # How many working ticks one goal gets before it has to wait or be let go
     # (SPEC §22). The bound is what keeps "she works on it across ticks" from

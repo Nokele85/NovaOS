@@ -189,16 +189,23 @@ def score_interrupt(*, clock: Clock,
                     max_interrupts_per_day: int,
                     threshold: float,
                     waiting_hours: float = 0.0,
-                    decided: bool = False) -> InterruptDecision:
+                    decided: bool = False,
+                    awake: bool = False) -> InterruptDecision:
     """Gate 2. `decided` is a message she chose to send from a goal step
     (`tell_them`, SPEC §18.2b): the score no longer rules on it, and the two
-    hard gates — quiet hours and the daily cap — still do."""
+    hard gates — quiet hours and the daily cap — still do.
+
+    `awake` means the user wrote within the last few minutes. Quiet hours
+    exist so she does not wake anyone; a person who is typing to her is not
+    asleep, so the hour no longer holds her back. A decided message while he
+    is awake is an answer, not an interruption, and the daily cap lets it by."""
     now = clock.now()
     hours_since_contact = ((now - last_contact_out) / 3600
                            if last_contact_out else 48.0)
     contact_license = min(1.0, hours_since_contact / 24.0)  # quiet → more license
 
-    availability = 0.15 if quiet_hour(now) else 1.0          # don't ping at 3am
+    # don't ping at 3am — unless he is up and talking to her
+    availability = 1.0 if awake or not quiet_hour(now) else 0.15
     welcome = max(0.0, 1.0 - interrupts_today / max(1, max_interrupts_per_day))
 
     # An undated intention otherwise tops out at 0.72, below the default
@@ -208,10 +215,11 @@ def score_interrupt(*, clock: Clock,
     score = min(1.0, 0.30 * relevance + 0.35 * time_sensitivity
                 + 0.10 * contact_license + 0.15 * availability + 0.10 * welcome
                 + waiting_credit)
-    if interrupts_today >= max_interrupts_per_day:
+    capped = (interrupts_today >= max_interrupts_per_day
+              and not (decided and awake))
+    if capped:
         score = 0.0                                          # the hard daily cap
 
-    capped = interrupts_today >= max_interrupts_per_day
     if availability < 0.5 or capped:
         outcome = "SILENT"   # the two hard gates, whoever is asking
     elif decided:
@@ -230,5 +238,5 @@ def score_interrupt(*, clock: Clock,
         "availability": availability, "welcome": round(welcome, 2),
         "interrupts_today": interrupts_today,
         "waiting_credit": round(waiting_credit, 3),
-        "decided": decided,
+        "decided": decided, "awake": awake, "capped": capped,
     })

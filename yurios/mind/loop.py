@@ -47,8 +47,9 @@ from yurios.world.vram import ParkGate
 from .budget import BudgetGovernor
 from .dream import DreamConsolidator
 from .dreamjobs import DreamRunner
-from .goals import (OWN_JUDGEMENT, Goal, GoalStore, discover_promise_candidates,
-                    fallback_promises, timer_for_promise, trim)
+from .goals import (OWN_JUDGEMENT, Goal, GoalStore, asked_and_agreed,
+                    discover_promise_candidates, fallback_promises,
+                    timer_for_promise, trim)
 from .hands import (Hands, build_guard, strip_native_calls)
 from .journal import Journal
 from .knowledge import KnowledgeStore
@@ -214,6 +215,10 @@ class MindLoop:
         self.offset: int = (st.get("bus_offset", 0)
                             if st.get("bus_epoch") == bus.epoch else 0)
         self.interrupts: dict = st.get("interrupts", {"date": "", "count": 0})
+        # His last few messages, (ts, text): a goal filed from one exchange
+        # reads what he asked across the conversation, not only his last line
+        # ("Warum kommt nix?" says nothing about which comic page).
+        self.recent_asks: list[tuple[float, str]] = []
         self.considered: dict = st.get("considered", {})
         self.last_tick_ts: float | None = st.get("last_tick_ts")
         # When `run` expects the next heartbeat — the end of the sleep it is in.
@@ -435,6 +440,10 @@ class MindLoop:
         for sig in batch:
             if sig.type == "user_message":
                 self.activity.preempt_engaged()
+                # He is up. Whatever quiet hours parked until the morning can
+                # go now (§18.2): the gate was there so she would not wake
+                # him, and he is writing to her.
+                acts.wake_held_for_morning(self)
             elif sig.type == "turn_committed":
                 user_text = str(sig.payload.get("text", ""))
                 reply = str(sig.payload.get("reply", ""))
@@ -442,6 +451,14 @@ class MindLoop:
                                  sig.payload.get("tool_outcomes", [])
                                  if isinstance(item, dict)]
                 candidates = discover_promise_candidates(reply, user_text)
+                # His request, accepted, is a promise even when her reply
+                # never says "I will" (§22.1). He usually asks in more than
+                # one message, so the goal reads all of the recent ones.
+                about = self._recent_asks(user_text)
+                asked = asked_and_agreed(sig.payload.get("text", ""), reply,
+                                         index=len(candidates))
+                if asked is not None:
+                    candidates.append(asked)
                 explicit = [candidate for candidate in candidates
                             if candidate.confidence == "explicit"]
                 assistant = [candidate for candidate in candidates
@@ -451,7 +468,7 @@ class MindLoop:
                         tool_outcomes, candidate.text, candidate.source,
                         user_text, reply)
                     note = acts.file_promise_candidate(
-                        self, candidate, user_text=user_text, reply=reply,
+                        self, candidate, user_text=about, reply=reply,
                         timer=timer)
                     if note:
                         reflect_notes.append(note)
@@ -465,6 +482,7 @@ class MindLoop:
                         self.promise_reviews.append({
                             "signal_id": sig.id,
                             "user_text": trim(user_text, 1000),
+                            "about": trim(about, 1000),
                             "reply": trim(reply, 3000),
                             "candidates": normalized,
                             "tool_outcomes": tool_outcomes,
@@ -479,7 +497,7 @@ class MindLoop:
                             tool_outcomes, candidate.text, candidate.source,
                             user_text, reply)
                         note = acts.file_promise_candidate(
-                            self, candidate, user_text=user_text, reply=reply,
+                            self, candidate, user_text=about, reply=reply,
                             timer=timer)
                         if note:
                             reflect_notes.append(note)
@@ -894,6 +912,18 @@ class MindLoop:
                                                   self.cfg.idle_act_max_s)
 
     # ------------------------------------------------------------------- misc
+
+    #: How far back, and how many of his messages, a promise's context reaches.
+    RECENT_ASKS_S = 1800.0
+    RECENT_ASKS_N = 3
+
+    def _recent_asks(self, text: str) -> str:
+        now = self.clock.now()
+        if text.strip():
+            self.recent_asks.append((now, text.strip()))
+        self.recent_asks = [(ts, t) for ts, t in self.recent_asks
+                            if now - ts <= self.RECENT_ASKS_S][-self.RECENT_ASKS_N:]
+        return " / ".join(t for _, t in self.recent_asks) or text
 
     def _persist(self) -> None:
         write_json(self.state_path, {

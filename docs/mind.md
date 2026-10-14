@@ -138,6 +138,11 @@ Two things are **hard gates, not weights**:
 - quiet hours (roughly 22:00–09:00) are silent regardless of score, and
 - `MIND_MAX_INTERRUPTS_PER_DAY` (3) zeroes the score outright.
 
+Except while you are awake: if you wrote to her within `MIND_AWAKE_WINDOW_S` (30 minutes by
+default), quiet hours do not apply, a message she decided to send does not count against the cap,
+and anything quiet hours had parked until the morning goes out on the next tick. Set it to 0 for
+the strict night gate.
+
 Three outcomes, in ascending imposition:
 
 | Outcome | What it does |

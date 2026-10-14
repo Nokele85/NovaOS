@@ -185,7 +185,7 @@ def file_promise_candidate(loop, candidate: PromiseCandidate, *,
     # goal store writes this out as the goal's meta field either way; typing it
     # str was a thing nobody could see while this lived in an unchecked module.
     meta: dict[str, object] = {
-        "about": trim(user_text),
+        "about": trim(user_text, 400),
         "source": trim(candidate.source, 300),
         "reply": trim(reply, 600),
     }
@@ -287,7 +287,8 @@ async def promise_review(loop, offer=None) -> tuple[dict, dict, list[str]]:
         str(review.get("user_text", "")), str(review.get("reply", "")),
         *(str(item.get("source", "")) for item in selected))
     note = file_promise_candidate(
-        loop, candidate, user_text=str(review.get("user_text", "")),
+        loop, candidate,
+        user_text=str(review.get("about") or review.get("user_text", "")),
         reply=str(review.get("reply", "")), text=decision.text,
         kind=decision.kind, rationale=decision.rationale,
         success=decision.success, sources=sources, timer=timer)
@@ -744,6 +745,24 @@ def _file_decided(loop, args: dict, *, provenance: str, own: bool,
         ensure_ascii=False))
 
 
+def user_awake(loop, world: dict | None = None) -> bool:
+    """True while the user's last message is younger than MIND_AWAKE_WINDOW_S.
+
+    Someone who wrote ten minutes ago is up; holding back what he asked for
+    until the morning because the clock says 23:00 is the wrong way round."""
+    window = int(getattr(loop.cfg, "mind_awake_window_s", 0) or 0)
+    if window <= 0:
+        return False
+    world = world if world is not None else loop.world.snapshot()
+    last = world.get("last_user_message")
+    if not last:
+        return False
+    try:
+        return 0 <= loop.clock.now() - ts_of_iso(last) <= window
+    except (ValueError, TypeError, OverflowError):
+        return False
+
+
 async def reach_out(loop, goal: Goal) -> tuple[dict, dict, list[str]]:
     today = day_of(loop.clock.now())       # her day rolls at local midnight
     if loop.interrupts.get("date") != today:
@@ -772,8 +791,9 @@ async def reach_out(loop, goal: Goal) -> tuple[dict, dict, list[str]]:
         max_interrupts_per_day=loop.cfg.mind_max_interrupts_per_day,
         threshold=loop.cfg.mind_interrupt_threshold,
         waiting_hours=waiting_hours,
-        decided=bool(say))
-    reason = ("daily cap" if loop.interrupts["count"] >= loop.cfg.mind_max_interrupts_per_day
+        decided=bool(say),
+        awake=user_awake(loop, world))
+    reason = ("daily cap" if decision.factors["capped"]
               else "quiet hours" if decision.factors["availability"] < 0.5
               else "below threshold" if decision.outcome == "SILENT"
               else "decided" if say
@@ -916,6 +936,25 @@ async def reach_out(loop, goal: Goal) -> tuple[dict, dict, list[str]]:
     else:
         note = f"sent {user} the picture for {goal.text}"
     return ({"what": "speak", "result": note}, interrupt, [note])
+
+
+def wake_held_for_morning(loop) -> list[str]:
+    """Bring forward every reach-out a hard gate parked until the morning
+    that being awake now opens: quiet hours always, the daily cap for a
+    message she already decided to send. Returns the woken goal ids."""
+    if not user_awake(loop):
+        return []
+    woken = []
+    for goal_id in list(loop.wakeups):
+        goal = loop.goals.get(goal_id)
+        if goal is None or goal.state != "waiting" or not goal.meta.get("parked"):
+            continue
+        reason = str((goal.meta.get("held") or {}).get("reason") or "")
+        if reason == "quiet hours" or (reason == "daily cap"
+                                       and goal.meta.get("decided")):
+            loop.wakeups[goal_id] = loop.clock.now()
+            woken.append(goal_id)
+    return woken
 
 
 def wake_goal(loop, goal_id: str) -> str:

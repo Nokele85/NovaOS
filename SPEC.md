@@ -1950,6 +1950,13 @@ them is precisely the always-interrupting-assistant failure.
   (roughly 22:00–09:00) are SILENT regardless of score, and `MIND_MAX_INTERRUPTS_PER_DAY` zeroes the
   score outright. Both dials are the **user's** (§25) — you cannot tune the dial against someone who
   holds it.
+  Quiet hours exist so that she does not wake him; they **MUST NOT** hold back someone who is
+  awake. While his last message is younger than `MIND_AWAKE_WINDOW_S` (default 1800 s; 0 restores
+  the strict gate) availability is full whatever the hour, a message she *decided* to send (§18.2b)
+  is an answer rather than an interruption and passes the daily cap too, and a user message
+  **MUST** bring forward every reach-out parked until the morning by quiet hours (and a decided one
+  parked by the cap) to the next tick. The night this was written he asked for a comic page at
+  22:50, she drew it by 23:20, and it was parked until 09:00 while he sat there asking where it was.
   An undated reach-out **MUST** earn a bounded waiting credit from its creation time:
   +0.20 linearly over 24 hours, clamped to [0, 0.20], with the total score capped at 1.
   Retry count **MUST NOT** earn credit. Dated goals retain their actual time-sensitivity
@@ -2807,6 +2814,16 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   of her replies it roughly doubled the share that offers a candidate (10 % to 19 %), almost all of
   the added ones commitments she had made and lost. "Nicht, bis" is the one negation that is a
   promise ("ich meld mich nicht, bis es steht") and **MUST NOT** be refused as one.
+- §22.1h **What he asked for and she accepted is owed, in whatever words she accepted it.** Asked
+  "Ich will das als Comic" at 22:50 on 13 Oct, she answered "Ja. Als Comic. Genau so zeichne
+  ich's." and called no tool; no opener matched, nothing was filed, and the page never came. The
+  scan **MUST** therefore also offer the user's own request as a `soft` candidate
+  (`promise:asked-and-agreed`) when his message asks for something deliverable — a picture, a
+  page, a song, a story — and her reply does not open by refusing it. It is a candidate and not a
+  goal: the review rules on it, and **MUST** treat it as owed unless a tool outcome of that same
+  exchange started or delivered that very thing. A goal filed from an exchange **MUST** carry his
+  recent messages as its `about` — the last three within thirty minutes — not only the last one:
+  the goal filed that night knew only "Warum kommt nix?" and drew a different page.
 - §22.2 **Commitment governs staleness:** `blind` is defended past due (a birthday is a birthday),
   `single-minded` drops only when moot, `open-minded` is abandoned the moment it stops being timely.
   The suspend-gap catch-up (§15.4) applies these in one pass, and so **MUST** the local-day

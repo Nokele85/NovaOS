@@ -739,6 +739,7 @@ PAGES: list[dict] = [
          {"title": "Reaching out to you", "fields": [
              ("MIND_INTERRUPT_THRESHOLD", "Interrupt threshold"),
              ("MIND_MAX_INTERRUPTS_PER_DAY", "Most interruptions a day"),
+             ("MIND_AWAKE_WINDOW_S", "Awake for this long after your last message (s)"),
              ("MIND_ACT_THRESHOLD", "Act threshold"),
          ]},
          {"title": "Goals and free time", "fields": [

@@ -252,7 +252,13 @@ tail -f data/characters/yuri/traces/ticks.jsonl
 
 If you genuinely want more initiative, lower `MIND_INTERRUPT_THRESHOLD` (0.6) or raise
 `MIND_MAX_INTERRUPTS_PER_DAY` (3). Remember quiet hours (~22:00–09:00) are a **hard gate**, not a
-weight — no score gets through them.
+weight — no score gets through them, unless you wrote to her within `MIND_AWAKE_WINDOW_S` (30 min).
+
+## Something I asked for at night only came the next morning
+
+Check `MIND_AWAKE_WINDOW_S` is not 0. With it set, writing to her releases whatever quiet hours had
+parked. If nothing was made at all, look at her goals: a request she accepted without calling a
+tool is filed through the promise review, which needs the utility model to be enabled.
 
 ## She talks too much
 

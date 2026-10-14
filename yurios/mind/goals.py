@@ -671,6 +671,11 @@ line range; and quantified work such as "read them all" requires outcomes coveri
 claimed scope. An error or denial proves nothing completed. A result whose status is
 `started` proves dispatch, not that the resulting work finished.
 
+A candidate with provenance `promise:asked-and-agreed` is the user's own request for
+something deliverable (a picture, a comic page, a song), which the reply accepted.
+It is owed work unless a tool outcome in this exchange already started or delivered
+that very thing; a started earlier page does not cover a later one.
+
 Return exactly one JSON object and no prose:
 {"goal": null}
 or
@@ -781,6 +786,48 @@ def discover_promise_candidates(reply: str, user_msg: str) -> list[PromiseCandid
                              provenance=item[2], source=item[3],
                              confidence=item[4])
             for i, item in enumerate(ordered)]
+
+
+#: Something one can be handed: a picture, a page, a song. Asked for and agreed
+#: to, it is owed even when her reply never says "I will" — "Ja. Als Comic.
+#: Genau so zeichne ich's." promised a page and no pattern above saw it.
+_DELIVERABLE = (r"comics?|bild(?:er|chen)?|fotos?|selfies?|seiten?|zeichnung(?:en)?"
+                r"|geschichten?|storys?|stor(?:y|ies)|lied(?:er)?|songs?|musik"
+                r"|gedichte?|videos?|pictures?|photos?|drawings?|pages?|poems?"
+                r"|music|panels?|skizzen?|sketch(?:es)?")
+_ASK = (r"ich\s+(?:will|möchte|moechte|hätte\s+gern|haette\s+gern|wünsch\w*|wuensch\w*)"
+        r"|(?:kannst|könntest|koenntest|würdest|wuerdest|magst)\s+du"
+        r"|mach|zeichne|mal(?:e)?\s+mir|schick|schreib|spiel|sing|zeig|gib\s+mir"
+        r"|i\s+(?:want|would\s+like|'d\s+like)|(?:can|could|would|will)\s+you"
+        r"|draw|make|send|write|play|sing|show\s+me|give\s+me")
+_ASKED_RE = re.compile(
+    rf"[^.!?\n]*\b(?:{_ASK})\b[^.!?\n]*\b(?:{_DELIVERABLE})\b[^.!?\n]*"
+    rf"|[^.!?\n]*\b(?:{_DELIVERABLE})\b[^.!?\n]*\b(?:{_ASK})\b[^.!?\n]*", re.I)
+#: Her reply turning it down. Only the opening counts: a "nein" deep in a
+#: story is not her answer to the request.
+_DECLINED_RE = re.compile(
+    r"^\W*(?:\[[^\]]*\]\s*)?(?:nein|nee|lieber\s+nicht|das\s+geht\s+nicht"
+    r"|kann\s+ich\s+nicht|mach\s+ich\s+nicht|no\b|nope|i\s+can'?t|i\s+won'?t)", re.I)
+
+
+def asked_and_agreed(user_msg: str, reply: str, *,
+                     index: int = 0) -> PromiseCandidate | None:
+    """The user asked for something deliverable and her reply did not refuse.
+
+    A candidate, not a decision: it goes to the promise review like any soft
+    candidate, and the review — which also sees what her tools did in that
+    turn — decides whether it is still owed. It names his words, so a goal
+    filed from it knows what he actually asked for."""
+    match = _ASKED_RE.search(user_msg or "")
+    if not match or not (reply or "").strip() or _DECLINED_RE.search(reply):
+        return None
+    text = _clean(match.group(0))
+    if not text:
+        return None
+    return PromiseCandidate(index=index, text=trim(text, 200),
+                            provenance="promise:asked-and-agreed",
+                            source=trim(text, 300), start=len(reply or ""),
+                            confidence="soft")
 
 
 def fallback_promises(candidates: list[PromiseCandidate]) -> list[PromiseCandidate]:
