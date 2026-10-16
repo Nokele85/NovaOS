@@ -26,7 +26,7 @@ from yurios.app.core.assemble import age_tag
 from yurios.kernel import correlate
 
 from . import acts
-from .goals import Goal, night_owned, trim
+from .goals import Goal, night_owned, offered_mark, picture_offered, trim
 from . import handwork
 from .handwork import Reach
 from .hands import FILE_GOAL, NEEDS_CAMERA, READ_ONLY, TELL, Offer, klass
@@ -387,8 +387,8 @@ def offer_the_picture(loop, goal: Goal) -> list[str]:
         # still belongs on the goal as a record of what landed, but filing a
         # reach-out would send the same picture a second time.
         return []
-    if goal.meta.get("offered"):
-        # Handed on already, and once is the whole point. Every way out of a
+    if picture_offered(goal):
+        # This picture handed on already, and once is the whole point. Every way out of a
         # goal files this now, and one goal can take more than one of them in
         # its life — parked at the horizon, woken, worked, finished. But
         # `already_carrying` only sees goals that are still *open*, so once the
@@ -413,8 +413,9 @@ def offer_the_picture(loop, goal: Goal) -> list[str]:
     # Which goal is carrying it, on the goal that made it — so the checklist
     # says where the photograph went, and so the guard above has something to
     # read that outlives the follow-up.
-    loop.goals.update(goal.id, meta={"offered": heir.id})
-    goal.meta["offered"] = heir.id      # …and on the copy the caller is holding
+    mark = offered_mark(goal, heir.id)
+    loop.goals.update(goal.id, meta={"offered": mark})
+    goal.meta["offered"] = mark         # …and on the copy the caller is holding
     return [f"…and it's for them, not the shelf: {shot}"]
 
 
@@ -673,6 +674,37 @@ def prepare_system(loop, goal: Goal, offer: Offer, last: bool) -> str:
     return "\n".join(lines)
 
 
+#: How many horizons a goal may spend before it is let go whatever happens (§22.3).
+CEILING_HORIZONS = 2
+
+
+def past_ceiling(loop, goal: Goal) -> bool:
+    """Whether a goal has used up its steps for good (§22.3).
+
+    The horizon decides only on a step that neither dispatched work nor said
+    anything, and parks a single-minded goal for twelve hours — so a goal whose
+    every step draws or tells never meets it, and one that does is woken and
+    worked again. Live, 14–16 Oct: a comic goal with `MIND_GOAL_MAX_STEPS=6`
+    reached step 28, redrawing the same page and telling the user it was stuck
+    each morning. The ceiling counts steps, not exits. A `blind` goal is
+    defended past due by design and keeps its parking."""
+    if goal.commitment == "blind":
+        return False
+    return goal.steps >= CEILING_HORIZONS * max(1, int(loop.cfg.mind_goal_max_steps))
+
+
+def let_go_at_ceiling(loop, goal: Goal) -> tuple[dict, dict, list[str]]:
+    """Out of steps for good: let it go, but never with an undelivered picture."""
+    loop.goals.update(goal.id, state="abandoned",
+                      meta={"let_go": f"ceiling after {goal.steps} steps"})
+    loop.wakeups.pop(goal.id, None)
+    notes = [f"let go of: {goal.text} — {goal.steps} steps and it still isn't done; "
+             "going round again would not change that"]
+    notes += offer_the_picture(loop, goal)
+    return ({"what": "goal_work", "result": f"let go at the ceiling ({goal.steps} steps)",
+             "goal": goal.id, "state": "abandoned"}, {}, notes)
+
+
 async def prepare(loop, goal: Goal, offer) -> tuple[dict, dict, list[str]]:
     """One step with her hands before a reach-out goes to Gate 2 (§18.2c).
 
@@ -918,6 +950,8 @@ async def goal_work(loop, goal: Goal,
     auto = goal.meta.get("auto")
     if auto in ("shelf", "dream"):
         return await acts.maintenance(loop, goal, auto)
+    if past_ceiling(loop, goal):
+        return let_go_at_ceiling(loop, goal)
 
     if goal.state == "pending":
         loop.goals.update(goal.id, state="active")

@@ -676,6 +676,12 @@ something deliverable (a picture, a comic page, a song), which the reply accepte
 It is owed work unless a tool outcome in this exchange already started or delivered
 that very thing; a started earlier page does not cover a later one.
 
+`success` must be something the character can observe herself: a tool result, a
+message or picture she delivered, a file on her desk. Never the user's reply,
+confirmation or reaction — she cannot see it from her own work, and a goal that waits
+for it never ends. "The page reached him" is observable (she sent it); "he confirms
+he got it" is not.
+
 Return exactly one JSON object and no prose:
 {"goal": null}
 or
@@ -828,6 +834,28 @@ def asked_and_agreed(user_msg: str, reply: str, *,
                             provenance="promise:asked-and-agreed",
                             source=trim(text, 300), start=len(reply or ""),
                             confidence="soft")
+
+
+def picture_offered(goal: "Goal") -> bool:
+    """Whether the picture this goal holds *now* was already handed on (§18.2a).
+
+    `meta.offered` used to name only the heir, so it meant "a picture went" —
+    and a goal that drew again kept a new page that nothing would ever send.
+    Live, 15 Oct: seven redrawn comic pages on one goal, one delivered, the
+    rest "lying on her desk", and her telling the user so every morning. The
+    mark now names the picture as well. A bare heir id was written before
+    that and covered whatever the goal held then; it is read as it was meant."""
+    offered = goal.meta.get("offered")
+    if not offered:
+        return False
+    if isinstance(offered, dict):
+        return offered.get("picture") == str(goal.product.get("image_url") or "")
+    return True
+
+
+def offered_mark(goal: "Goal", heir_id: str) -> dict:
+    """The `meta.offered` value for handing this goal's current picture to `heir_id`."""
+    return {"heir": heir_id, "picture": str(goal.product.get("image_url") or "")}
 
 
 def fallback_promises(candidates: list[PromiseCandidate]) -> list[PromiseCandidate]:

@@ -2014,8 +2014,13 @@ them is precisely the always-interrupting-assistant failure.
   (`Goal.product`). However that goal ends — kept, let go, swept, or **parked at the horizon still
   waiting on the world** — one holding an undelivered picture **MUST** hand it to a follow-up
   `reach_out` goal rather than hand over a path to its own goal file, and it **MUST** do so exactly
-  once however many of those exits it takes in its life (`Goal.meta.offered` names the heir; the
-  open-goal dedupe of §22.1 cannot see a follow-up that has already been delivered and closed).
+  once per picture however many of those exits it takes in its life (`Goal.meta.offered` names the
+  heir *and the picture*; the open-goal dedupe of §22.1 cannot see a follow-up that has already
+  been delivered and closed). A picture the goal made since is a new one and **MUST** be handed on
+  in its turn: with a mark that named only the heir, a comic goal redrew its page seven times
+  between 14 and 16 Oct, one page went out, and the rest stayed "on her desk" while she told the
+  user every morning that it was stuck. A mark without a picture predates this and is read as
+  covering whatever the goal held then.
   Provenance does not narrow it. A goal the user filed in chat (`user:chat`, §22.1) holds the
   same photograph a promise does, and "goal complete" is the *kept* ending: closing the work
   while the shot sits in `Goal.product` used to leave Gate 2 nothing to carry. The prose
@@ -2824,6 +2829,10 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   exchange started or delivered that very thing. A goal filed from an exchange **MUST** carry his
   recent messages as its `about` — the last three within thirty minutes — not only the last one:
   the goal filed that night knew only "Warum kommt nix?" and drew a different page.
+  A promised goal's `success` **MUST** be something she can observe from her own work — a tool
+  result, a message or picture she delivered, a file — and **MUST NOT** be the user's reply or
+  confirmation: the goal that drew that page was to end when "the user confirms receipt", which
+  she can never see, and so it never ended.
 - §22.2 **Commitment governs staleness:** `blind` is defended past due (a birthday is a birthday),
   `single-minded` drops only when moot, `open-minded` is abandoned the moment it stops being timely.
   The suspend-gap catch-up (§15.4) applies these in one pass, and so **MUST** the local-day
@@ -2858,7 +2867,14 @@ optional due time, **provenance**, and a **commitment strategy**; lifecycle
   `goals/<id>.md` **MUST** say whose goal it is and in what state. Unnamed, and with five goal
   files listed by id alone, a skill goal's first step took the newest — the finished diary goal's —
   for its own and logged its progress there twice. The horizon is bounded by `MIND_GOAL_MAX_STEPS`
-  (`meta.steps`), after which the goal waits or the commitment strategy lets it go.
+  (`meta.steps`), after which the goal waits or the commitment strategy lets it go. The horizon
+  only rules on a step that neither dispatched work nor said anything, and it parks a
+  single-minded goal for twelve hours, so a goal whose every step draws or tells never meets it,
+  and one that does is woken and worked again. Above it there is therefore a **ceiling**: a goal
+  whose steps reach twice `MIND_GOAL_MAX_STEPS` **MUST** be let go before another step is spent on
+  it, whatever its commitment — except `blind`, which is defended past due by design — and a
+  picture it holds **MUST** still be handed on (§18.2a). Live, 14–16 Oct, a comic goal with the
+  horizon at six reached step 28.
 - §22.3a **A step that reads gets what it read.** `list_notes` was the first catalog to be kept
   whole; a read is the other. The desk line clipped every result to 160 characters, and that line
   was the only way a result reached the next step — so `read_skill` returned the skill's name and

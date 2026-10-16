@@ -26,6 +26,7 @@ from yurios.kernel import correlate
 
 
 from .goals import (HANDED_GOAL, MUSE_GOAL, OWN_JUDGEMENT, STEP_GOAL, Goal, echoes,
+                    offered_mark, picture_offered,
                     goal_shape_refused, night_owned, trim,
                     PROMISE_REVIEW_RESPONSE_FORMAT, PromiseCandidate,
                     PromiseReviewError, parse_promise_review,
@@ -505,12 +506,13 @@ def queue_telling(loop, args: dict, *, goal_id: str) -> tuple[str, str, str]:
     # (§18.2a). Found live: a goal whose photo had landed told them "here —
     # the one I promised", closed on the delivery, and the photo never went,
     # because the exit that hands a picture on is the done-mark one and this
-    # goal closes on delivery instead. Handed over once, like every exit.
+    # goal closes on delivery instead. Each picture handed over once, like
+    # every exit — and a picture the goal drew since is a new one (§18.2a).
     product = parent.product
     if (product.get("image_url") and product.get("deliver") != "chat"
-            and not parent.meta.get("offered")):
+            and not picture_offered(parent)):
         loop.goals.update(child.id, meta={"product": dict(product)})
-        loop.goals.update(parent.id, meta={"offered": child.id})
+        loop.goals.update(parent.id, meta={"offered": offered_mark(parent, child.id)})
     now = loop.clock.now()
     when = (f"It's quiet hours, so it reaches them at {_clock_word(next_open(now))}."
             if quiet_hour(now) else
