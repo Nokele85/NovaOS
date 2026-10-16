@@ -1243,7 +1243,8 @@ async def test_a_chat_goal_that_finishes_holding_a_photo_hands_it_on(
     assert followup.product["image_url"] == SHOT
     assert followup.commitment == "single-minded"
     assert ".md" not in followup.text
-    assert rig.mind.goals.get(goal.id).meta.get("offered") == followup.id
+    assert rig.mind.goals.get(goal.id).meta.get("offered") == {
+        "heir": followup.id, "picture": followup.product["image_url"]}
 
 
 async def test_a_chat_goal_with_nothing_to_show_files_no_news(
@@ -1404,8 +1405,8 @@ async def test_a_parked_promise_does_not_park_the_picture_with_it(
         "she parked holding the picture and nothing was filed to send it"
     assert followup.kind == "reach_out"
     assert followup.product["image_url"] == SHOT
-    assert parked.meta.get("offered") == followup.id, \
-        "the goal that made it should say where the picture went"
+    assert parked.meta.get("offered") == {"heir": followup.id, "picture": SHOT}, \
+        "the goal that made it should say where the picture went, and which"
 
 
 async def test_the_picture_is_handed_on_once_however_many_exits_it_takes(
